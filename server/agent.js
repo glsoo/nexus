@@ -714,7 +714,7 @@ Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover
 
 Custom commands live in \`.nexus/commands/*.md\` or \`~/.nexus/commands/*.md\` (\`$ARGUMENTS\` is substituted); Claude Code's \`.claude/commands\` and VS Code's \`.github/prompts/*.prompt.md\` work too. Every skill is also a command, and the marketplace's Skills tab installs more.
 
-**Agents and prompts** \`/create-agent <what it does>\` has the AI write a new agent type · the Agent button next to the model switches this chat to one · the Prompts button edits the system prompt and text injected into every message, for this chat, this project or everywhere.`;
+**Agents and prompts** \`/create-agent <what it does>\` has the AI write a new agent type · \`/create-skill <what it does>\` has it write a skill · the Agent button next to the model switches this chat to one · the Prompts button edits the system prompt and text injected into every message, for this chat, this project or everywhere.`;
 
 const MODES = ['default', 'acceptEdits', 'plan', 'bypass'];
 
@@ -763,6 +763,19 @@ tools: <comma-separated tool names; leave this line out to allow every tool>
 
 Tools you can list: Bash, BashOutput, KillShell, Read, Write, Edit, NotebookEdit, Glob, Grep, WebFetch, Screenshot, web_search, TodoWrite, Task, Skill, and any mcp__ tools that are connected. Give it only what it needs: a read-only reviewer gets Read, Glob and Grep.
 Look at this project first if that helps tailor the instructions. Don't overwrite an existing agent type unless asked. Finish by saying its name, and that the Agent button next to the model switches this chat to it.`;
+
+const createSkillPrompt = (request, cwd) => `Create a new Agent Skill for this request: ${request}
+
+A skill is a folder with a SKILL.md. Write it to ${path.join(cwd, '.nexus', 'skills')}/<name>/SKILL.md, or to ${path.join(NEXUS_HOME, 'skills')}/<name>/SKILL.md if the request says it is for every project. Use this format:
+
+---
+name: <short-lowercase-name-with-hyphens, the same as the folder>
+description: <one or two sentences: what it does and when to use it, since that is how the agent decides to read it>
+---
+<the instructions: when it applies, the steps, what to check, and an example or two>
+
+Keep SKILL.md short. Put long reference material or helper scripts in files beside it and say in SKILL.md when to read or run them.
+Look at this project first if that helps tailor it. Don't overwrite an existing skill unless asked. Finish by saying its name, and that /<name> runs it, or Nexus reads it on its own when a task fits.`;
 
 function clear(s) {
   if (s.state.log.length) writeAtomic(path.join(cwdOf(s), '.nexus', 'history', `${Date.now()}.json`), JSON.stringify(s.state.log));
@@ -865,6 +878,9 @@ Reply with the pull request's URL.`, text);
     case 'create-agent':
       if (!arg) return note(s, 'Usage: `/create-agent <what it should do>`, for example `/create-agent reviews my changes for security holes before I commit`', 'error');
       return prompt(s, createAgentPrompt(arg, cwd), text);
+    case 'create-skill':
+      if (!arg) return note(s, 'Usage: `/create-skill <what it should do>`, for example `/create-skill writes release notes from the commits since the last tag`', 'error');
+      return prompt(s, createSkillPrompt(arg, cwd), text);
   }
   const custom = commands(cwd).find(c => c.name === cmd);
   if (custom) return prompt(s, custom.body.replaceAll('$ARGUMENTS', arg).replace(/\$\{input:[^}]*\}/g, arg), text);

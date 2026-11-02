@@ -660,12 +660,12 @@ const BUILTIN = [
   ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['review', 'Review this branch, or a pull request by number'], ['pr', 'Commit, push and open a GitHub pull request'], ['issue', 'Fix a GitHub issue by number'], ['schedule', 'Run a prompt on a timer: cron fields, then the prompt'], ['check', 'A command, like npm test, to run after each change; Nexus fixes failures'], ['watch', 'on or off: act on comments ending in AI! saved in any editor'], ['todos', 'Show the task list'],
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
   ['skills', 'List skills and agents'], ['mcp', 'Open MCP and hook settings'], ['settings', 'Open settings'], ['memory', 'Edit NEXUS.md'], ['rewind', 'How to rewind'],
-  ['create-agent', 'Have the AI write a new agent type'], ['agent', 'Switch this chat to another agent'], ['prompts', 'Edit system prompts and injected text'],
+  ['create-agent', 'Have the AI write a new agent type'], ['create-skill', 'Have the AI write a new skill'], ['agent', 'Switch this chat to another agent'], ['prompts', 'Edit system prompts and injected text'],
   ['marketplace', 'Browse agents and MCP servers to add'], ['export', 'Download this chat as Markdown'], ['autopilot', 'on or off: keep working without stopping to ask'],
 ];
 const slashItems = () => [
   ...BUILTIN.map(([name, description]) => ({ name, description })),
-  ...S.meta.commands, ...S.meta.skills,
+  ...S.meta.commands, ...S.meta.skills.filter(k => !k.off),
 ];
 function localCommand(text) {
   const cmd = text.slice(1).trim();
@@ -1018,15 +1018,15 @@ async function agentPicker() {
   if (d.open) fill();
 }
 
-// /create-agent runs as a normal prompt, so the agent can read the project and its file write is shown for approval.
-function createWithAI(about = '') {
+// /create-agent and /create-skill run as normal prompts, so the agent can read the project and its file writes are shown for approval.
+function createWithAI(about = '', cmd = 'create-agent') {
   const project = projectForInstall();
   if (!project) return toast('Create a project first.');
-  drafts[project] = `/create-agent ${about}`;
+  drafts[project] = `/${cmd} ${about}`;
   if (S.project !== project || S.page || S.tab !== 'chat') go(project, null, 'chat');
   else if ($input?.isConnected) { $input.value = drafts[project]; grow(); }
   $input?.focus();
-  toast('Say what the agent should do after /create-agent, then send.');
+  toast(`Say what the ${cmd === 'create-skill' ? 'skill' : 'agent'} should do after /${cmd}, then send.`);
 }
 
 // ---- prompts ----
@@ -1113,8 +1113,9 @@ const backBtn = back => h('div', { class: 'dhead' }, h('button', { class: 'btn s
 // Skills have no Nexus picks; their first source is Anthropic's own collection.
 const firstSource = k => (k === 'skills' ? ['anthropic', 'Anthropic'] : ['nexus', 'Nexus picks']);
 function marketPage(hamb) {
-  let kind = S.marketKind || 'agents', source = firstSource(kind)[0], items = [], category = '', picked = '', seq = 0, openSeq = 0, timer;
+  let kind = S.marketKind || 'agents', source = S.marketSource || firstSource(kind)[0], items = [], category = '', picked = '', seq = 0, openSeq = 0, timer;
   const srcs = {};
+  S.marketSource = null;
   const kinds = h('div', { class: 'seg2', role: 'tablist', 'aria-label': 'What to browse' });
   const sources = h('div', { class: 'seg2 msrc', role: 'tablist', 'aria-label': 'Source' });
   const search = h('input', { class: 'field', type: 'search', placeholder: 'Search', 'aria-label': 'Search the marketplace', autocomplete: 'off',
@@ -1127,7 +1128,8 @@ function marketPage(hamb) {
   $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', {}, 'Marketplace')), h('div', { class: 'view' }, page));
   const back = () => page.classList.remove('showing');
   const placeholder = () => detail.replaceChildren(h('p', { class: 'mnone muted' }, kind === 'mcp' ? 'Pick a server to see what it does and add it.'
-    : kind === 'skills' ? 'Pick a skill to see what it does and install it. A GitHub link to any skill, pasted into the search box, works too.' : 'Pick an agent to see what it does and install it.'));
+    : kind === 'skills' ? 'Pick a skill to see what it does and install it. A GitHub link to any skill, pasted into the search box, works too.' : 'Pick an agent to see what it does and install it.'),
+    ...(kind === 'skills' ? [h('div', { class: 'acts mnone' }, h('button', { class: 'btn', type: 'button', onclick: () => createWithAI('', 'create-skill') }, icon('spark'), 'Write a skill with AI'))] : []));
   const tab = (on, label, click) => h('button', { type: 'button', role: 'tab', class: on ? 'on' : '', 'aria-selected': String(on), onclick: click }, label);
   const renderTabs = () => {
     kinds.replaceChildren(...[['agents', 'Agents'], ['mcp', 'MCP servers'], ['skills', 'Skills']].map(([k, label]) => tab(k === kind, label, () => {
@@ -1135,7 +1137,7 @@ function marketPage(hamb) {
     })));
     search.placeholder = kind === 'skills' ? 'Search, or paste a GitHub link' : 'Search';
     sources.replaceChildren(...[...srcs[kind] || [firstSource(kind)], ['installed', 'Installed']].map(([id, label]) => tab(id === source, label, () => {
-      if (id !== source) { source = id; category = ''; load(); }
+      if (id !== source) { source = id; category = ''; if (/github\.com\//.test(search.value)) search.value = ''; load(); } // a link means one repo, not a filter
     })));
   };
   const renderGrid = () => {
@@ -1147,14 +1149,16 @@ function marketPage(hamb) {
     grid.replaceChildren(...(shown.length ? shown.map(tile) : [h('p', { class: 'mnone muted' }, empty)]));
     grid.scrollTop = 0;
   };
+  // A collection is a GitHub repo of skills: picking it lists them, the same as pasting its link.
+  const pick = it => (it.collection ? (search.value = it.url, load()) : open(it));
   const tile = it => h('div', { class: `tile${`${source}:${it.id}` === picked ? ' on' : ''}`, 'data-key': `${source}:${it.id}` },
-    h('button', { class: 'tmain', type: 'button', onclick: () => open(it) },
+    h('button', { class: 'tmain', type: 'button', onclick: () => pick(it) },
       h('span', { class: 'ticon', 'aria-hidden': 'true' }, it.icon || (it.name[0] || '?').toUpperCase()),
       h('span', { class: 'ttext' },
         h('span', { class: 'tname' }, h('b', {}, it.name), it.featured && h('span', { class: 'mtag' }, 'Featured'), it.running === false && h('span', { class: 'mtag old' }, 'Asleep')),
         h('span', { class: 'tmeta' }, [it.author && `by ${it.author}`, it.category, it.stats].filter(Boolean).join(' · ')),
         h('span', { class: 'tdesc' }, it.description || 'No description.'))),
-    h('button', { class: `btn small${it.installable ? ' primary' : ''}`, type: 'button', onclick: () => open(it) }, source === 'installed' ? 'Manage' : it.installable ? 'Install' : 'View'));
+    h('button', { class: `btn small${it.installable ? ' primary' : ''}`, type: 'button', onclick: () => pick(it) }, source === 'installed' ? 'Manage' : it.collection ? 'Browse' : it.installable ? 'Install' : 'View'));
   async function load() {
     const mine = ++seq;
     renderTabs();
@@ -1182,7 +1186,7 @@ function marketPage(hamb) {
     detail.replaceChildren(h('p', { class: 'mnone muted' }, 'Loading…'));
     detail.scrollTop = 0;
     try {
-      const parts = src === 'installed' ? installedDetail(it, k, back, load)
+      const parts = src === 'installed' ? await installedDetail(it, k, back, load)
         : marketDetail({ ...it, ...await api('GET', `/api/market/item?kind=${k}&source=${src}&id=${encodeURIComponent(it.id)}`) }, k, back);
       if (mine === openSeq) detail.replaceChildren(...parts.flat(Infinity).filter(Boolean));
     } catch (e) {
@@ -1201,7 +1205,8 @@ async function installedItems(kind, q) {
   if (kind === 'skills') {
     const project = projectForInstall();
     const { skills } = project ? await api('GET', `${P(project)}/meta`) : { skills: [] };
-    return skills.filter(k => k.scope !== 'other').map(k => ({ id: k.name, name: k.name, description: k.description, category: k.scope === 'user' ? 'All projects' : 'This project' })).filter(match);
+    const where = { user: 'All projects', project: 'This project', nexus: 'Comes with Nexus', other: 'From another tool' };
+    return skills.map(k => ({ id: k.name, name: k.name, description: `${k.off ? 'Off · ' : ''}${k.description}`, category: where[k.scope], skill: k })).filter(match);
   }
   if (kind === 'mcp') {
     const { mcp } = await api('GET', '/api/settings');
@@ -1212,7 +1217,7 @@ async function installedItems(kind, q) {
   return agents.filter(a => !a.builtin).map(a => ({ id: a.name, name: a.name, description: a.description, category: a.scope === 'user' ? 'All projects' : 'This project', def: a })).filter(match);
 }
 
-function installedDetail(it, kind, back, reload) {
+async function installedDetail(it, kind, back, reload) {
   const remove = (why, run) => h('button', { class: 'btn danger', type: 'button', onclick: guard(async () => {
     if (!await confirmBox(`Remove ${it.name}?`, why, 'Remove', 'danger')) return;
     await run();
@@ -1225,12 +1230,22 @@ function installedDetail(it, kind, back, reload) {
       h('div', { class: 'grow' }, h('h3', {}, it.name), it.category && h('div', { class: 'small muted' }, it.category))),
     it.description && h('p', {}, it.description)];
   if (kind === 'skills') {
-    const project = projectForInstall();
-    return [...head, h('p', { class: 'small muted' }, `Type /${it.name} to use it, or just ask: Nexus reads it when a task fits.`),
-      h('div', { class: 'acts' }, remove('Its folder is deleted. You can install it again from the marketplace.', async () => {
-        await api('DELETE', `${P(project)}/skills/${encodeURIComponent(it.name)}`);
-        if (S.project === project) await loadMeta();
-      }))];
+    const project = projectForInstall(), k = it.skill, url = `${P(project)}/skills/${encodeURIComponent(it.name)}`;
+    const { body, source } = await api('GET', url);
+    const mine = ['user', 'project'].includes(k.scope);
+    const done = async msg => { if (S.project === project) await loadMeta(); toast(msg); back(); reload(); };
+    const toggle = guard(async () => { await api('PUT', `/api/skills/${encodeURIComponent(it.name)}`, { off: !k.off }); await done(k.off ? `${it.name} is on again.` : `${it.name} is off in every project. Turn it on here any time.`); });
+    const update = guard(async () => { await api('POST', `${P(project)}/skills`, { ...source, scope: k.scope }); await done(`Updated ${it.name} from GitHub.`); });
+    return [...head, h('p', { class: 'small muted' }, k.off ? 'Off: Nexus doesn\'t offer it to the AI or as a command.' : `Type /${it.name} to use it, or just ask: Nexus reads it when a task fits.`),
+      mine && source && h('div', { class: 'mlinks small' }, extLink(`From github.com/${source.repo}${source.dir ? `/${source.dir}` : ''}`, `https://github.com/${source.repo}/tree/HEAD/${source.dir}`)),
+      h('details', { class: 'fold' }, h('summary', {}, 'Read SKILL.md', icon('down')), h('div', { class: 'out' }, body)),
+      h('div', { class: 'acts' },
+        h('button', { class: 'btn', type: 'button', onclick: toggle }, k.off ? 'Turn on' : 'Turn off'),
+        mine && source && h('button', { class: 'btn', type: 'button', onclick: update }, 'Update'),
+        mine && remove('Its folder is deleted. You can install it again from the marketplace.', async () => {
+          await api('DELETE', url);
+          if (S.project === project) await loadMeta();
+        }))];
   }
   if (kind === 'mcp') {
     return [...head, h('div', { class: 'small muted' }, `Tools: ${it.server.tools.join(', ') || 'none yet'}`),
@@ -1560,7 +1575,10 @@ async function fillAgents() {
       !d.builtin && h('button', { class: 'btn small danger', 'aria-label': `Delete ${d.name}`, onclick: guard(async () => {
         if (await confirmBox(`Delete ${d.name}?`, 'This removes the agent type from Nexus folders. Types in other folders stay.', 'Delete', 'danger')) { await api('DELETE', `${P(project)}/agent-defs/${encodeURIComponent(d.name)}`); refreshAgentsSoon(); }
       }) }, 'Delete'))),
-    meta.skills.length ? [h('h2', {}, `Skills (${meta.skills.length})`), meta.skills.map(k => h('div', { class: 'card' }, h('div', { class: 'title mono' }, k.name), h('div', { class: 'small muted' }, k.description)))] : null,
+    h('div', { class: 'rowline', style: 'margin:22px auto 10px' }, h('h2', { style: 'margin:0', class: 'grow' }, `Skills (${meta.skills.length})`),
+      project && h('button', { class: 'btn small', onclick: () => createWithAI('', 'create-skill') }, icon('spark'), 'Create with AI'),
+      h('button', { class: 'btn small primary', onclick: () => { S.marketSource = 'installed'; openMarket('skills'); } }, icon('grid'), 'Manage')),
+    meta.skills.map(k => h('div', { class: 'card' }, h('div', { class: 'title mono' }, k.name), h('div', { class: 'small muted' }, `${k.off ? 'Off · ' : ''}${k.description}`))),
   ].flat(Infinity).filter(Boolean));
 }
 

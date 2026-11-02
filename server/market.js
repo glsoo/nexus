@@ -17,7 +17,7 @@ const fail = (status, message) => Object.assign(new Error(message), { status });
 export const SOURCES = {
   agents: [['nexus', 'Nexus picks'], ['aiagentslist', 'aiagentslist.com'], ['huggingface', 'Hugging Face']],
   mcp: [['nexus', 'Nexus picks'], ['huggingface', 'Hugging Face'], ['aiagentslist', 'aiagentslist.com']],
-  skills: [['anthropic', 'Anthropic'], ['skillssh', 'skills.sh']],
+  skills: [['anthropic', 'Anthropic'], ['collections', 'Collections'], ['skillssh', 'skills.sh']],
 };
 export const LINKS = {
   agents: [['aiagentslist.com/agents', `${AAL}/agents`], ['Hugging Face tiny-agents', `${HF}/datasets/tiny-agents/tiny-agents`]],
@@ -270,6 +270,17 @@ async function repoSkills(repo, under, terms, source) {
   return found.filter(i => matches(terms, i.name, i.description));
 }
 
+// Well-known GitHub repos full of skills. Picking one lists its skills, the same way a pasted link does.
+const COLLECTIONS = [
+  ['obra/superpowers', 'Superpowers', 'A way of working for coding agents: brainstorm, plan, test first, debug systematically, review.'],
+  ['addyosmani/agent-skills', 'Agent Skills by Addy Osmani', 'Production-grade engineering skills: specs, testing, performance, accessibility, shipping.'],
+  ['vercel-labs/agent-skills', 'Vercel', "Vercel's skills for React and Next.js best practices, web design and deploying."],
+  ['openai/skills', 'OpenAI', 'The skills catalog for Codex: documents, spreadsheets, GitHub, deploys and more.'],
+  ['huggingface/skills', 'Hugging Face', 'Train and evaluate models, work with datasets, and publish to the Hugging Face Hub.'],
+  ['trailofbits/skills', 'Trail of Bits', 'Security research, vulnerability detection and audit workflows.'],
+  ['K-Dense-AI/scientific-agent-skills', 'Scientific skills by K-Dense', 'Science: bioinformatics, chemistry, data analysis, papers and lab databases.'],
+];
+
 // A GitHub link pasted into the search box, to a repo, a folder or a SKILL.md: what lists like awesome-skills point at.
 const githubLink = q => /github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?:\/(?:tree|blob)\/[^/\s]+\/?([^\s?#]*))?\/?(?:[?#]\S*)?$/.exec(String(q || '').trim());
 
@@ -323,6 +334,7 @@ export async function installSkill(repo, dir, root) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
     }
+    fs.writeFileSync(path.join(part, '.nexus-source.json'), JSON.stringify({ repo, dir })); // where Update downloads from
     fs.rmSync(dest, { recursive: true, force: true });
     fs.renameSync(part, dest);
   } finally {
@@ -338,6 +350,10 @@ export async function search(kind, source, q) {
   if (kind === 'skills') {
     const link = githubLink(q);
     if (link) return repoSkills(link[1], (link[2] || '').replace(/\/?SKILL\.md$/, '').replace(/\/$/, ''), [], source);
+    if (source === 'collections') {
+      return COLLECTIONS.filter(([repo, name, description]) => matches(terms, repo, name, description)).map(([repo, name, description]) => ({
+        source, kind: 'skills', id: repo, name, author: repo.split('/')[0], description, url: `https://github.com/${repo}`, collection: true }));
+    }
     return source === 'anthropic' ? repoSkills('anthropics/skills', 'skills', terms, source) : skillssh(terms);
   }
   if (source === 'nexus') return nexus(kind, terms);

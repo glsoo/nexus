@@ -308,6 +308,18 @@ test('/create-agent asks for a description, then hands the model the format and 
   assert.ok(text.includes(path.join(projects.projectDir('maker'), '.nexus', 'agents')));
   assert.match(text, /tools: <comma-separated tool names/);
   assert.equal(s.state.log.find(e => e.type === 'user').text, '/create-agent reviews SQL migrations');
+
+  await agent.submit('maker', '/create-skill');
+  assert.equal(s.state.log.at(-1).type, 'error');
+  const model2 = fakeModel();
+  try {
+    await agent.submit('maker', '/create-skill writes release notes');
+    await idle(s);
+  } finally { model2.restore(); }
+  const skillText = model2.sent[0].input.filter(i => i.role === 'user').at(-1).content;
+  assert.match(skillText, /writes release notes/);
+  assert.ok(skillText.includes(path.join(projects.projectDir('maker'), '.nexus', 'skills')));
+  assert.match(skillText, /<name>\/SKILL\.md/);
 });
 
 test('MCP server configs from the page are cleaned before they reach settings.json', () => {
@@ -988,7 +1000,7 @@ test('a push subscription stops when the session that made it ends', async () =>
 });
 
 test('skills marketplace: lists from GitHub and skills.sh, installs a folder, removes it', { timeout: 30000 }, async () => {
-  const { parseFrontmatter, skills, removeSkill } = await import('../server/extensions.js');
+  const { parseFrontmatter, skills, removeSkill, skillScope } = await import('../server/extensions.js');
   const md = (name, desc) => `---\nname: ${name}\ndescription: >\n  ${desc}\n  on two lines.\n---\nDo the thing.\n`;
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 255]);
   const trees = {
@@ -1024,6 +1036,9 @@ test('skills marketplace: lists from GitHub and skills.sh, installs a folder, re
     assert.equal((await market.item('skills', 'anthropic', 'acme/huge:')).installable, false);
     await assert.rejects(market.installSkill('acme/huge', '', path.join(tmp, 'nope')), /too big to install/);
     await assert.rejects(market.item('skills', 'anthropic', 'acme/kit:../x'), /Bad skill location/);
+    const cols = await market.search('skills', 'collections', 'security');
+    assert.deepEqual(cols.map(i => [i.id, i.collection, i.url]), [['trailofbits/skills', true, 'https://github.com/trailofbits/skills']], 'a collection opens as a link to its repo');
+    assert.ok((await market.search('skills', 'collections', 'https://github.com/acme/kit')).some(i => i.id === 'acme/kit:skills/lint-fix'), 'and its link lists the skills in it');
 
     projects.create('skilled');
     const cwd = projects.projectDir('skilled');
@@ -1034,9 +1049,18 @@ test('skills marketplace: lists from GitHub and skills.sh, installs a folder, re
     const dir = path.join(root, 'skills', 'lint-fix');
     assert.deepEqual(fs.readFileSync(path.join(dir, 'assets', 'logo.png')), png, 'binary files arrive intact');
     assert.ok(!fs.existsSync(path.join(dir, 'stale.txt')), 'an older copy is replaced whole');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, '.nexus-source.json'), 'utf8')), { repo: 'acme/kit', dir: 'skills/lint-fix' }, 'Update downloads from where it came from');
     const k = skills(cwd).find(x => x.name === 'lint-fix');
     assert.equal(k.description, 'Fixes lint errors on two lines.');
-    removeSkill(cwd, 'lint-fix');
+    assert.equal(skillScope(cwd, skills(cwd).find(x => x.name === 'design').dir), 'nexus');
+    const before = fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile, 'utf8') : null;
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    fs.writeFileSync(settingsFile, JSON.stringify({ skillsOff: ['lint-fix'] }));
+    try {
+      assert.ok(!skills(cwd).some(x => x.name === 'lint-fix'), 'a skill turned off stays out of the prompt, the Skill tool and commands');
+      assert.equal(skills(cwd, true).find(x => x.name === 'lint-fix').off, true, 'but is still listed, to turn it back on');
+      removeSkill(cwd, 'lint-fix');
+    } finally { if (before === null) fs.rmSync(settingsFile); else fs.writeFileSync(settingsFile, before); }
     assert.ok(!fs.existsSync(dir));
     assert.throws(() => removeSkill(cwd, 'design'), /isn't a skill installed in Nexus/, 'skills that ship with Nexus stay');
   } finally { globalThis.fetch = realFetch; }

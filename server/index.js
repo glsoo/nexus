@@ -17,7 +17,7 @@ import * as projects from './projects.js';
 import { findFiles } from './tools.js';
 import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
 import * as push from './push.js';
-import { childEnv, isInside, NEXUS_HOME, presentSocket, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
+import { childEnv, isInside, NEXUS_HOME, presentSocket, readJson, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -151,7 +151,7 @@ route('GET', '/api/projects/:name/meta', ({ p }) => {
   const cwd = projects.projectDir(need(p.name));
   return {
     commands: commands(cwd).map(({ name, description }) => ({ name, description })),
-    skills: skills(cwd).map(({ name, description, argumentHint, dir }) => ({ name, description, argumentHint, scope: skillScope(cwd, dir) })),
+    skills: skills(cwd, true).map(({ name, description, argumentHint, dir, off }) => ({ name, description, argumentHint, off, scope: skillScope(cwd, dir) })),
     agents: agentDefs(cwd).map(({ prompt, file, ...a }) => ({ ...a, prompt })),
   };
 });
@@ -192,6 +192,22 @@ route('POST', '/api/projects/:name/skills', async ({ req, p }) => {
   return { name: await market.installSkill(String(repo || ''), String(dir), root) };
 });
 route('DELETE', '/api/projects/:name/skills/:skill', ({ p }) => { removeSkill(projects.projectDir(need(p.name)), decodeURIComponent(p.skill)); return {}; });
+// One skill's instructions, and the GitHub folder it was installed from, which Update downloads again.
+route('GET', '/api/projects/:name/skills/:skill', ({ p }) => {
+  const k = skills(projects.projectDir(need(p.name)), true).find(x => x.name === decodeURIComponent(p.skill));
+  if (!k) throw fail(404, 'No such skill.');
+  return { body: k.body, source: readJson(path.join(k.dir, '.nexus-source.json'), null) };
+});
+// Turning a skill off is by name and applies in every project, like the rest of settings.json.
+route('PUT', '/api/skills/:skill', async ({ req, p }) => {
+  const name = decodeURIComponent(p.skill), { off } = await body(req);
+  let settings = {};
+  // A settings.json that doesn't parse is left alone rather than replaced, so nothing in it is lost.
+  try { settings = JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) || {}; } catch (err) { if (err.code !== 'ENOENT') throw fail(400, `Fix ~/.nexus/settings.json first: ${err.message}`); }
+  const list = (Array.isArray(settings.skillsOff) ? settings.skillsOff : []).filter(n => n !== name);
+  writeAtomic(settingsPath(), JSON.stringify({ ...settings, skillsOff: off ? [...list, name] : list }, null, 2) + '\n');
+  return {};
+});
 route('POST', '/api/mcp-servers', async ({ req }) => {
   const { name, config } = await body(req);
   mcp.addServer(name, config);
