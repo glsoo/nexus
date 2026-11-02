@@ -455,8 +455,7 @@ function chatView(view) {
   $log.addEventListener('wheel', stopFollow, { passive: true });
   $todos = h('div', { class: 'todos', hidden: true });
   if (S.state) {
-    if (!S.state.log.length) $log.append(h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'),
-      h('p', { class: 'mono' }, `~/projects/${S.project}`), h('p', {}, 'Type a request. / runs a command and @ points at a file.')));
+    if (!S.state.log.length) $log.append(hello());
     for (const e of S.state.log) upsertEntry(e, false);
   }
   view.append($log, $todos, composer());
@@ -493,6 +492,34 @@ function upsertEntry(e, follow = true) {
   if (follow && !old) motion(el, RISE, 280);
   entries.set(e.id, { el, e });
   scroll(stick);
+}
+
+// A new chat offers a few first prompts: for exploring code that is already there, or for starting from nothing.
+// They only fill the message box, so they can be finished or changed before sending.
+const STARTERS = {
+  code: [['Explain this project', 'Explain how this project is put together: the main parts, how they connect, and where a newcomer should start reading.'],
+    ['Find and fix a bug', 'Find a real bug in this code. Explain it, fix it with the smallest change, and add a test that fails without the fix.'],
+    ['Write missing tests', 'Find the most important code that has no tests, write tests for it, and run them.'],
+    ['Review my changes', '/review']],
+  empty: [['Build a web page', 'Build a single-page website about '], ['Make a command-line tool', 'Make a small command-line tool that '],
+    ['Start from a GitHub repo', null], ['Plan an idea', 'Help me plan this project, step by step: ']],
+};
+function hello() {
+  const starters = h('div', { class: 'starters' });
+  const el = h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'), h('p', { class: 'mono' }, `~/projects/${S.project}`), starters,
+    h('p', { class: 'small' }, 'Type a request. / runs a command, @ points at a file and ! runs a shell command.'));
+  const project = S.project;
+  api('GET', `${P(project)}/files?q=`).catch(() => []).then(files => {
+    if (project !== S.project || !el.isConnected) return;
+    starters.replaceChildren(...STARTERS[files.length ? 'code' : 'empty'].map(([label, text]) => h('button', { class: 'starter', type: 'button', onclick: () => {
+      if (!text) return cloneDialog();
+      $input.value = drafts[S.project] = text;
+      grow();
+      $input.focus();
+      $input.setSelectionRange(text.length, text.length);
+    } }, label)));
+  });
+  return el;
 }
 
 let mdPending = new Set();
@@ -1700,7 +1727,7 @@ async function versionCard() {
     note.textContent = [`${v.local} local change${v.local === 1 ? '' : 's'}`, v.behind ? `${v.behind} behind` : 'none behind', v.auto ? 'Auto-updates on' : 'Auto-updates off', v.status].filter(Boolean).join(' · ');
   };
   await show();
-  return [h('h2', {}, 'Version'), h('div', { class: 'card rowline' }, h('div', { class: 'grow' }, line, note),
+  return [h('h2', {}, 'Version'), h('div', { class: 'card rowline' }, h('div', { class: 'grow' }, line, note, h('div', { class: 'small' }, 'Nexus is open source. ', extLink('Star it on GitHub', 'https://github.com/glsoo/nexus'), ' to help others find it.')),
     h('button', { class: 'btn', type: 'button', onclick: async () => {
       try { await api('POST', '/api/update', {}); toast('Checking for updates.'); setTimeout(show, 8000); } catch (e) { toast(e.message); }
     } }, 'Update now'))];
