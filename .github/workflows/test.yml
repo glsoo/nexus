@@ -1,0 +1,29 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install ripgrep
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then sudo apt-get update -q && sudo apt-get install -y -q ripgrep
+          elif [ "$RUNNER_OS" = macOS ]; then brew install ripgrep
+          else choco install ripgrep -y --no-progress; fi
+      # Like a developer machine, which has a git identity; some tests commit.
+      - run: git config --global user.name "Nexus CI" && git config --global user.email "ci@nexus.invalid"
+      - run: npm ci
+      - run: npm test
