@@ -21,6 +21,7 @@ test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 const PRICES = [
   { id: 'openai/gpt-6.1-sol', pricing: { prompt: '0.000002', completion: '0.00001', input_cache_read: '0.0000002' } },
   { id: 'anthropic/claude-haiku-4.5', pricing: { prompt: '0.000001', completion: '0.000005' } },
+  { id: 'deepseek/deepseek-chat', pricing: { prompt: '0.00000027', completion: '0.0000011' } },
 ];
 
 // A model that records what it was sent and answers "ok", unless call(n) names a tool [name, args] for its nth request.
@@ -561,4 +562,27 @@ test('hooks also fire on PreCompact, SubagentStop and Notification, and /issue h
   assert.match(events[0].transcript, /conversation\.json$/);
   assert.equal(events[1].description, 'side job');
   assert.equal(events[2].tool, 'Bash');
+});
+
+test('provider presets turn on with their API key, stay out of tool shells, and borrow catalog prices', async () => {
+  const compat = await import('../server/compat.js');
+  const { childEnv } = await import('../server/util.js');
+  process.env.DEEPSEEK_API_KEY = 'test-key';
+  const realFetch = globalThis.fetch;
+  let auth;
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === 'https://api.deepseek.com/v1/models') { auth = init.headers.authorization; return Response.json({ data: [{ id: 'models/deepseek-chat' }, { id: 'deepseek-embed' }] }); }
+    if (String(url) === 'https://openrouter.ai/api/v1/models') return Response.json({ data: PRICES });
+    return realFetch(url, init);
+  };
+  try {
+    assert.equal(childEnv().DEEPSEEK_API_KEY, undefined);
+    const models = (await compat.compatModels()).filter(m => m.provider === 'deepseek');
+    assert.deepEqual(models.map(m => [m.id, m.providerName]), [['deepseek:deepseek-chat', 'DeepSeek']]);
+    assert.equal(auth, 'Bearer test-key');
+    assert.ok(Math.abs(await compat.costOf('deepseek:deepseek-chat', { input_tokens: 1e6, output_tokens: 0 }) - 0.27) < 1e-9);
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.DEEPSEEK_API_KEY;
+  }
 });

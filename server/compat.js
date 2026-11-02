@@ -5,6 +5,11 @@ import { postWithRetry, readSettings, sseEvents } from './util.js';
 // Model ids are "<provider>:<model>", so "ollama:qwen3-coder:30b" is the model "qwen3-coder:30b" on Ollama.
 const PRESETS = {
   openrouter: { name: 'OpenRouter', baseURL: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY' },
+  gemini: { name: 'Google Gemini', baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai', keyEnv: 'GEMINI_API_KEY' },
+  groq: { name: 'Groq', baseURL: 'https://api.groq.com/openai/v1', keyEnv: 'GROQ_API_KEY' },
+  deepseek: { name: 'DeepSeek', baseURL: 'https://api.deepseek.com/v1', keyEnv: 'DEEPSEEK_API_KEY' },
+  mistral: { name: 'Mistral', baseURL: 'https://api.mistral.ai/v1', keyEnv: 'MISTRAL_API_KEY' },
+  xai: { name: 'xAI', baseURL: 'https://api.x.ai/v1', keyEnv: 'XAI_API_KEY' },
   ollama: { name: 'Ollama', baseURL: 'http://127.0.0.1:11434/v1', local: true },
   lmstudio: { name: 'LM Studio', baseURL: 'http://127.0.0.1:1234/v1', local: true },
 };
@@ -41,8 +46,8 @@ async function listModels(id, p) {
   if (!res.ok) throw new Error(`${p.name} returned ${res.status} when listing models.`);
   const { data = [] } = await res.json();
   // An agent needs to chat and call tools, so models known not to (embeddings, speech, moderation) are left out.
-  const list = data.filter(m => (!m.supported_parameters || m.supported_parameters.includes('tools')) && !/embed|moderation|whisper|tts|transcri|dall-e/i.test(m.id)).map(m => ({
-    id: `${id}:${m.id}`, name: m.name || m.id, provider: id, providerName: p.local ? `${p.name} · this computer` : p.name,
+  const list = data.filter(m => (!m.supported_parameters || m.supported_parameters.includes('tools')) && !/embed|moderation|whisper|tts|transcri|dall-e|imagen|veo|guard/i.test(m.id)).map(m => ({
+    id: `${id}:${m.id.replace(/^models\//, '')}`, name: m.name || m.id, provider: id, providerName: p.local ? `${p.name} · this computer` : p.name,
     context: m.context_length || undefined, efforts: [],
     ...(m.pricing ? { price: [Number(m.pricing.prompt) * 1e6, Number(m.pricing.completion) * 1e6], cachedPrice: m.pricing.input_cache_read ? Number(m.pricing.input_cache_read) * 1e6 : undefined } : p.local ? { price: [0, 0] } : {}),
   }));
@@ -64,9 +69,10 @@ const bare = id => id.toLowerCase().replace(/^.*\//, '').replace(/-\d{8}$|-\d{4}
 // shortcut: Anthropic cache writes count at the plain input price (they cost 1.25x), since the usage passed in has dropped them.
 export async function costOf(model, u) {
   const id = providerOf(model);
-  const vendor = `openrouter:${isAnthropic(model) ? 'anthropic' : 'openai'}/`;
-  const list = id ? await listModels(id, providers()[id]).catch(() => []) : await priceList();
-  const m = list.find(x => (id ? x.id === model : x.id.startsWith(vendor) && bare(x.id) === bare(model)));
+  const own = id ? (await listModels(id, providers()[id]).catch(() => [])).find(x => x.id === model) : null;
+  // A server that lists no prices (DeepSeek, Gemini, ...) borrows the catalog's price for the same model name.
+  const vendor = `openrouter:${id ? '' : isAnthropic(model) ? 'anthropic/' : 'openai/'}`, want = bare(id ? model.slice(id.length + 1) : model);
+  const m = own?.price ? own : (await priceList()).find(x => x.id.startsWith(vendor) && bare(x.id) === want);
   if (!m?.price || !u) return undefined;
   const cached = u.input_tokens_details?.cached_tokens || 0;
   return (((u.input_tokens || 0) - cached) * m.price[0] + cached * (m.cachedPrice ?? m.price[0]) + (u.output_tokens || 0) * m.price[1]) / 1e6;
