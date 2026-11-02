@@ -5,21 +5,26 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { presentSocket } from '../server/util.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'present-'));
 const env = { ...process.env, NEXUS_HOME: path.join(tmp, 'home') };
-const script = new URL('../scripts/present.js', import.meta.url).pathname;
+const script = fileURLToPath(new URL('../scripts/present.js', import.meta.url));
 const site = path.join(tmp, 'site');
 fs.mkdirSync(path.join(site, 'sub'), { recursive: true });
 fs.writeFileSync(path.join(site, 'a.md'), '# Hi');
 fs.writeFileSync(path.join(site, 'clip.mp4'), '0123456789');
 fs.writeFileSync(path.join(site, '.env'), 'SECRET');
 fs.writeFileSync(path.join(tmp, 'outside.txt'), 'SECRET');
-fs.symlinkSync(path.join(tmp, 'outside.txt'), path.join(site, 'link.txt'));
+if (process.platform === 'win32') {
+  fs.mkdirSync(path.join(tmp, 'outside'));
+  fs.symlinkSync(path.join(tmp, 'outside'), path.join(site, 'link.txt'), 'junction');
+} else fs.symlinkSync(path.join(tmp, 'outside.txt'), path.join(site, 'link.txt'));
 
 const run = (...args) => execFileSync(process.execPath, [script, ...args], { env, encoding: 'utf8' });
 const get = (id, url, headers = {}) => new Promise((resolve, reject) => {
-  http.get({ socketPath: path.join(env.NEXUS_HOME, 'present', `${id}.sock`), path: url, headers }, res => {
+  http.get({ socketPath: presentSocket(id, env.NEXUS_HOME), path: url, headers }, res => {
     let body = '';
     res.on('data', d => { body += d; });
     res.on('end', () => resolve({ status: res.statusCode, body, type: res.headers['content-type'] }));
@@ -44,7 +49,7 @@ test('a folder serves its files and nothing hidden or outside it', async () => {
     run('stop', id);
   }
   await new Promise(r => setTimeout(r, 200));
-  assert.equal(fs.existsSync(path.join(env.NEXUS_HOME, 'present', `${id}.sock`)), false);
+  assert.equal(fs.existsSync(path.join(env.NEXUS_HOME, 'present', `${id}.ready`)), false);
 });
 
 test('a single file serves only itself, and a bad ttl is refused', async () => {

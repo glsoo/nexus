@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { childEnv, HOME, NEXUS_HOME, readSettings, validName, writeAtomic } from './util.js';
+import { childEnv, HOME, NEXUS_HOME, readSettings, shellCommand, validName, writeAtomic } from './util.js';
 
 export const BUILTIN_AGENTS = [
   { name: 'general-purpose', description: 'Multi-step research and coding tasks.', tools: null, builtin: true,
@@ -101,7 +101,7 @@ export async function runHooks(event, payload, cwd) {
   for (const hook of hooks) {
     if (hook.matcher && payload.tool && !new RegExp(hook.matcher).test(payload.tool)) continue;
     const result = await new Promise(resolve => {
-      const proc = spawn('bash', ['-c', hook.command], { cwd, env: childEnv(), stdio: ['pipe', 'ignore', 'pipe'], timeout: 60000 });
+      const proc = spawn(shellCommand(), ['-c', hook.command], { cwd, env: childEnv(), windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'], timeout: 60000 });
       let stderr = '';
       proc.stderr.on('data', d => { stderr += d; });
       proc.on('error', err => resolve({ code: 1, stderr: err.message }));

@@ -1,7 +1,7 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { childEnv, clip, isInside, newId } from './util.js';
+import { childEnv, clip, HOME, isInside, newId, shellCommand } from './util.js';
 
 const obj = (properties, required = []) => ({ type: 'object', properties, required });
 const fn = (name, description, parameters) => ({ type: 'function', name, description, strict: false, parameters });
@@ -34,18 +34,23 @@ export const TOOL_DEFS = [
   fn('Skill', 'Load the full instructions of a listed skill.', obj({ name: str('Skill name') }, ['name'])),
 ];
 
-const resolve = (cwd, p) => path.resolve(cwd, String(p).replace(/^~(?=$|\/)/, process.env.HOME));
+const resolve = (cwd, p) => path.resolve(cwd, String(p).replace(/^~(?=$|\/)/, HOME));
 
 // ---- background shells ----
 export const shells = new Map();
 
 export function killGroup(proc, signal = 'SIGTERM') {
-  try { process.kill(-proc.pid, signal); } catch { /* already gone */ }
+  if (!Number.isInteger(proc?.pid) || proc.pid <= 0) return;
+  if (process.platform === 'win32' && (proc.exitCode !== null || proc.signalCode)) return;
+  try {
+    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    else process.kill(-proc.pid, signal);
+  } catch { /* already gone */ }
 }
 
 function startBackground(command, ctx) {
   const id = newId('sh');
-  const proc = spawn('bash', ['-c', command], { cwd: ctx.cwd, env: childEnv(), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(shellCommand(), ['-c', command], { cwd: ctx.cwd, env: childEnv(), detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const shell = { id, project: ctx.session.name, command, proc, output: '', read: 0, status: 'running', started: Date.now() };
   const add = d => { shell.output = (shell.output + d).slice(-1_000_000); };
   proc.stdout.on('data', add);
@@ -60,7 +65,7 @@ function bash({ command, timeout = 120000, run_in_background }, ctx) {
   if (run_in_background) return `Started background shell ${startBackground(command, ctx)}`;
   const limit = Math.min(Math.max(Number(timeout) || 120000, 1000), 600000);
   return new Promise(done => {
-    const proc = spawn('bash', ['-c', command], { cwd: ctx.cwd, env: childEnv(), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(shellCommand(), ['-c', command], { cwd: ctx.cwd, env: childEnv(), detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '', ended = '';
     const add = d => {
       const s = d.toString();

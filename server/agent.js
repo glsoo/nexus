@@ -14,7 +14,7 @@ hub.setMaxListeners(0);
 const sessions = new Map();
 export const agents = new Map();
 const NAME_TIMEOUT = 8000;
-const REPO = fs.realpathSync(new URL('..', import.meta.url).pathname);
+const REPO = fs.realpathSync(new URL('..', import.meta.url));
 const PARALLEL = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'Task', 'BashOutput', 'Skill']);
 const SUB_EXCLUDED = new Set(['Task', 'TodoWrite', 'AskUserQuestion', 'ExitPlanMode']);
 // 0 means off. Leaves room under the model's limit, because the summary request has to fit too.
@@ -125,7 +125,7 @@ function systemPrompt(s, extra = '') {
   const memory = instructions(cwd);
   const planning = s.state.mode === 'plan'
     ? '\n\nPLAN MODE IS ACTIVE. Do not change anything. Research with read-only tools, then present your plan with ExitPlanMode.' : '';
-  return `You are Nexus, an interactive coding agent working on the user's own Linux machine. You help with software engineering tasks by reading code, editing files, running commands and coordinating subagents.
+  return `You are Nexus, an interactive coding agent working on the user's own machine. You help with software engineering tasks by reading code, editing files, running commands and coordinating subagents.
 
 # How to work
 - Read the code before changing it, and match its conventions. Make the smallest change that solves the real problem.
@@ -602,7 +602,7 @@ export function selfProject() {
   const link = projects.projectDir(projects.SELF);
   if (!fs.existsSync(link)) {
     fs.mkdirSync(path.dirname(link), { recursive: true });
-    fs.symlinkSync(REPO, link);
+    fs.symlinkSync(REPO, link, process.platform === 'win32' ? 'junction' : 'dir');
     setOption(getSession(projects.SELF), 'mode', 'bypass');
   }
   return projects.SELF;

@@ -1,10 +1,11 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { readJson, writeAtomic } from './util.js';
 
 const scryptAsync = promisify(scrypt);
 const SESSION_MS = 30 * 24 * 3600 * 1000;
-const FILE = new URL('../data/sessions.json', import.meta.url).pathname;
+const FILE = fileURLToPath(new URL('../data/sessions.json', import.meta.url));
 const sha = s => createHash('sha256').update(s).digest();
 const sessions = new Map(Object.entries(readJson(FILE, {})));
 

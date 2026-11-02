@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
 import * as agent from './agent.js';
@@ -11,10 +12,10 @@ import * as auth from './auth.js';
 import { agentDefs, commands, deleteAgentDef, saveAgentDef, skills } from './extensions.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
-import { childEnv, isInside, NEXUS_HOME, readSettings, settingsPath, writeAtomic } from './util.js';
+import { childEnv, isInside, presentSocket, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
-const ROOT = new URL('..', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
 // Changes only with the page's code, so open tabs reload only when they'd otherwise be out of date.
 const BUILD = createHash('sha1').update(['index.html', 'app.js', 'style.css'].map(f => fs.readFileSync(path.join(PUBLIC, f), 'utf8')).join('')).digest('hex').slice(0, 12);
@@ -182,20 +183,22 @@ route('PUT', '/api/settings', async ({ req }) => {
 });
 
 const UPDATE_MS = 6 * 3600_000;
+const AUTO_UPDATE = process.platform !== 'win32' && process.env.NEXUS_AUTO_UPDATE !== '0';
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 // Waits while anything is running, because a restart would interrupt it and a merge could catch the bot mid-edit.
 function runUpdate() {
+  if (process.platform === 'win32') throw fail(409, 'Use Git to update this Windows checkout, then restart Nexus from its launcher.');
   if (projects.list().some(p => agent.isBusy(p.name))) return false;
   spawn(path.join(ROOT, 'scripts/update.sh'), { cwd: ROOT, env: childEnv(), detached: true, stdio: 'ignore' }).unref();
   return true;
 }
-if (process.env.NEXUS_AUTO_UPDATE !== '0') setInterval(runUpdate, UPDATE_MS).unref();
+if (AUTO_UPDATE) setInterval(runUpdate, UPDATE_MS).unref();
 route('GET', '/api/version', () => {
   const count = range => { try { return Number(git('rev-list', '--count', range)); } catch { return 0; } };
   let status = '';
   try { status = fs.readFileSync(path.join(ROOT, 'data/update-status.txt'), 'utf8').trim(); } catch { /* no update has run yet */ }
   return { version: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, commit: git('rev-parse', '--short', 'HEAD'),
-    local: count('origin/main..HEAD'), behind: count('HEAD..origin/main'), status, auto: process.env.NEXUS_AUTO_UPDATE !== '0' };
+    local: count('origin/main..HEAD'), behind: count('HEAD..origin/main'), status, auto: AUTO_UPDATE };
 });
 route('POST', '/api/update', () => {
   if (!runUpdate()) throw fail(409, 'Something is running. Try again when it finishes.');
@@ -283,7 +286,7 @@ function present(req, res, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return res.writeHead(405).end();
   const { range } = req.headers;
   const up = http.request({
-    socketPath: path.join(NEXUS_HOME, 'present', `${m[1]}.sock`), method: req.method, path: m[2] + url.search,
+    socketPath: presentSocket(m[1]), method: req.method, path: m[2] + url.search,
     headers: { host: 'present', ...(range ? { range } : {}) },
   }, r => {
     // A browser's PDF viewer won't run inside a sandbox, and a PDF can't script the page's origin anyway.
@@ -399,7 +402,7 @@ agent.hub.on('renamed', (from, to) => {
 termWss.on('connection', (ws, url) => {
   let term;
   try {
-    term = pty.spawn(process.env.SHELL || 'bash', [], {
+    term = pty.spawn(shellCommand(), [], {
       name: 'xterm-256color', cwd: projects.projectDir(need(url.searchParams.get('project'))), env: childEnv(),
       cols: Number(url.searchParams.get('cols')) || 80, rows: Number(url.searchParams.get('rows')) || 24,
     });

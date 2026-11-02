@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,6 +7,21 @@ export const HOME = os.homedir();
 export const PROJECTS = process.env.NEXUS_PROJECTS || path.join(HOME, 'projects');
 export const NEXUS_HOME = process.env.NEXUS_HOME || path.join(HOME, '.nexus');
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
+
+export function presentSocket(id, home = NEXUS_HOME) {
+  if (process.platform !== 'win32') return path.join(home, 'present', `${id}.sock`);
+  const scope = createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 16);
+  return `\\\\.\\pipe\\nexus-${scope}-${id}`;
+}
+
+export function shellCommand() {
+  if (process.env.SHELL) return process.env.SHELL;
+  if (process.platform !== 'win32') return 'bash';
+  const roots = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], path.join(HOME, 'AppData', 'Local', 'Programs')];
+  const shell = roots.filter(Boolean).map(root => path.join(root, 'Git', 'bin', 'bash.exe')).find(file => fs.existsSync(file));
+  if (!shell) throw new Error('Install Git for Windows, or set SHELL to the full path of Git Bash.');
+  return shell;
+}
 
 export const validName = s => typeof s === 'string' && NAME.test(s);
 
@@ -18,6 +34,7 @@ export const newId = (prefix = 'e') => `${prefix}_${Date.now().toString(36)}${Ma
 // Everything the agent or terminal spawns runs without the panel's own secrets.
 export function childEnv() {
   const env = { ...process.env };
+  env.HOME ||= HOME;
   for (const key of Object.keys(env)) if (key === 'OPENAI_API_KEY' || key === 'ANTHROPIC_API_KEY' || (key.startsWith('NEXUS_') && key !== 'NEXUS_URL')) delete env[key];
   return env;
 }

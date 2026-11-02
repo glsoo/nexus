@@ -8,13 +8,23 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-'));
 process.env.NEXUS_PROJECTS = path.join(tmp, 'projects');
 process.env.NEXUS_HOME = path.join(tmp, 'home');
 const projects = await import('../server/projects.js');
-const { decide, edit } = await import('../server/tools.js');
+const { decide, edit, execTool } = await import('../server/tools.js');
 const { loginBlocked, recordFail, clearFails } = await import('../server/auth.js');
 const { autoName, getSession, publicState, requestBody, resumeAfterRestart, stopForRestart, submit } = await import('../server/agent.js');
 const { sseEvents } = await import('../server/util.js');
 const { callAnthropic, toMessages } = await import('../server/anthropic.js');
 const { checkpoint } = { checkpoint: await import('../server/checkpoint.js') };
 const state = (mode, allow = []) => ({ mode, allow });
+
+test('shell commands and cancellation work on the native platform', { timeout: 10000 }, async () => {
+  const ctx = { cwd: tmp, session: { name: 'native-shell-test' } };
+  assert.equal(await execTool('Bash', { command: 'printf nexus-shell-ok' }, ctx), 'nexus-shell-ok');
+  const output = await execTool('Bash', { command: `node -e 'console.log("NEXUS_CHILD_PID=" + process.pid); setInterval(() => {}, 1000)'`, timeout: 1000 }, ctx);
+  assert.match(output, /Timed out after 1000 ms/);
+  const child = Number(/NEXUS_CHILD_PID=(\d+)/.exec(output)?.[1]);
+  assert.ok(child > 0, output);
+  assert.throws(() => process.kill(child, 0), { code: 'ESRCH' });
+});
 
 test('project names cannot escape ~/projects', () => {
   for (const bad of ['../evil', 'a/b', '.hidden', 'x'.repeat(65)]) assert.throws(() => projects.create(bad));

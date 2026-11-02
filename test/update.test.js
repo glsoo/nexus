@@ -4,14 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { shellCommand } from '../server/util.js';
 
-const script = new URL('../scripts/update.sh', import.meta.url).pathname;
+const script = fileURLToPath(new URL('../scripts/update.sh', import.meta.url));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'update-'));
 const bin = path.join(tmp, 'bin');
 const restarted = path.join(tmp, 'restarted');
 fs.mkdirSync(bin);
-fs.writeFileSync(path.join(bin, 'systemd-run'), `#!/bin/sh\necho "$@" > ${restarted}\n`, { mode: 0o755 });
-const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+fs.writeFileSync(path.join(bin, 'systemd-run'), `#!/bin/sh\necho "$@" > "${restarted.replaceAll('\\', '/')}"\n`, { mode: 0o755 });
+const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 const write = (dir, file, text) => fs.writeFileSync(path.join(dir, file), text);
 const save = (dir, msg) => { git(dir, 'add', '-A'); git(dir, 'commit', '-qm', msg); };
@@ -27,14 +29,14 @@ function setup(name) {
   save(up, 'base');
   git(tmp, 'clone', '-q', up, local);
   fs.mkdirSync(path.join(local, 'scripts'));
-  fs.copyFileSync(script, path.join(local, 'scripts/update.sh'));
+  fs.writeFileSync(path.join(local, 'scripts/update.sh'), fs.readFileSync(script, 'utf8').replaceAll('\r\n', '\n'), { mode: 0o755 });
   write(local, 'mine.txt', 'my change\n');
   save(local, 'my change');
   fs.rmSync(restarted, { force: true });
   return { up, local };
 }
 function update(local) {
-  try { execFileSync(path.join(local, 'scripts/update.sh'), { env, stdio: 'ignore' }); return 0; } catch (err) { return err.status; }
+  try { execFileSync(shellCommand(), [path.join(local, 'scripts/update.sh').replaceAll('\\', '/')], { env, stdio: 'ignore' }); return 0; } catch (err) { return err.status; }
 }
 const status = local => fs.readFileSync(path.join(local, 'data/update-status.txt'), 'utf8');
 

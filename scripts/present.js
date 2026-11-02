@@ -8,7 +8,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { marked } from 'marked';
-import { isInside, NEXUS_HOME } from '../server/util.js';
+import { isInside, NEXUS_HOME, presentSocket } from '../server/util.js';
 
 const URL_BASE = `${process.env.NEXUS_URL || `http://127.0.0.1:${process.env.NEXUS_PORT || 7711}`}/present`;
 const SOCKETS = path.join(NEXUS_HOME, 'present');
@@ -23,7 +23,8 @@ const TYPES = {
 };
 const HTML = TYPES['.html'];
 
-const sock = id => path.join(SOCKETS, `${id}.sock`);
+const sock = presentSocket;
+const ready = id => path.join(SOCKETS, `${id}.ready`);
 const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const page = (title, body) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>${esc(title)}</title>
 <style>:root{color-scheme:dark}body{box-sizing:border-box;max-width:860px;margin:0 auto;padding:max(20px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(20px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));background:#000;color:#eee;font:16px/1.6 system-ui,sans-serif;overflow-wrap:anywhere}a{color:#22c55e}img{max-width:100%}pre{overflow:auto;font:14px/1.5 ui-monospace,monospace}table{display:block;overflow:auto;border-collapse:collapse}td,th{border:1px solid #333;padding:6px 10px}li a{display:inline-block;padding:6px 0}</style>
@@ -83,10 +84,13 @@ function serve(id, target, ms) {
       res.end('Not found');
     }
   });
-  process.on('exit', () => fs.rmSync(sock(id), { force: true }));
+  process.on('exit', () => {
+    fs.rmSync(ready(id), { force: true });
+    if (process.platform !== 'win32') fs.rmSync(sock(id), { force: true });
+  });
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => process.exit());
   setTimeout(() => process.exit(), ms);
-  server.listen(sock(id));
+  server.listen(sock(id), () => fs.writeFileSync(ready(id), '', { mode: 0o600 }));
 }
 
 function start(argv) {
@@ -98,8 +102,8 @@ function start(argv) {
   const target = fs.realpathSync(positionals[0]);
   fs.mkdirSync(SOCKETS, { recursive: true, mode: 0o700 });
   const id = randomBytes(12).toString('base64url');
-  spawn(process.execPath, [process.argv[1], '--serve', id, target, String(ms)], { detached: true, stdio: 'ignore', cwd: SOCKETS }).unref();
-  for (const until = Date.now() + 5000; !fs.existsSync(sock(id)); ) {
+  spawn(process.execPath, [process.argv[1], '--serve', id, target, String(ms)], { detached: true, windowsHide: true, stdio: 'ignore', cwd: SOCKETS }).unref();
+  for (const until = Date.now() + 5000; !fs.existsSync(ready(id)); ) {
     if (Date.now() > until) throw new Error('The presentation server did not start.');
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   }
