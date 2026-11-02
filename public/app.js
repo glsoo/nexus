@@ -21,6 +21,10 @@ const ICONS = {
   out: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>', pen: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>', clip: '<path d="M21 11l-9 9a5.5 5.5 0 0 1-8-8l9-9a3.7 3.7 0 0 1 5 5l-9 9a1.8 1.8 0 0 1-3-3l8-8"/>',
   undo: '<path d="M3 7v6h6M3 13a9 9 0 1 0 3-7L3 9"/>', down: '<path d="M6 9l6 6 6-6"/>', check: '<path d="M5 13l4 4L19 7"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>', spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', back: '<path d="M15 18l-6-6 6-6"/>',
 };
 const icon = name => { const t = document.createElement('template'); t.innerHTML = `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return t.content.firstChild; };
 
@@ -52,9 +56,23 @@ const guard = fn => async (...a) => { try { return await fn(...a); } catch (e) {
 
 function markdown(el, text, final = true) {
   el.innerHTML = DOMPurify.sanitize(marked.parse(text || ''));
-  if (final) el.querySelectorAll('pre code').forEach(c => hljs.highlightElement(c));
+  if (final) el.querySelectorAll('pre code').forEach(c => { hljs.highlightElement(c); c.parentElement.append(copyButton(() => c.textContent)); });
   el.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
 }
+
+// The clipboard API needs a secure context; plain http on a LAN address falls back to a selection copy.
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); } catch {
+    const t = h('textarea', { value: text, style: 'position:fixed;opacity:0' });
+    document.body.append(t); t.select(); document.execCommand('copy'); t.remove();
+  }
+}
+const copyButton = get => h('button', { class: 'icon-btn copy', type: 'button', 'aria-label': 'Copy code', title: 'Copy', onclick: async e => {
+  const b = e.currentTarget;
+  await copyText(get());
+  b.replaceChildren(icon('check')); b.classList.add('done');
+  setTimeout(() => { b.replaceChildren(icon('copy')); b.classList.remove('done'); }, 1400);
+} }, icon('copy'));
 const fmt = n => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? 'just now' : s < 3600 ? `${s / 60 | 0}m ago` : s < 86400 ? `${s / 3600 | 0}h ago` : `${s / 86400 | 0}d ago`; };
 
@@ -79,7 +97,7 @@ function dialog({ title, body, wide, actions }) {
 const confirmBox = (title, text, label = 'Confirm', cls = 'primary') => dialog({ title, body: h('p', { class: 'muted' }, text), actions: [{ label: 'Cancel' }, { label, class: cls, value: true }] });
 
 // ---- app state ----
-const S = { project: null, tab: 'chat', page: null, state: null, ws: null, projects: [], models: [], meta: { commands: [], skills: [], agents: [] }, me: null, images: [] };
+const S = { project: null, tab: 'chat', page: null, state: null, ws: null, projects: [], models: [], meta: { commands: [], skills: [], agents: [] }, prompts: null, me: null, images: [] };
 const entries = new Map();
 
 // ---- login ----
@@ -152,6 +170,7 @@ function projectMenu(anchor, name) {
     }
   } },
   h('button', { role: 'menuitem', onclick: () => { close(); renameDialog(name); } }, icon('pen'), 'Rename'),
+  h('button', { role: 'menuitem', onclick: () => { close(); exportChat(name); } }, icon('download'), 'Export chat'),
   h('button', { role: 'menuitem', class: 'danger', onclick: () => { close(); deleteDialog(name); } }, icon('trash'), 'Delete'));
   document.body.append(menu);
   const r = anchor.getBoundingClientRect();
@@ -198,13 +217,19 @@ function go(project, page = null, tab = 'chat') {
   if (moved) motion($main.lastElementChild, RISE);
   refreshSoon();
 }
-async function loadMeta() { S.meta = await api('GET', `${P(S.project)}/meta`); }
+async function loadMeta() {
+  const project = S.project;
+  const [meta, prompts] = await Promise.all([api('GET', `${P(project)}/meta`), api('GET', `${P(project)}/prompts`).catch(() => null)]);
+  if (project !== S.project) return;
+  S.meta = meta; S.prompts = prompts;
+  syncComposer();
+}
 
 let prevTab = 0;
 function render() {
   document.getElementById('nav-agents').classList.toggle('on', S.page === 'agents');
   document.getElementById('nav-settings').classList.toggle('on', S.page === 'settings');
-  document.title = S.project && !S.page ? `${pretty(S.project)} · Nexus` : 'Nexus';
+  syncTitle();
   const hamb = h('button', { class: 'icon-btn hamb', 'aria-label': 'Open menu', onclick: () => drawer(true) }, icon('menu'));
   if (S.page === 'agents') return agentsPage(hamb);
   if (S.page === 'settings') return settingsPage(hamb);
@@ -229,6 +254,23 @@ function render() {
     prevTab = at;
   }
 }
+
+// ---- title and notifications ----
+// The tab shows ● while the agent works and ✓ when it finished out of sight; a notification is opt-in from Settings.
+const pref = (key, value) => { try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); } catch { /* private window */ } return null; };
+let doneUnseen = false;
+function syncTitle() {
+  const base = S.project && !S.page ? `${pretty(S.project)} · Nexus` : 'Nexus';
+  document.title = `${S.state?.running ? '● ' : doneUnseen ? '✓ ' : ''}${base}`;
+}
+function finished() {
+  if (!document.hidden) return;
+  doneUnseen = true;
+  if (pref('nexus.notify') === '1' && window.Notification?.permission === 'granted') {
+    new Notification('Nexus finished', { body: pretty(S.project), icon: '/icon-180.png', tag: `nexus-${S.project}` });
+  }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && doneUnseen) { doneUnseen = false; syncTitle(); } });
 
 // ---- websocket ----
 let wsRetry = 0, wsTimer, $conn, lastHeard = 0;
@@ -297,10 +339,14 @@ function onEvent(m) {
       break;
     }
     case 'delta': delta(m); break;
-    case 'status':
-      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, compactAt: m.compactAt });
+    case 'status': {
+      const was = S.state?.running;
+      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, compactAt: m.compactAt });
+      if (was && !m.running) finished();
+      syncTitle();
       syncComposer();
       break;
+    }
     case 'reset':
       if (m.state) S.state = m.state; else if (S.state) S.state.log = [];
       if (S.tab === 'chat' && !S.page) render();
@@ -312,7 +358,7 @@ function onEvent(m) {
         S.project = m.to;
         if (S.state) S.state.name = m.to;
         history.replaceState(null, '', S.page ? `#/${S.page}` : `#/p/${encodeURIComponent(m.to)}/${S.tab}`);
-        document.title = `${pretty(m.to)} · Nexus`;
+        syncTitle();
         const title = $main.querySelector('.top h1');
         if (title && !S.page) { title.textContent = pretty(m.to); title.title = pretty(m.to); }
       }
@@ -324,7 +370,7 @@ function onEvent(m) {
 }
 
 // ---- chat ----
-let $log, $todos, $input, $sendBtn, $stopBtn, $mode, $model, $modelLabel, $meter, $thumbs, $slash;
+let $log, $todos, $input, $sendBtn, $stopBtn, $mode, $model, $modelLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
 
 function chatView(view) {
   entries.clear();
@@ -448,7 +494,8 @@ function renderEntry(e) {
   switch (e.type) {
     case 'user': {
       const rw = !e.queued && e.cp !== undefined && h('button', { class: 'icon-btn rw', 'aria-label': 'Rewind to this prompt', title: 'Rewind to here', onclick: () => rewindDialog(e) }, icon('undo'));
-      return h('div', { class: `e user ${e.queued ? 'queued' : ''}` }, e.text, (e.images || []).map(src => h('img', { src, alt: 'Attachment' })), rw);
+      const tag = e.injected && h('span', { class: 'itag', title: 'Your standing instructions from Prompts were added to this message' }, '+ injected');
+      return h('div', { class: `e user ${e.queued ? 'queued' : ''}` }, e.text, (e.images || []).map(src => h('img', { src, alt: 'Attachment' })), tag, rw);
     }
     case 'assistant': {
       const md = h('div', { class: 'md' });
@@ -506,6 +553,8 @@ const BUILTIN = [
   ['cost', 'Show tokens used'], ['init', 'Write a NEXUS.md for this project'], ['todos', 'Show the task list'],
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
   ['skills', 'List skills and agents'], ['mcp', 'Open MCP and hook settings'], ['settings', 'Open settings'], ['memory', 'Edit NEXUS.md'], ['rewind', 'How to rewind'],
+  ['create-agent', 'Have the AI write a new agent type'], ['agent', 'Switch this chat to another agent'], ['prompts', 'Edit system prompts and injected text'],
+  ['marketplace', 'Browse agents and MCP servers to add'], ['export', 'Download this chat as Markdown'],
 ];
 const slashItems = () => [
   ...BUILTIN.map(([name, description]) => ({ name, description })),
@@ -518,6 +567,8 @@ function localCommand(text) {
   if (['settings', 'mcp'].includes(cmd)) { go(S.project, 'settings'); return true; }
   if (cmd === 'memory') { pendingOpen = 'NEXUS.md'; go(S.project, null, 'files'); return true; }
   if (cmd === 'rewind') { toast('Use the rewind arrow on the prompt you want to go back to.'); return true; }
+  const panels = { agent: agentPicker, prompts: () => promptsDialog(), marketplace: () => marketplace('agents'), export: () => exportChat(S.project) };
+  if (Object.hasOwn(panels, cmd)) { guard(panels[cmd])(); return true; }
   return false;
 }
 
@@ -593,6 +644,9 @@ function composer() {
   $slash = h('div', { class: 'slash', hidden: true });
   const file = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true, onchange: () => { addFiles(file.files); file.value = ''; } });
   $mode = h('select', { 'aria-label': 'Permission mode', title: 'Permission mode (Shift+Tab)', onchange: () => setMode($mode.value) }, MODES.map(([v, l]) => h('option', { value: v }, l)));
+  $agentLabel = h('span', { class: 'mlabel' });
+  $agentBtn = h('button', { class: 'mbtn abtn', type: 'button', 'aria-label': 'Choose the agent for this chat', onclick: guard(agentPicker) }, icon('bot'), $agentLabel, icon('down'));
+  $promptBtn = h('button', { class: 'icon-btn pbtn', type: 'button', 'aria-label': 'System prompts and injected text', title: 'Prompts', onclick: guard(() => promptsDialog()) }, icon('sliders'));
   $modelLabel = h('span', { class: 'mlabel' });
   $model = h('button', { class: 'mbtn', type: 'button', 'aria-label': 'Choose model and effort', title: 'Model and effort', onclick: modelPicker }, $modelLabel, icon('down'));
   $meter = h('button', { class: 'meter', type: 'button', onclick: tokenPanel });
@@ -601,7 +655,7 @@ function composer() {
   syncThumbs();
   return h('div', { class: 'composer' }, $slash, h('div', { class: 'cbox' }, $thumbs, $input, h('div', { class: 'cbar' },
     h('button', { class: 'icon-btn', 'aria-label': 'Attach image', title: 'Attach image', onclick: () => file.click() }, icon('clip')), file,
-    $mode, $model, $meter, $stopBtn, $sendBtn)));
+    $mode, $agentBtn, $model, $promptBtn, $meter, $stopBtn, $sendBtn)));
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -724,6 +778,12 @@ function syncComposer() {
   $mode.className = st.mode;
   const info = S.models.find(m => m.id === st.model);
   $modelLabel.textContent = (info?.name || st.model) + (info?.efforts.length === 0 ? '' : ` · ${st.effort}`);
+  const role = st.agent && S.meta.agents.find(a => a.name === st.agent);
+  $agentLabel.textContent = st.agent || 'Nexus';
+  $agentBtn.classList.toggle('on', Boolean(st.agent));
+  $agentBtn.title = st.agent ? `Agent: ${st.agent}${role?.description ? `. ${role.description}` : ''}` : 'Agent: Nexus, the default';
+  const p = S.prompts;
+  $promptBtn.classList.toggle('on', Boolean(p && [p.chat, p.project, p.global].some(x => x.system.trim() || x.inject.trim())));
   $stopBtn.hidden = !st.running;
   $sendBtn.textContent = st.running ? 'Queue' : 'Send';
   $meter.textContent = `${fmt(st.usage.lastInput)} / ${st.compactAt ? fmt(st.compactAt) : 'off'}`;
@@ -732,6 +792,315 @@ function syncComposer() {
   $todos.hidden = !st.todos?.length || st.todos.every(t => t.status === 'completed');
   $todos.replaceChildren(...(st.todos || []).map(t => h('div', { class: t.status }, h('span', {}, t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '▸' : '○'), t.content)));
 }
+
+let uidN = 0;
+const uid = () => `u${++uidN}`;
+const sheet = d => () => { d.classList.add('closing'); exit(d, { opacity: 0, transform: phone.matches ? 'translateY(32px)' : 'scale(.97)' }).then(() => d.close()); };
+const projectForInstall = () => S.project || S.projects[0]?.name;
+const extLink = (label, url) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, label, icon('ext'));
+
+// ---- the chat's agent ----
+// Like the model picker: the default, every custom agent type, and ways to get more.
+async function agentPicker() {
+  if (!S.project || !S.state) return toast('Open a project first.');
+  const pick = def => {
+    setOption('agent', def?.name || '');
+    if (def?.model) setOption('model', def.model);
+    toast(def ? `This chat now works as ${def.name}.` : 'Back to Nexus, the default agent.');
+    shut();
+  };
+  const row = def => {
+    const current = (def?.name || '') === (S.state.agent || '');
+    const facts = def ? [def.description || 'No description', def.tools ? `tools: ${def.tools.join(', ')}` : '', def.model].filter(Boolean).join(' · ') : 'The built-in coding agent, with every tool.';
+    return h('button', { class: `mrow${current ? ' current' : ''}`, type: 'button', 'aria-current': current ? 'true' : null, onclick: () => pick(def) },
+      h('span', { class: 'mtext' },
+        h('span', { class: 'mname' }, def ? def.name : 'Nexus', !def && h('span', { class: 'mtag' }, 'Default'), def && h('span', { class: 'mtag dim' }, def.scope === 'user' ? 'All projects' : 'This project')),
+        h('span', { class: 'mfacts' }, facts)),
+      current && icon('check'));
+  };
+  const list = h('div', { class: 'mlist' });
+  const search = h('input', { class: 'field', type: 'search', placeholder: 'Search agents', 'aria-label': 'Search agents', autocomplete: 'off', oninput: () => fill(),
+    onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); list.querySelector('.mrow')?.click(); } } });
+  const fill = () => {
+    const terms = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const defs = S.meta.agents.filter(a => !a.builtin && terms.every(t => `${a.name} ${a.description}`.toLowerCase().includes(t)));
+    list.replaceChildren(row(null), ...defs.map(row),
+      ...(defs.length || terms.length ? [] : [h('p', { class: 'mnone muted' }, 'No custom agents yet. Create one with AI, or install one of 120+ from the marketplace.')]));
+  };
+  const d = h('dialog', { class: 'picker', 'aria-label': 'Choose agent', onclick: e => { if (e.target === d) shut(); }, oncancel: e => { e.preventDefault(); shut(); }, onclose: () => d.remove() },
+    h('div', { class: 'mhead' }, h('h2', {}, 'Agent'), h('button', { class: 'btn small', type: 'button', onclick: () => shut() }, 'Done')),
+    search, list,
+    h('div', { class: 'mfoot afoot' },
+      h('button', { class: 'btn small', type: 'button', onclick: () => { shut(); createWithAI(); } }, icon('spark'), 'Create with AI'),
+      h('button', { class: 'btn small', type: 'button', onclick: () => { shut(); marketplace('agents'); } }, icon('grid'), 'Marketplace'),
+      h('button', { class: 'btn small', type: 'button', onclick: () => { shut(); go(S.project, 'agents'); } }, 'Manage')));
+  const shut = sheet(d);
+  fill();
+  document.body.append(d);
+  d.showModal();
+  if (!touch.matches) search.focus();
+  await loadMeta().catch(() => {}); // picks up agent types the AI just wrote
+  if (d.open) fill();
+}
+
+// /create-agent runs as a normal prompt, so the agent can read the project and its file write is shown for approval.
+function createWithAI(about = '') {
+  const project = projectForInstall();
+  if (!project) return toast('Create a project first.');
+  drafts[project] = `/create-agent ${about}`;
+  if (S.project !== project || S.page || S.tab !== 'chat') go(project, null, 'chat');
+  else if ($input?.isConnected) { $input.value = drafts[project]; grow(); }
+  $input?.focus();
+  toast('Say what the agent should do after /create-agent, then send.');
+}
+
+// ---- prompts ----
+const PROMPT_SCOPES = [['chat', 'This chat'], ['project', 'Project'], ['global', 'Everywhere']];
+const PROMPT_HINTS = {
+  chat: 'Only this conversation. /clear resets it.',
+  project: 'Every chat in this project. Saved in its .nexus folder, so it survives /clear.',
+  global: "Rewrites Nexus's own instructions in every chat. The project details, agents, skills and NEXUS.md are always added after it.",
+};
+
+async function promptsDialog(scope = 'chat') {
+  if (!S.project) return toast('Open a project first.');
+  const data = await api('GET', `${P(S.project)}/prompts`);
+  const saved = { chat: data.chat, project: data.project, global: { ...data.global, system: data.global.system || data.defaultBase } };
+  const draft = structuredClone(saved);
+  const [sid, iid] = [uid(), uid()];
+  const system = h('textarea', { class: 'field ptext', id: sid, spellcheck: false });
+  const inject = h('textarea', { class: 'field ptext short-h', id: iid, spellcheck: false, placeholder: 'For example: keep replies under 150 words, and always run the tests.' });
+  const sysLabel = h('label', { class: 'lbl', htmlFor: sid });
+  const hint = h('p', { class: 'small muted', style: 'margin:0' });
+  const reset = h('button', { class: 'btn small', type: 'button', onclick: () => { system.value = data.defaultBase; } }, 'Reset to default');
+  const tabs = h('div', { class: 'seg2', role: 'tablist', 'aria-label': 'Where the prompt applies' });
+  const err = h('div', { class: 'err', role: 'alert' });
+  let shown = null;
+  const show = id => {
+    if (shown) draft[shown] = { system: system.value, inject: inject.value };
+    shown = id;
+    system.value = draft[id].system; inject.value = draft[id].inject;
+    sysLabel.textContent = { chat: 'Added to the system prompt for this chat', project: `Added to the system prompt for every chat in ${pretty(S.project)}`, global: 'Base system prompt' }[id];
+    system.placeholder = id === 'global' ? '' : id === 'project' ? 'For example: this is a Rust workspace; run cargo clippy before you finish.' : 'For example: answer in French, and explain each change before you make it.';
+    hint.textContent = PROMPT_HINTS[id];
+    reset.hidden = id !== 'global';
+    tabs.replaceChildren(...PROMPT_SCOPES.map(([s, label]) => h('button', { type: 'button', role: 'tab', class: s === id ? 'on' : '', 'aria-selected': String(s === id), onclick: () => show(s) }, label)));
+  };
+  const save = async () => {
+    draft[shown] = { system: system.value, inject: inject.value };
+    for (const [s] of PROMPT_SCOPES) {
+      if (draft[s].system !== saved[s].system || draft[s].inject !== saved[s].inject) await api('PUT', `${P(S.project)}/prompts`, { scope: s, ...draft[s] });
+    }
+    S.prompts = await api('GET', `${P(S.project)}/prompts`);
+    syncComposer();
+    toast('Saved. Prompts apply from your next message.');
+  };
+  show(scope);
+  dialog({ title: 'Prompts', wide: true,
+    body: h('div', { class: 'form' }, tabs, hint,
+      h('div', {}, h('div', { class: 'rowline', style: 'margin-bottom:4px' }, h('span', { class: 'grow' }, sysLabel), reset), system),
+      h('div', {}, h('label', { class: 'lbl', htmlFor: iid }, 'Injected into every message you send'), inject),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Injected text rides along with each of your messages, where models weigh it most. Those messages show a small "+ injected" tag.'), err),
+    actions: [{ label: 'Preview full prompt', run: async () => { await guard(previewPrompt)(); return false; } }, { label: 'Cancel' },
+      { label: 'Save', class: 'primary', run: async () => { try { await save(); } catch (e) { err.textContent = e.message; return false; } } }] });
+}
+
+async function previewPrompt() {
+  const { text } = await api('GET', `${P(S.project)}/prompts/preview`);
+  dialog({ title: 'Full system prompt, as saved', wide: true, body: h('div', { class: 'out', style: 'max-height:62vh' }, text),
+    actions: [{ label: 'Copy', run: async () => { await copyText(text); toast('Copied.'); return false; } }, { label: 'Close', class: 'primary' }] });
+}
+
+async function globalPromptsCard() {
+  const data = await api('GET', '/api/prompts').catch(() => null);
+  if (!data) return [];
+  const system = h('textarea', { class: 'field ptext', id: 'gps', spellcheck: false, value: data.global.system || data.defaultBase });
+  const inject = h('textarea', { class: 'field ptext short-h', id: 'gpi', spellcheck: false, value: data.global.inject, placeholder: 'For example: keep replies under 150 words.' });
+  const err = h('div', { class: 'err', role: 'alert' });
+  return [h('h2', {}, 'System prompt'),
+    h('p', { class: 'small muted' }, "Nexus's own instructions, for every chat. Chats and projects can add their own from the Prompts button next to the model."),
+    h('div', { class: 'form' }, h('div', {}, h('label', { class: 'lbl', htmlFor: 'gps' }, 'Base system prompt'), system),
+      h('div', {}, h('label', { class: 'lbl', htmlFor: 'gpi' }, 'Injected into every message, in every chat'), inject), err,
+      h('div', { class: 'rowline' },
+        h('button', { class: 'btn primary', type: 'button', onclick: async () => {
+          err.textContent = '';
+          try { await api('PUT', '/api/prompts', { system: system.value, inject: inject.value }); toast('Saved.'); } catch (e) { err.textContent = e.message; }
+        } }, 'Save'),
+        h('button', { class: 'btn', type: 'button', onclick: () => { system.value = data.defaultBase; } }, 'Reset to default')))];
+}
+
+// ---- marketplace ----
+// One dialog for both kinds: hand-picked agents and servers that ship with Nexus, plus aiagentslist.com and Hugging Face.
+const MARKET_TITLE = { agents: 'Agent marketplace', mcp: 'MCP server marketplace' };
+
+async function marketplace(kind = 'agents', source = 'nexus') {
+  let items = [], category = '', seq = 0, timer;
+  const title = h('h2', {});
+  const kinds = h('div', { class: 'seg2', role: 'tablist', 'aria-label': 'What to browse' });
+  const sources = h('div', { class: 'seg2 msrc', role: 'tablist', 'aria-label': 'Source' });
+  const search = h('input', { class: 'field', type: 'search', placeholder: 'Search', 'aria-label': 'Search the marketplace', autocomplete: 'off',
+    oninput: () => { clearTimeout(timer); timer = setTimeout(load, 350); } });
+  const chips = h('div', { class: 'mchips', hidden: true });
+  const grid = h('div', { class: 'mgrid' });
+  const links = h('div', { class: 'mlinks small muted' });
+  const top = h('div', { class: 'mtop' }, h('div', { class: 'mbar' }, kinds, sources), search, chips);
+  const detail = h('div', { class: 'mdetail', hidden: true });
+  const d = h('dialog', { class: 'market', 'aria-label': 'Marketplace', onclick: e => { if (e.target === d) shut(); },
+    oncancel: e => { e.preventDefault(); if (!detail.hidden) back(); else shut(); }, onclose: () => d.remove() },
+    h('div', { class: 'mhead' }, title, h('button', { class: 'btn small', type: 'button', onclick: () => shut() }, 'Done')), top, grid, detail, links);
+  const shut = sheet(d);
+  const tab = (on, label, click) => h('button', { type: 'button', role: 'tab', class: on ? 'on' : '', 'aria-selected': String(on), onclick: click }, label);
+  const renderKinds = () => {
+    title.textContent = MARKET_TITLE[kind];
+    kinds.replaceChildren(...[['agents', 'Agents'], ['mcp', 'MCP servers']].map(([k, label]) => tab(k === kind, label, () => { if (k !== kind) { kind = k; source = 'nexus'; category = ''; load(); } })));
+  };
+  const renderGrid = () => {
+    const cats = [...new Set(items.map(i => i.category).filter(Boolean))];
+    chips.hidden = source !== 'nexus' || cats.length < 3;
+    chips.replaceChildren(...['', ...cats].map(c => h('button', { type: 'button', class: `mchip${c === category ? ' on' : ''}`, 'aria-pressed': String(c === category), onclick: () => { category = c; renderGrid(); } }, c || 'All')));
+    const shown = items.filter(i => !category || i.category === category);
+    grid.replaceChildren(...(shown.length ? shown.map(tile) : [h('p', { class: 'mnone muted' }, search.value.trim() ? `Nothing matches "${search.value.trim()}".` : 'Nothing here.')]));
+    grid.scrollTop = 0;
+  };
+  const tile = it => h('div', { class: 'tile' },
+    h('button', { class: 'tmain', type: 'button', onclick: () => open(it) },
+      h('span', { class: 'ticon', 'aria-hidden': 'true' }, it.icon || (it.name[0] || '?').toUpperCase()),
+      h('span', { class: 'ttext' },
+        h('span', { class: 'tname' }, h('b', {}, it.name), it.featured && h('span', { class: 'mtag' }, 'Featured'), it.running === false && h('span', { class: 'mtag old' }, 'Asleep')),
+        h('span', { class: 'tmeta' }, [it.author && `by ${it.author}`, it.category, it.stats].filter(Boolean).join(' · ')),
+        h('span', { class: 'tdesc' }, it.description || 'No description.'))),
+    h('button', { class: `btn small${it.installable ? ' primary' : ''}`, type: 'button', onclick: () => open(it) }, it.installable ? 'Install' : 'View'));
+  async function load() {
+    const mine = ++seq;
+    renderKinds();
+    grid.replaceChildren(h('p', { class: 'mnone muted' }, 'Loading…'));
+    try {
+      const res = await api('GET', `/api/market?kind=${kind}&source=${source}&q=${encodeURIComponent(search.value.trim())}`);
+      if (mine !== seq) return;
+      items = res.items;
+      sources.replaceChildren(...res.sources.map(([id, label]) => tab(id === source, label, () => { if (id !== source) { source = id; category = ''; load(); } })));
+      links.replaceChildren('Browse online: ', ...res.links.flatMap(([label, url], i) => [i ? ' · ' : '', extLink(label, url)]));
+      renderGrid();
+    } catch (e) {
+      if (mine === seq) grid.replaceChildren(h('p', { class: 'mnone err' }, e.message));
+    }
+  }
+  const back = () => { detail.hidden = true; top.hidden = false; grid.hidden = false; };
+  const open = async it => {
+    top.hidden = true; grid.hidden = true; detail.hidden = false;
+    detail.replaceChildren(h('p', { class: 'mnone muted' }, 'Loading…'));
+    detail.scrollTop = 0;
+    try {
+      const full = await api('GET', `/api/market/item?kind=${kind}&source=${source}&id=${encodeURIComponent(it.id)}`);
+      detail.replaceChildren(...marketDetail({ ...it, ...full }, kind, back, shut).flat(Infinity).filter(Boolean));
+    } catch (e) {
+      detail.replaceChildren(h('button', { class: 'btn small', type: 'button', onclick: back }, icon('back'), 'Back'), h('p', { class: 'err' }, e.message));
+    }
+  };
+  renderKinds();
+  document.body.append(d);
+  d.showModal();
+  if (!touch.matches) search.focus();
+  load();
+}
+
+// The form for one MCP server: its settings as editable JSON, plus fields for the secrets it needs.
+function serverForm(s) {
+  const [nid, cid] = [uid(), uid()];
+  const name = h('input', { class: 'field mono', id: nid, value: s.name, spellcheck: false, autocapitalize: 'off' });
+  const conf = h('textarea', { class: 'field mono cfg', id: cid, spellcheck: false, value: JSON.stringify(s.config, null, 2) });
+  const asks = (s.inputs || []).map(i => {
+    const id = uid();
+    return { i, id, el: h('input', { class: 'field', id, type: i.secret ? 'password' : 'text', autocomplete: 'off', placeholder: i.hint || (i.optional ? 'Optional' : 'Required') }) };
+  });
+  const el = h('div', { class: 'card form' },
+    h('div', {}, h('label', { class: 'lbl', htmlFor: nid }, 'Name in Nexus'), name),
+    h('div', {}, h('label', { class: 'lbl', htmlFor: cid }, s.config.url ? 'Connects to (JSON, edit if needed)' : 'Runs this on your machine (JSON, edit if needed)'), conf),
+    asks.map(({ i, id, el: input }) => h('div', {}, h('label', { class: 'lbl', htmlFor: id }, i.label), input)));
+  const value = () => {
+    let config;
+    try { config = JSON.parse(conf.value); } catch { throw new Error(`The settings for ${name.value} are not valid JSON.`); }
+    for (const { i, el: input } of asks) {
+      const v = input.value.trim();
+      if (!v) { if (i.optional) continue; throw new Error(`${i.label} is required.`); }
+      if (i.env) config.env = { ...config.env, [i.env]: v };
+      if (i.header) config.headers = { ...config.headers, [i.header]: `${i.prefix || ''}${v}` };
+    }
+    return { name: name.value.trim(), config };
+  };
+  return { el, value };
+}
+
+function marketDetail(it, kind, back, shut) {
+  const err = h('div', { class: 'err', role: 'alert' });
+  const meta = [it.author && `by ${it.author}`, it.category, it.stats].filter(Boolean).join(' · ');
+  const parts = [
+    h('div', { class: 'dhead' }, h('button', { class: 'btn small', type: 'button', onclick: back }, icon('back'), 'Back')),
+    h('div', { class: 'dtitle' }, h('span', { class: 'ticon big', 'aria-hidden': 'true' }, it.icon || (it.name[0] || '?').toUpperCase()),
+      h('div', { class: 'grow' }, h('h3', {}, it.name), meta && h('div', { class: 'small muted' }, meta))),
+    it.description && h('p', {}, it.description),
+    h('div', { class: 'mlinks small' }, (it.links || (it.url ? [['Website', it.url]] : [])).map(([label, url]) => extLink(label, url))),
+    it.notes && h('p', { class: 'small note' }, it.notes),
+    it.credit && h('p', { class: 'small muted' }, it.credit),
+  ];
+  const busy = async (btn, fn) => {
+    err.textContent = ''; btn.disabled = true;
+    try { await fn(); } catch (e) { err.textContent = e.message; } finally { btn.disabled = false; }
+  };
+  if (kind === 'mcp') {
+    if (!it.server) return [...parts, h('p', { class: 'small muted' }, 'This listing has no install command Nexus could read. Open it, then add the server under mcpServers in Settings.')];
+    const form = serverForm(it.server);
+    return [...parts, form.el,
+      h('p', { class: 'small muted' }, it.server.config.url ? 'Tool calls go to this address over the network.' : 'Installing runs third-party code on this machine, even in bypass mode. Check the source first.'), err,
+      h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', onclick: e => busy(e.currentTarget, async () => {
+        const { name, config } = form.value();
+        await api('POST', '/api/mcp-servers', { name, config });
+        toast(`Added ${name}. Its tools arrive with your next message.`);
+        shut();
+        if (S.page === 'settings') render();
+      }) }, 'Install'))];
+  }
+  if (it.external) {
+    return [...parts, h('p', { class: 'small muted' }, "This is a product listed on aiagentslist.com, not an agent file Nexus can install. The AI can write a Nexus agent that does the same job."),
+      h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', onclick: () => { shut(); createWithAI(`that works like ${it.name}: ${it.description}`); } }, icon('spark'), 'Create a Nexus agent like this'))];
+  }
+  const project = projectForInstall();
+  if (!project) return [...parts, h('p', { class: 'err' }, 'Create a project first.')];
+  const sid = uid();
+  const scope = h('select', { class: 'field', id: sid }, h('option', { value: 'project' }, `This project (${pretty(project)})`), h('option', { value: 'user' }, 'All projects'));
+  const forms = (it.servers || []).map(serverForm);
+  const install = (use, btn) => busy(btn, async () => {
+    const servers = forms.map(f => f.value());
+    const { name, description, tools, model, prompt } = it.agent;
+    if (S.project === project && S.meta.agents.some(a => a.name === name && !a.builtin) && !await confirmBox(`Replace ${name}?`, 'An agent type with this name already exists here.', 'Replace', 'danger')) return;
+    await api('POST', `${P(project)}/agent-defs`, { scope: scope.value, name, description, tools: tools || [], model, prompt });
+    for (const s of servers) await api('POST', '/api/mcp-servers', s);
+    if (S.project === project) await loadMeta();
+    if (use && S.project === project && S.state) setOption('agent', name);
+    toast(use ? `Installed ${name}. This chat now works as it.` : `Installed ${name}.`);
+    shut();
+    if (S.page === 'agents') refreshAgentsSoon();
+  });
+  return [...parts,
+    h('div', { class: 'small muted' }, `Tools: ${it.agent.tools?.join(', ') || 'every tool'}`),
+    h('details', { class: 'fold' }, h('summary', {}, 'Read its instructions', icon('down')), h('div', { class: 'out' }, it.agent.prompt)),
+    forms.length ? [h('p', { class: 'small' }, `It also adds ${forms.length} MCP server${forms.length > 1 ? 's' : ''}:`), forms.map(f => f.el)] : null,
+    h('div', {}, h('label', { class: 'lbl', htmlFor: sid }, 'Install for'), scope), err,
+    h('div', { class: 'acts' },
+      h('button', { class: 'btn', type: 'button', onclick: e => install(false, e.currentTarget) }, 'Install'),
+      S.project === project && S.state && h('button', { class: 'btn primary', type: 'button', onclick: e => install(true, e.currentTarget) }, 'Install and use in this chat'))];
+}
+
+const exportChat = guard(async name => {
+  if (!name) return;
+  const { markdown } = await api('GET', `${P(name)}/export`);
+  const a = h('a', { href: URL.createObjectURL(new Blob([markdown], { type: 'text/markdown' })), download: `${name}.md` });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast(`Downloaded ${name}.md`);
+});
 
 // ---- files ----
 let pendingOpen = null, current = null;
@@ -902,7 +1271,9 @@ async function fillAgents() {
       h('button', { class: 'btn small', onclick: () => shellDetail(s.id) }, 'Output'),
       s.status === 'running' && h('button', { class: 'btn small danger', onclick: guard(() => api('POST', `/api/shells/${s.id}/kill`).then(refreshAgentsSoon)) }, 'Kill'))) : h('p', { class: 'muted' }, 'No background shells.'),
     h('div', { class: 'rowline', style: 'margin:22px auto 10px' }, h('h2', { style: 'margin:0', class: 'grow' }, `Agent types${project ? ` for ${project}` : ''}`),
-      project && h('button', { class: 'btn small', onclick: () => editDef(project, null) }, icon('plus'), 'New type')),
+      project && h('button', { class: 'btn small', onclick: () => editDef(project, null) }, icon('plus'), 'New type'),
+      project && h('button', { class: 'btn small', onclick: () => createWithAI() }, icon('spark'), 'Create with AI'),
+      h('button', { class: 'btn small primary', onclick: () => marketplace('agents') }, icon('grid'), 'Marketplace')),
     meta.agents.map(d => h('div', { class: 'card rowline' },
       h('div', { class: 'grow' }, h('div', { class: 'title mono' }, d.name), h('div', { class: 'small muted' }, d.description),
         h('div', { class: 'small muted' }, `${d.builtin ? 'Built in' : d.scope} · tools: ${d.tools?.join(', ') || 'all'}${d.model ? ` · ${d.model}` : ''}`)),
@@ -976,12 +1347,22 @@ async function settingsPage(hamb) {
   const { text, mcp } = await guard(() => api('GET', '/api/settings'))() || { text: '', mcp: [] };
   const area = h('textarea', { class: 'field settings-text', spellcheck: false, value: text, id: 'set', wrap: 'off' });
   const err = h('div', { class: 'err', role: 'alert' });
+  const remove = name => guard(async () => {
+    if (!await confirmBox(`Remove ${name}?`, 'Its tools disappear from new messages. You can add it again from the marketplace.', 'Remove', 'danger')) return;
+    await api('DELETE', `/api/mcp-servers/${encodeURIComponent(name)}`);
+    render();
+  });
   page.append(...[
     selfBot(),
     await versionCard(),
-    h('h2', {}, 'MCP servers'),
+    h('div', { class: 'rowline', style: 'margin:22px auto 10px' }, h('h2', { style: 'margin:0', class: 'grow' }, 'MCP servers'),
+      h('button', { class: 'btn small primary', type: 'button', onclick: () => marketplace('mcp') }, icon('grid'), 'Add MCP server')),
     mcp.length ? mcp.map(s => h('div', { class: 'card rowline' }, h('span', { class: `dot ${s.status === 'connected' ? 'done' : s.status === 'error' ? 'error' : 'awaiting'}` }),
-      h('div', { class: 'grow' }, h('div', { class: 'title mono' }, s.name), h('div', { class: 'small muted' }, s.error || `${s.status} · ${s.tools.length} tools`)))) : h('p', { class: 'muted' }, 'None configured.'),
+      h('div', { class: 'grow' }, h('div', { class: 'title mono' }, s.name), h('div', { class: 'small muted' }, s.error || `${s.remote ? 'remote · ' : ''}${s.status} · ${s.tools.length} tools`)),
+      h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove ${s.name}`, onclick: remove(s.name) }, 'Remove'))) : h('p', { class: 'muted' }, 'None yet. Add Hugging Face, Playwright, Context7, GitHub or hundreds more from the marketplace.'),
+    h('p', { class: 'small muted mlinks' }, 'Browse online: ', extLink('aiagentslist.com', 'https://aiagentslist.com/mcp-servers'), ' · ', extLink('Hugging Face Spaces', 'https://huggingface.co/spaces?filter=mcp-server'), ' · ', extLink('MCP on GitHub', 'https://github.com/modelcontextprotocol/servers')),
+    await globalPromptsCard(),
+    notifyCard(),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit and Stop; a hook exiting with 2 blocks the action. MCP servers reconnect within seconds of saving.'),
     area, err,
@@ -992,6 +1373,18 @@ async function settingsPage(hamb) {
     h('h2', {}, 'Example'),
     h('pre', { class: 'out' }, JSON.stringify({ autoCompactTokens: 300000, hooks: { PreToolUse: [{ matcher: 'Bash', command: 'jq -r .input.command >> ~/.nexus/bash.log' }] }, mcpServers: { memory: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] } } }, null, 2)),
   ].flat());
+}
+
+function notifyCard() {
+  const supported = 'Notification' in window;
+  const box = h('input', { type: 'checkbox', id: 'notify', disabled: !supported, checked: supported && pref('nexus.notify') === '1' && Notification.permission === 'granted', onchange: async () => {
+    if (box.checked && Notification.permission !== 'granted') box.checked = (await Notification.requestPermission()) === 'granted';
+    pref('nexus.notify', box.checked ? '1' : '0');
+    if (box.checked) new Notification('Nexus', { body: 'Notifications are on.', icon: '/icon-180.png' });
+  } });
+  return [h('h2', {}, 'Notifications'),
+    h('label', { class: 'card rowline check', htmlFor: 'notify' }, box, h('span', { class: 'grow' }, 'Tell me when a chat finishes while Nexus is in the background'),
+      !supported && h('span', { class: 'small muted' }, 'Not supported in this browser. Add Nexus to your home screen on iPhone.'))];
 }
 
 function selfBot() {

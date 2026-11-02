@@ -10,8 +10,10 @@ import * as agent from './agent.js';
 import { anthropicModels } from './anthropic.js';
 import * as auth from './auth.js';
 import { agentDefs, commands, deleteAgentDef, saveAgentDef, skills } from './extensions.js';
+import * as market from './market.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
+import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
 import { childEnv, isInside, presentSocket, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -123,6 +125,7 @@ route('PUT', '/api/projects/:name/file', async ({ req, p }) => {
   return {};
 });
 route('GET', '/api/projects/:name/changes', ({ p }) => agent.changes(need(p.name)));
+route('GET', '/api/projects/:name/export', ({ p }) => ({ markdown: agent.exportMarkdown(need(p.name)) }));
 route('POST', '/api/projects/:name/rewind', async ({ req, p }) => {
   const { id, files, conversation } = await body(req);
   return agent.rewind(need(p.name), id, { files, conversation });
@@ -143,6 +146,36 @@ route('POST', '/api/projects/:name/agent-defs', async ({ req, p }) => {
 route('DELETE', '/api/projects/:name/agent-defs/:def', ({ p }) => {
   deleteAgentDef(projects.projectDir(need(p.name)), p.def);
   return {};
+});
+
+// System prompts and injected text: chat and project here, global also at /api/prompts for the Settings page.
+route('GET', '/api/projects/:name/prompts', ({ p }) => ({ ...agent.getPrompts(need(p.name)), defaultBase: DEFAULT_BASE }));
+route('PUT', '/api/projects/:name/prompts', async ({ req, p }) => {
+  const { scope, system, inject } = await body(req);
+  agent.setPrompts(need(p.name), scope, { system, inject });
+  return {};
+});
+route('GET', '/api/projects/:name/prompts/preview', ({ p }) => ({ text: agent.previewPrompt(need(p.name)) }));
+route('GET', '/api/prompts', () => ({ global: globalPrompts(), defaultBase: DEFAULT_BASE }));
+route('PUT', '/api/prompts', async ({ req }) => {
+  const { system, inject } = await body(req);
+  savePrompts('global', { system, inject });
+  return {};
+});
+
+route('GET', '/api/market', async ({ q }) => {
+  const kind = q.get('kind') === 'mcp' ? 'mcp' : 'agents';
+  return { items: await market.search(kind, q.get('source') || 'nexus', q.get('q')), sources: market.SOURCES[kind], links: market.LINKS[kind] };
+});
+route('GET', '/api/market/item', ({ q }) => market.item(q.get('kind') === 'mcp' ? 'mcp' : 'agents', q.get('source') || 'nexus', q.get('id') || ''));
+route('POST', '/api/mcp-servers', async ({ req }) => {
+  const { name, config } = await body(req);
+  mcp.addServer(name, config);
+  return { mcp: mcp.status() };
+});
+route('DELETE', '/api/mcp-servers/:server', ({ p }) => {
+  mcp.removeServer(p.server);
+  return { mcp: mcp.status() };
 });
 
 const shellInfo = ({ proc, output, read, ...s }) => s;
