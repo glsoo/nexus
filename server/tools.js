@@ -213,10 +213,19 @@ async function screenshot({ url, width = 1280, height = 800 }, { cwd, signal }) 
   try {
     // The virtual time budget lets scripts and fonts settle before the capture.
     await new Promise((done, fail) => execFile(browser, ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', `--user-data-dir=${dir}`,
-      `--window-size=${w},${h}`, '--virtual-time-budget=4000', `--screenshot=${out}`, target], { signal, timeout: 60000, windowsHide: true }, err => (fs.existsSync(out) ? done() : fail(err || new Error('The browser saved no screenshot.')))));
+      `--window-size=${w},${h}`, '--virtual-time-budget=4000', `--screenshot=${out}`, target], { signal, timeout: 60000, windowsHide: true }, err => (err && !fs.existsSync(out) ? fail(err) : done())));
+    // A browser with an update waiting hands the job to its new version and exits first, so the file can come a little later.
+    for (let t = 0, last = -1; t < 15000 && !signal?.aborted; t += 250) {
+      const size = fs.existsSync(out) ? fs.statSync(out).size : 0;
+      if (size && size === last) break;
+      last = size;
+      await new Promise(r => setTimeout(r, 250));
+    }
+    if (!fs.existsSync(out)) throw new Error('The browser saved no screenshot.');
     return [{ type: 'input_image', image_url: `data:image/png;base64,${fs.readFileSync(out).toString('base64')}` }];
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    // That handed-off browser can still hold its profile for a moment; a leftover temp folder is harmless.
+    try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* left in the temp folder */ }
   }
 }
 
