@@ -120,6 +120,9 @@ function shell() {
 }
 const drawer = open => { $side.classList.toggle('open', open); $scrim.classList.toggle('open', open); };
 
+// The folder keeps its dashes; only what people read changes. "say-hello" shows as "Say Hello".
+const pretty = name => name.replace(/[-_]+/g, ' ').replace(/\.+$/, '').replace(/\b[a-z]/g, c => c.toUpperCase());
+
 async function newProject() {
   const { name } = await api('POST', '/api/projects', {});
   await refreshProjects();
@@ -129,9 +132,9 @@ async function newProject() {
 async function refreshProjects() {
   S.projects = await api('GET', '/api/projects');
   $list.replaceChildren(...S.projects.map(p => h('div', { class: `pitem ${p.name === S.project && !S.page ? 'on' : ''}` },
-    h('button', { class: 'open', title: p.name, 'aria-current': p.name === S.project ? 'true' : undefined, onclick: () => go(p.name, null, 'chat') },
-      h('span', { class: `dot ${p.busy ? 'busy' : ''}` }), h('span', { class: 'nm' }, p.name)),
-    h('button', { class: 'icon-btn', 'aria-label': `Options for ${p.name}`, 'aria-haspopup': 'menu', onclick: e => projectMenu(e.currentTarget, p.name) }, icon('dots')))));
+    h('button', { class: 'open', title: pretty(p.name), 'aria-current': p.name === S.project ? 'true' : undefined, onclick: () => go(p.name, null, 'chat') },
+      h('span', { class: `dot ${p.busy ? 'busy' : ''}` }), h('span', { class: 'nm' }, pretty(p.name))),
+    h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(p.name)}`, 'aria-haspopup': 'menu', onclick: e => projectMenu(e.currentTarget, p.name) }, icon('dots')))));
 }
 let refreshTimer;
 const refreshSoon = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(guard(refreshProjects), 200); };
@@ -160,10 +163,10 @@ function projectMenu(anchor, name) {
 
 function renameDialog(name) {
   const err = h('div', { class: 'err', role: 'alert' });
-  const input = h('input', { class: 'field mono', value: name, id: 'rn', 'aria-describedby': 'rn-hint', spellcheck: false, autocapitalize: 'off' });
+  const input = h('input', { class: 'field mono', value: pretty(name), id: 'rn', 'aria-describedby': 'rn-hint', spellcheck: false, autocapitalize: 'off' });
   const save = async () => {
+    if (input.value.trim() === pretty(name)) return true;
     const to = input.value.trim().replace(/\s+/g, '-');
-    if (to === name) return true;
     try { await api('POST', `${P(name)}/rename`, { to }); return true; } catch (e) { err.textContent = e.message; return false; }
   };
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input.closest('dialog').querySelector('.primary').click(); } });
@@ -174,7 +177,7 @@ function renameDialog(name) {
 }
 
 async function deleteDialog(name) {
-  if (!await confirmBox(`Delete ${name}?`, `The folder moves to ~/projects/.trash, where you can still recover it by hand.`, 'Delete', 'danger')) return;
+  if (!await confirmBox(`Delete ${pretty(name)}?`, `The folder moves to ~/projects/.trash, where you can still recover it by hand.`, 'Delete', 'danger')) return;
   await guard(async () => {
     await api('DELETE', P(name));
     if (S.project === name) go(null);
@@ -201,7 +204,7 @@ let prevTab = 0;
 function render() {
   document.getElementById('nav-agents').classList.toggle('on', S.page === 'agents');
   document.getElementById('nav-settings').classList.toggle('on', S.page === 'settings');
-  document.title = S.project && !S.page ? `${S.project} · Nexus` : 'Nexus';
+  document.title = S.project && !S.page ? `${pretty(S.project)} · Nexus` : 'Nexus';
   const hamb = h('button', { class: 'icon-btn hamb', 'aria-label': 'Open menu', onclick: () => drawer(true) }, icon('menu'));
   if (S.page === 'agents') return agentsPage(hamb);
   if (S.page === 'settings') return settingsPage(hamb);
@@ -214,8 +217,8 @@ function render() {
   const tabs = [['chat', 'Chat'], ['files', 'Files'], ['changes', 'Changes'], ['terminal', 'Terminal']];
   const at = tabs.findIndex(([id]) => id === S.tab);
   const pill = h('span', { class: 'pill', style: `--i:${at}` });
-  $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', { title: S.project }, S.project),
-    h('button', { class: 'icon-btn', 'aria-label': `Options for ${S.project}`, onclick: e => projectMenu(e.currentTarget, S.project) }, icon('dots')),
+  $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', { title: pretty(S.project) }, pretty(S.project)),
+    h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(S.project)}`, onclick: e => projectMenu(e.currentTarget, S.project) }, icon('dots')),
     h('div', { class: 'tabs', role: 'tablist' }, pill, tabs.map(([id, label]) => h('button', { class: `tab ${S.tab === id ? 'on' : ''}`, role: 'tab', 'aria-selected': String(S.tab === id), onclick: () => go(S.project, null, id) }, label)))),
   view);
   ({ chat: chatView, files: filesView, changes: changesView, terminal: termView })[S.tab](view);
@@ -309,9 +312,9 @@ function onEvent(m) {
         S.project = m.to;
         if (S.state) S.state.name = m.to;
         history.replaceState(null, '', S.page ? `#/${S.page}` : `#/p/${encodeURIComponent(m.to)}/${S.tab}`);
-        document.title = `${m.to} · Nexus`;
+        document.title = `${pretty(m.to)} · Nexus`;
         const title = $main.querySelector('.top h1');
-        if (title && !S.page) { title.textContent = m.to; title.title = m.to; }
+        if (title && !S.page) { title.textContent = pretty(m.to); title.title = pretty(m.to); }
       }
       refreshSoon();
       break;
@@ -889,13 +892,13 @@ async function fillAgents() {
     agents.length ? agents.slice(0, 100).map(a => h('div', { class: 'card rowline' },
       h('span', { class: `dot ${statusDot(a.status)}`, title: a.status }),
       h('div', { class: 'grow' }, h('div', { class: 'title' }, a.description),
-        h('div', { class: 'small muted' }, `${a.type} · ${a.project} · ${a.status} · ${ago(a.started)} · ${fmt(a.tokens || 0)} tokens`)),
+        h('div', { class: 'small muted' }, `${a.type} · ${pretty(a.project)} · ${a.status} · ${ago(a.started)} · ${fmt(a.tokens || 0)} tokens`)),
       h('button', { class: 'btn small', onclick: () => agentDetail(a.id) }, 'View'),
       a.status === 'running' && h('button', { class: 'btn small danger', onclick: guard(() => api('POST', `/api/agents/${a.id}/stop`)) }, 'Stop'))) : h('p', { class: 'muted' }, 'No agents have run yet.'),
     h('h2', {}, `Background shells (${shells.length})`),
     shells.length ? shells.map(s => h('div', { class: 'card rowline' },
       h('span', { class: `dot ${statusDot(s.status)}`, title: s.status }),
-      h('div', { class: 'grow' }, h('div', { class: 'mono' }, s.command), h('div', { class: 'small muted' }, `${s.project} · ${s.status} · ${ago(s.started)}`)),
+      h('div', { class: 'grow' }, h('div', { class: 'mono' }, s.command), h('div', { class: 'small muted' }, `${pretty(s.project)} · ${s.status} · ${ago(s.started)}`)),
       h('button', { class: 'btn small', onclick: () => shellDetail(s.id) }, 'Output'),
       s.status === 'running' && h('button', { class: 'btn small danger', onclick: guard(() => api('POST', `/api/shells/${s.id}/kill`).then(refreshAgentsSoon)) }, 'Kill'))) : h('p', { class: 'muted' }, 'No background shells.'),
     h('div', { class: 'rowline', style: 'margin:22px auto 10px' }, h('h2', { style: 'margin:0', class: 'grow' }, `Agent types${project ? ` for ${project}` : ''}`),
@@ -913,7 +916,7 @@ async function fillAgents() {
 
 function launchForm(defs, project) {
   if (!project) return h('p', { class: 'muted' }, 'Create a project first.');
-  const proj = h('select', { class: 'field', id: 'lp' }, S.projects.map(p => h('option', { value: p.name, selected: p.name === project }, p.name)));
+  const proj = h('select', { class: 'field', id: 'lp' }, S.projects.map(p => h('option', { value: p.name, selected: p.name === project }, pretty(p.name))));
   const type = h('select', { class: 'field', id: 'lt' }, defs.map(d => h('option', { value: d.name }, d.name)));
   const desc = h('input', { class: 'field', id: 'ld', placeholder: 'Audit dependencies' });
   const prompt = h('textarea', { class: 'field', id: 'lq', placeholder: 'A complete, self-contained task' });
@@ -951,7 +954,7 @@ function editDef(project, d) {
   const description = h('input', { class: 'field', id: 'dd', value: d?.description || '' });
   const tools = h('input', { class: 'field mono', id: 'dt', value: d?.tools?.join(', ') || '', placeholder: 'All tools' });
   const model = h('input', { class: 'field mono', id: 'dm', value: d?.model || '', placeholder: 'Same as the conversation' });
-  const scope = h('select', { class: 'field', id: 'ds' }, h('option', { value: 'project', selected: d?.scope === 'project' }, `This project (${project})`), h('option', { value: 'user', selected: d?.scope === 'user' }, 'All projects'));
+  const scope = h('select', { class: 'field', id: 'ds' }, h('option', { value: 'project', selected: d?.scope === 'project' }, `This project (${pretty(project)})`), h('option', { value: 'user', selected: d?.scope === 'user' }, 'All projects'));
   const prompt = h('textarea', { class: 'field', id: 'dp', value: d?.prompt || '' });
   const err = h('div', { class: 'err', role: 'alert' });
   const row = (id, label, input) => h('div', {}, h('label', { class: 'lbl', htmlFor: id }, label), input);

@@ -107,7 +107,7 @@ test('checkpoint restores deleted and changed files', async () => {
 test('the model names an untitled chat, and the prompt is the fallback', async () => {
   const realFetch = globalThis.fetch;
   try {
-    globalThis.fetch = async () => Response.json({ output: [{ type: 'reasoning' }, { type: 'message', content: [{ type: 'output_text', text: 'Login-Bug-Fix.\n' }] }] });
+    globalThis.fetch = async () => Response.json({ output: [{ type: 'reasoning' }, { type: 'message', content: [{ type: 'output_text', text: 'Login Bug Fix.\n' }] }] });
     projects.create('untitled-7');
     const named = getSession('untitled-7');
     await autoName(named, 'the login page is broken');
