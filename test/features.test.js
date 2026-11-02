@@ -164,6 +164,22 @@ test('costs are estimated from list prices, and a budget stops the agent', async
   assert.match(s.state.log.at(-1).text, /Cost: about \$0\.00\./);
 });
 
+test('/review and /pr hand the agent a reviewing or pull-request task', async () => {
+  projects.create('prs');
+  const s = agent.getSession('prs');
+  const model = fakeModel();
+  try {
+    await agent.submit('prs', '/review #12');
+    await idle(s);
+    await agent.submit('prs', '/pr fixes the login bug');
+    await idle(s);
+  } finally { model.restore(); }
+  const asked = model.sent.map(b => JSON.stringify(b.input.at(-1).content));
+  assert.match(asked[0], /gh pr diff 12`[\s\S]*Don't change any files/);
+  assert.match(asked[1], /Notes from the user: fixes the login bug[\s\S]*Never force-push[\s\S]*gh pr create/);
+  assert.deepEqual(s.state.log.filter(e => e.type === 'user').map(e => e.text), ['/review #12', '/pr fixes the login bug']);
+});
+
 test('turning autopilot on answers what is already waiting, and /autopilot switches it', async () => {
   projects.create('waiting');
   const s = agent.getSession('waiting');

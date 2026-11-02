@@ -578,7 +578,7 @@ export function interrupt(name) { sessions.get(name)?.controller?.abort(); }
 export function answer(name, id, value) { sessions.get(name)?.pending.get(id)?.(value); }
 
 const HELP = `**Commands**
-\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/todos\` · \`/help\`
+\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review [PR number|URL]\` review this branch or a pull request · \`/pr [notes]\` commit, push and open a pull request · \`/todos\` · \`/help\`
 
 Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover a prompt to rewind to it.
 
@@ -696,6 +696,18 @@ async function slash(s, text) {
       return note(s, s.state.budget ? `Budget: the agent stops once this chat has cost $${s.state.budget}. Cost so far: ${spent(s)}.` : `No budget. Cost so far: ${spent(s)}. Set one with /budget <dollars>.`);
     }
     case 'todos': return note(s, s.state.todos.map(t => `- [${t.status === 'completed' ? 'x' : ' '}] ${t.content}`).join('\n') || 'No todos.');
+    case 'pr': return prompt(s, `Open a GitHub pull request for the work in this project.${arg ? ` Notes from the user: ${arg}` : ''}
+1. Run \`gh auth status\`. If GitHub CLI is missing or signed out, stop and tell the user to install it and run \`gh auth login\`.
+2. Read \`git status\`, the diff and the recent log. If there is nothing to propose, say so and stop.
+3. If you are on the default branch, create a branch with a short descriptive name. Commit the relevant uncommitted changes with clear messages, leaving out secrets, build output and unrelated files.
+4. Push with \`git push -u origin HEAD\`. Never force-push.
+5. Create the pull request with \`gh pr create\`: a concise title, and a body saying what changed, why, and how it was tested. If the branch already has one, give its URL instead.
+Reply with the pull request's URL.`, text);
+    case 'review': {
+      const target = !arg ? 'the work on this branch: uncommitted changes plus the commits not yet in the default branch (`git symbolic-ref refs/remotes/origin/HEAD` names it; otherwise try main, then master)'
+        : /^#?\d+$|^https:\/\/github\.com\/.+\/pull\/\d+/.test(arg) ? `GitHub pull request ${arg.replace('#', '')}. Read it with \`gh pr view ${arg.replace('#', '')}\` and \`gh pr diff ${arg.replace('#', '')}\`` : arg;
+      return prompt(s, `Review ${target}, as a senior engineer would before merging. Read the surrounding code where it matters, not just the diff. Report only real problems: bugs, security holes, data loss, unhandled edge cases, missing tests and misleading code, most severe first, each with file:line and a concrete fix. If it looks good, say so plainly. Don't change any files, and don't post anything to GitHub unless asked.`, text);
+    }
     case 'init': return prompt(s, 'Analyze this project and create a NEXUS.md at its root with the build, test and run commands, the architecture, and conventions a new engineer could not guess. Keep it short. If the project is empty, say so instead.', text);
     case 'create-agent':
       if (!arg) return note(s, 'Usage: `/create-agent <what it should do>`, for example `/create-agent reviews my changes for security holes before I commit`', 'error');

@@ -559,7 +559,7 @@ async function rewindDialog(e) {
 const BUILTIN = [
   ['help', 'Show commands and keys'], ['clear', 'Start over, archiving the transcript'], ['compact', 'Summarize to free up context'], ['autocompact', 'Turn auto-compact on or off, or set its size'],
   ['model', 'Show or set the model'], ['effort', 'low, medium, high, xhigh or max'], ['mode', 'default, acceptEdits, plan or bypass'], ['plan', 'Research only, then propose a plan'],
-  ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['todos', 'Show the task list'],
+  ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['review', 'Review this branch, or a pull request by number'], ['pr', 'Commit, push and open a GitHub pull request'], ['todos', 'Show the task list'],
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
   ['skills', 'List skills and agents'], ['mcp', 'Open MCP and hook settings'], ['settings', 'Open settings'], ['memory', 'Edit NEXUS.md'], ['rewind', 'How to rewind'],
   ['create-agent', 'Have the AI write a new agent type'], ['agent', 'Switch this chat to another agent'], ['prompts', 'Edit system prompts and injected text'],
