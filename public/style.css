@@ -251,6 +251,10 @@ dialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 1
 .pbtn { position: relative; }
 .pbtn.on { color: var(--fg); }
 .pbtn.on::after { content: ''; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--card); }
+/* autopilot: the button glows while it's on, and what it answered is tagged */
+.cbar .apbtn.on { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent), 0 0 14px color-mix(in srgb, var(--warn) 35%, transparent); }
+.tool .aptag { flex: none; font-size: 11px; color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent); border-radius: 4px; padding: 0 5px; }
+.tool .plan { border-left: 2px solid var(--line-strong); padding: 2px 0 2px 12px; margin: 6px 0; }
 .e.user .itag { display: inline-block; margin-left: 8px; font-size: 11px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); border-radius: 4px; padding: 0 5px; vertical-align: 1px; white-space: nowrap; }
 .mtag.dim { color: var(--muted); }
 .afoot { flex-wrap: wrap; gap: 8px; }
@@ -272,11 +276,19 @@ textarea.cfg { min-height: 110px; font-size: 12.5px; }
 label.check { cursor: pointer; }
 label.check input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
 
-/* marketplace */
-dialog.market { width: min(960px, calc(100vw - 32px)); height: min(780px, calc(var(--app-h, 100dvh) - 32px - var(--sat))); padding: 0; overflow: hidden; }
-dialog.market[open] { display: flex; flex-direction: column; }
-.mtop { display: grid; gap: 10px; padding: 0 16px 12px; border-bottom: 1px solid var(--line); }
-.mbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+/* marketplace: a page like VS Code's Extensions view, the list beside the selected item when there's room */
+.mpage { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.mside { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.mtop { display: grid; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.msrc button { padding-inline: 9px; }
+.tile.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+@media (max-width: 1099px) { .mpage.showing .mside, .mpage:not(.showing) .mdetail { display: none; } }
+@media (min-width: 1100px) {
+  .mpage { grid-template-columns: minmax(380px, 460px) minmax(0, 1fr); }
+  .mside { border-right: 1px solid var(--line); }
+  .mpage .dhead { display: none; }
+  .mpage .mdetail { grid-template-columns: minmax(0, 820px); }
+}
 .mchips { display: flex; flex-wrap: wrap; gap: 6px; overflow-x: auto; scrollbar-width: none; }
 .mdetail summary svg.i { width: 14px; height: 14px; transition: transform .2s var(--ease); }
 .mdetail details[open] summary svg.i { transform: rotate(180deg); }
@@ -293,7 +305,7 @@ dialog.market[open] { display: flex; flex-direction: column; }
 .tname b { font: 600 13.5px var(--mono); overflow-wrap: anywhere; }
 .tmeta { font-size: 12px; color: var(--muted); }
 .tdesc { font-size: 13px; color: #cfcfcf; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.mdetail { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 16px; display: grid; gap: 12px; align-content: start; }
+.mdetail { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px 16px; display: grid; gap: 12px; align-content: start; }
 .mdetail p { margin: 0; }
 .mdetail .acts { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .dtitle { display: flex; gap: 12px; align-items: center; }
@@ -301,7 +313,7 @@ dialog.market[open] { display: flex; flex-direction: column; }
 .mlinks { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
 .mlinks a { display: inline-flex; gap: 4px; align-items: center; }
 .mlinks svg.i { width: 13px; height: 13px; }
-dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top: 1px solid var(--line); }
+.mside > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top: 1px solid var(--line); }
 .note { color: var(--warn); border-left: 2px solid var(--warn); padding-left: 10px; }
 @media (hover: hover) {
   .tile:hover { border-color: var(--line-strong); }
@@ -329,8 +341,6 @@ dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top
   /* Sized from the top so it ends at the keyboard on iOS, where the layout viewport doesn't shrink. */
   dialog.picker { margin: calc(12px + var(--sat)) 0 0; width: 100vw; max-width: none; max-height: none; height: calc(var(--app-h, 100dvh) - 12px - var(--sat)); border-width: 1px 0 0; border-radius: 16px 16px 0 0; }
   dialog.picker[open] { animation: sheet .34s var(--ease); }
-  dialog.market { margin: calc(12px + var(--sat)) 0 0; width: 100vw; max-width: none; max-height: none; height: calc(var(--app-h, 100dvh) - 12px - var(--sat)); border-width: 1px 0 0; border-radius: 16px 16px 0 0; }
-  dialog.market[open] { animation: sheet .34s var(--ease); }
   .mgrid { grid-template-columns: minmax(0, 1fr); padding: 10px 12px; }
   .mtop, .mdetail { padding-inline: 12px; }
   /* mode, agent and model share the first row; the agent button drops its arrow to fit a name like "ponytail" */

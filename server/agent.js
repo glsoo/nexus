@@ -47,7 +47,7 @@ export function publicState(s) {
 }
 
 const persist = s => projects.save(s.name, s.state);
-const status = s => hub.emit('project', s.name, { t: 'status', running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', compactAt: compactAt(s) });
+const status = s => hub.emit('project', s.name, { t: 'status', running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), compactAt: compactAt(s) });
 const send = (s, ev) => hub.emit('project', s.name, ev);
 
 function addEntry(s, entry) {
@@ -134,6 +134,8 @@ function systemPrompt(s, extra = '', sub = false) {
   const role = sub ? null : activeAgent(s);
   const planning = s.state.mode === 'plan'
     ? '\n\nPLAN MODE IS ACTIVE. Do not change anything. Research with read-only tools, then present your plan with ExitPlanMode.' : '';
+  const autopilot = s.state.autopilot
+    ? `\n\nAUTOPILOT IS ON. The user is away, so don't stop to ask: make the call, say what you assumed, finish the work and verify it.${s.state.mode === 'plan' ? ' Your ExitPlanMode plan is approved automatically, and then you implement it in the same turn.' : ''}` : '';
   return `${base}
 
 # Environment
@@ -143,7 +145,7 @@ Platform: ${process.platform}. Date: ${new Date().toISOString().slice(0, 10)}. P
 
 # Available subagent types
 ${agentList}
-${skillList ? `\n# Available skills (load with the Skill tool)\n${skillList}\n` : ''}${memory ? `\n# Project and user instructions\n${memory}\n` : ''}${custom}${role ? `\n# Your role: ${role.name}\nThe user switched this chat to the "${role.name}" agent. Work as it describes.\n\n${role.prompt.trim()}\n` : ''}${planning}${extra}`;
+${skillList ? `\n# Available skills (load with the Skill tool)\n${skillList}\n` : ''}${memory ? `\n# Project and user instructions\n${memory}\n` : ''}${custom}${role ? `\n# Your role: ${role.name}\nThe user switched this chat to the "${role.name}" agent. Work as it describes.\n\n${role.prompt.trim()}\n` : ''}${planning}${autopilot}${extra}`;
 }
 
 async function toolList(filter) {
@@ -180,6 +182,16 @@ function setEntry(s, sink, entry, patch) {
   if (sink.isSub && s.state.log.includes(entry)) send(s, { t: 'entry', entry });
 }
 
+// Autopilot answers for the user without showing the prompt. Turning it on answers prompts already waiting (setOption).
+function askUser(s, sink, entry, signal, kind) {
+  if (s.state.autopilot) return { decision: 'auto' };
+  Object.assign(entry, { status: 'awaiting', kind });
+  surface(s, sink, entry);
+  return waitFor(s, entry, signal);
+}
+const AUTO_ANSWER = 'Autopilot is on and the user is away, so nobody will answer. Use your best judgment, state the assumption you made, and continue.';
+const AUTOPILOT_STEPS = 150; // ponytail: fixed cap so an unwatched turn can't run up an unbounded bill; make it a setting if people hit it
+
 async function runTool(s, call, ctx) {
   const { sink, signal } = ctx;
   let args;
@@ -198,12 +210,10 @@ async function runTool(s, call, ctx) {
   const pre = await runHooks('PreToolUse', { tool: call.name, input: args }, cwd);
   if (pre.blocked) return finish(`Blocked by hook: ${pre.reason}`, 'denied');
   if (verdict.action === 'ask') {
-    entry.status = 'awaiting';
-    surface(s, sink, entry);
-    const answer = await waitFor(s, entry, signal);
+    const answer = await askUser(s, sink, entry, signal);
     if (answer.decision === 'deny') return finish(answer.message ? `User denied this: ${answer.message}` : 'User denied this tool call.', 'denied');
     if (answer.decision === 'always') s.state.allow.push(ruleKey(call.name, args, cwd));
-    setEntry(s, sink, entry, { status: 'running' });
+    setEntry(s, sink, entry, { status: 'running', autopilot: answer.decision === 'auto' || undefined });
     persist(s);
   }
 
@@ -225,19 +235,20 @@ async function execute(s, name, args, entry, ctx) {
       status(s);
       return 'Task list updated.';
     case 'AskUserQuestion': {
-      Object.assign(entry, { status: 'awaiting', kind: 'question' });
-      surface(s, sink, entry);
-      const answer = await waitFor(s, entry, signal);
+      const answer = await askUser(s, sink, entry, signal, 'question');
+      if (answer.decision === 'auto') { entry.autopilot = true; return AUTO_ANSWER; }
       return answer.decision === 'deny' ? 'The user dismissed the question.' : `User answered: ${answer.answer}`;
     }
     case 'ExitPlanMode': {
-      Object.assign(entry, { status: 'awaiting', kind: 'plan' });
-      surface(s, sink, entry);
-      const answer = await waitFor(s, entry, signal);
+      const answer = await askUser(s, sink, entry, signal, 'plan');
       if (answer.decision === 'deny') return `The user rejected the plan. ${answer.message || 'Stay in plan mode and ask what to change.'}`;
-      s.state.mode = answer.mode === 'acceptEdits' ? 'acceptEdits' : 'default';
+      const auto = answer.decision === 'auto';
+      s.state.mode = auto || answer.mode === 'acceptEdits' ? 'acceptEdits' : 'default';
       status(s);
-      return 'Plan approved. Plan mode is off; start implementing.';
+      if (!auto) return 'Plan approved. Plan mode is off; start implementing.';
+      entry.autopilot = true;
+      addEntry(s, { type: 'system', text: 'Autopilot approved the plan and switched to **Accept edits**.' });
+      return 'Plan approved automatically, because autopilot is on and the user is away. Plan mode is off and file edits in the project are accepted. Implement the whole plan now, then verify it.';
     }
     case 'Skill': {
       const skill = skills(cwd).find(k => k.name === args.name);
@@ -269,7 +280,7 @@ async function runCalls(s, calls, ctx) {
 
 // ---- the loop, shared by conversations and subagents ----
 async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLabel, drain, onUsage, compact }) {
-  let retriedCompact = false;
+  let retriedCompact = false, autoSteps = 0;
   for (;;) {
     await drain?.();
     let result;
@@ -297,6 +308,11 @@ async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLa
     if (signal.aborted) throw new DOMException('Interrupted', 'AbortError');
     if (compact && compactAt(s) && (result.usage?.input_tokens || 0) > compactAt(s)) await compact();
     if (!calls.length && !drain?.pendingCount?.()) return result.output.filter(o => o.type === 'message').flatMap(o => o.content).map(c => c.text || '').join('');
+    if (s.state.autopilot && ++autoSteps >= AUTOPILOT_STEPS) {
+      const text = `Autopilot stopped here after ${AUTOPILOT_STEPS} model requests in one go, so an unwatched loop can't run up the bill. Send a message to continue.`;
+      sink.add({ type: 'system', text });
+      return text;
+    }
   }
 }
 
@@ -496,7 +512,7 @@ export function interrupt(name) { sessions.get(name)?.controller?.abort(); }
 export function answer(name, id, value) { sessions.get(name)?.pending.get(id)?.(value); }
 
 const HELP = `**Commands**
-\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/cost\` tokens used · \`/init\` write NEXUS.md · \`/todos\` · \`/help\`
+\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens used · \`/init\` write NEXUS.md · \`/todos\` · \`/help\`
 
 Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover a prompt to rewind to it.
 
@@ -516,13 +532,15 @@ export function setOption(s, key, value) {
   else if (key === 'effort' && !['low', 'medium', 'high', 'xhigh', 'max'].includes(value)) throw new Error(`Unknown effort ${value}.`);
   else if (key === 'model' && !/^[\w.:-]+$/.test(value)) throw new Error('Invalid model id.');
   else if (key === 'agent' && value && !agentDefs(cwdOf(s)).some(d => d.name === value && !d.builtin)) throw new Error(`There is no agent type called ${value}.`);
-  else if (!['mode', 'effort', 'model', 'agent'].includes(key)) throw new Error(`Unknown option ${key}.`);
+  else if (key === 'autopilot' && typeof value !== 'boolean') throw new Error('Autopilot is true or false.');
+  else if (!['mode', 'effort', 'model', 'agent', 'autopilot'].includes(key)) throw new Error(`Unknown option ${key}.`);
   // The system prompt changes at once, but models lean on recent history, so the switch is also said in the conversation.
   if (key === 'agent' && (value || '') !== (s.state.agent || '')) {
     s.state.agentSwitch = value || '';
     addEntry(s, { type: 'system', text: value ? `Switched to the **${value}** agent.` : 'Switched back to **Nexus**, the default agent.' });
   }
   s.state[key] = value;
+  if (key === 'autopilot' && value) for (const resolve of s.pending.values()) resolve({ decision: 'auto' });
   persist(s);
   status(s);
 }
@@ -588,6 +606,12 @@ async function slash(s, text) {
     case 'effort': if (arg) setOption(s, 'effort', arg); return note(s, `Effort: ${s.state.effort}`);
     case 'mode': if (arg) setOption(s, 'mode', arg); return note(s, `Permission mode: ${s.state.mode}`);
     case 'plan': setOption(s, 'mode', 'plan'); return note(s, 'Plan mode on. The agent can research but not change anything.');
+    case 'autopilot':
+      if (arg === 'on' || arg === 'off') setOption(s, 'autopilot', arg === 'on');
+      else if (arg) return note(s, 'Usage: /autopilot [on|off]', 'error');
+      return note(s, s.state.autopilot
+        ? `Autopilot is on. The agent approves its own tool calls${s.state.mode === 'plan' ? ' and its plan' : ''}, answers its own questions and keeps going, for up to ${AUTOPILOT_STEPS} model requests at a time.`
+        : 'Autopilot is off. The agent stops to ask when it needs you.');
     case 'cost': {
       const u = s.state.usage;
       return note(s, `Tokens: ${u.input.toLocaleString()} input (${u.cached.toLocaleString()} cached), ${u.output.toLocaleString()} output (${u.reasoning.toLocaleString()} reasoning) over ${u.requests} requests.`);

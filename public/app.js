@@ -25,6 +25,7 @@ const ICONS = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', back: '<path d="M15 18l-6-6 6-6"/>',
+  plane: '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.3c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
 };
 const icon = name => { const t = document.createElement('template'); t.innerHTML = `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return t.content.firstChild; };
 
@@ -131,6 +132,8 @@ function shell() {
     h('button', { class: 'btn new', onclick: guard(newProject) }, icon('plus'), 'New project'),
     $list,
     h('div', { class: 'side-foot' },
+      // Keeps the open project, which is where agents get installed.
+      h('button', { class: 'navbtn', id: 'nav-market', onclick: () => go(S.project, 'marketplace') }, icon('grid'), 'Marketplace'),
       h('button', { class: 'navbtn', id: 'nav-agents', onclick: () => go(null, 'agents') }, icon('bot'), 'Agents'),
       h('button', { class: 'navbtn', id: 'nav-settings', onclick: () => go(null, 'settings') }, icon('gear'), 'Settings'),
       h('button', { class: 'navbtn', onclick: guard(async () => { await api('POST', '/api/logout'); showLogin(); }) }, icon('out'), 'Sign out')));
@@ -229,9 +232,11 @@ let prevTab = 0;
 function render() {
   document.getElementById('nav-agents').classList.toggle('on', S.page === 'agents');
   document.getElementById('nav-settings').classList.toggle('on', S.page === 'settings');
+  document.getElementById('nav-market').classList.toggle('on', S.page === 'marketplace');
   syncTitle();
   const hamb = h('button', { class: 'icon-btn hamb', 'aria-label': 'Open menu', onclick: () => drawer(true) }, icon('menu'));
   if (S.page === 'agents') return agentsPage(hamb);
+  if (S.page === 'marketplace') return marketPage(hamb);
   if (S.page === 'settings') return settingsPage(hamb);
   if (!S.project) {
     return $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', {}, 'Nexus')),
@@ -341,7 +346,7 @@ function onEvent(m) {
     case 'delta': delta(m); break;
     case 'status': {
       const was = S.state?.running;
-      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, compactAt: m.compactAt });
+      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, compactAt: m.compactAt });
       if (was && !m.running) finished();
       syncTitle();
       syncComposer();
@@ -370,7 +375,7 @@ function onEvent(m) {
 }
 
 // ---- chat ----
-let $log, $todos, $input, $sendBtn, $stopBtn, $mode, $model, $modelLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
+let $log, $todos, $input, $sendBtn, $stopBtn, $mode, $autoBtn, $model, $modelLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
 
 function chatView(view) {
   entries.clear();
@@ -460,7 +465,9 @@ function toolArgs(e) {
   if (e.name === 'Write') return h('div', { class: 'out' }, a.content);
   if (e.name === 'Bash') return h('div', { class: 'out' }, `$ ${a.command}`);
   if (e.name === 'Task') return h('div', { class: 'out' }, `${a.subagent_type || 'general-purpose'}: ${a.prompt}`);
-  if (e.name === 'TodoWrite' || e.name === 'AskUserQuestion' || e.name === 'ExitPlanMode') return null;
+  // The plan stays readable after approval, which is the only time anyone sees one autopilot approved.
+  if (e.name === 'ExitPlanMode') { const md = h('div', { class: 'md plan' }); markdown(md, a.plan); return md; }
+  if (e.name === 'TodoWrite' || e.name === 'AskUserQuestion') return null;
   return h('div', { class: 'out' }, JSON.stringify(a, null, 2));
 }
 
@@ -509,9 +516,10 @@ function renderEntry(e) {
     }
     case 'tool': {
       const awaiting = e.status === 'awaiting';
-      const d = h('details', { class: 'e fold tool', open: awaiting || e.status === 'error' || e.direct },
+      const d = h('details', { class: 'e fold tool', open: awaiting || e.status === 'error' || e.direct || e.name === 'ExitPlanMode' },
         h('summary', {}, h('span', { class: `dot ${e.status}`, title: e.status }),
           h('span', { class: 'tname' }, e.name), h('span', { class: 'targ muted' }, String(toolTarget(e.name, e.args || {})).split('\n')[0]),
+          e.autopilot && h('span', { class: 'aptag', title: 'Autopilot answered this for you' }, 'autopilot'),
           e.agent && h('span', { class: 'tagent muted' }, e.agent)));
       if (awaiting) d.append(askBox(e));
       else {
@@ -554,7 +562,7 @@ const BUILTIN = [
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
   ['skills', 'List skills and agents'], ['mcp', 'Open MCP and hook settings'], ['settings', 'Open settings'], ['memory', 'Edit NEXUS.md'], ['rewind', 'How to rewind'],
   ['create-agent', 'Have the AI write a new agent type'], ['agent', 'Switch this chat to another agent'], ['prompts', 'Edit system prompts and injected text'],
-  ['marketplace', 'Browse agents and MCP servers to add'], ['export', 'Download this chat as Markdown'],
+  ['marketplace', 'Browse agents and MCP servers to add'], ['export', 'Download this chat as Markdown'], ['autopilot', 'on or off: keep working without stopping to ask'],
 ];
 const slashItems = () => [
   ...BUILTIN.map(([name, description]) => ({ name, description })),
@@ -567,7 +575,7 @@ function localCommand(text) {
   if (['settings', 'mcp'].includes(cmd)) { go(S.project, 'settings'); return true; }
   if (cmd === 'memory') { pendingOpen = 'NEXUS.md'; go(S.project, null, 'files'); return true; }
   if (cmd === 'rewind') { toast('Use the rewind arrow on the prompt you want to go back to.'); return true; }
-  const panels = { agent: agentPicker, prompts: () => promptsDialog(), marketplace: () => marketplace('agents'), export: () => exportChat(S.project) };
+  const panels = { agent: agentPicker, prompts: () => promptsDialog(), marketplace: () => openMarket('agents'), export: () => exportChat(S.project) };
   if (Object.hasOwn(panels, cmd)) { guard(panels[cmd])(); return true; }
   return false;
 }
@@ -616,6 +624,10 @@ const setMode = async value => {
   if (value === 'bypass' && !await confirmBox('Turn on bypass mode?', 'The agent will run every command and change any file on this machine without asking.', 'Turn on', 'danger')) return syncComposer();
   sendWs({ t: 'option', key: 'mode', value });
 };
+const toggleAutopilot = async () => {
+  if (!S.state.autopilot && !await confirmBox('Turn on autopilot?', `The agent stops asking you. It runs commands and edits files without approval, approves its own plan in plan mode, and answers its own questions, until the task is done or it has made 150 model requests. Plan mode still can't change anything before the plan. Stop works as usual.`, 'Turn on', 'danger')) return;
+  setOption('autopilot', !S.state.autopilot);
+};
 
 // Reconnects rebuild the composer, and iOS reconnects often, so drafts live outside it.
 let drafts = {};
@@ -644,6 +656,7 @@ function composer() {
   $slash = h('div', { class: 'slash', hidden: true });
   const file = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true, onchange: () => { addFiles(file.files); file.value = ''; } });
   $mode = h('select', { 'aria-label': 'Permission mode', title: 'Permission mode (Shift+Tab)', onchange: () => setMode($mode.value) }, MODES.map(([v, l]) => h('option', { value: v }, l)));
+  $autoBtn = h('button', { class: 'icon-btn apbtn', type: 'button', 'aria-label': 'Autopilot', onclick: guard(toggleAutopilot) }, icon('plane'));
   $agentLabel = h('span', { class: 'mlabel' });
   $agentBtn = h('button', { class: 'mbtn abtn', type: 'button', 'aria-label': 'Choose the agent for this chat', onclick: guard(agentPicker) }, icon('bot'), $agentLabel, icon('down'));
   $promptBtn = h('button', { class: 'icon-btn pbtn', type: 'button', 'aria-label': 'System prompts and injected text', title: 'Prompts', onclick: guard(() => promptsDialog()) }, icon('sliders'));
@@ -655,7 +668,7 @@ function composer() {
   syncThumbs();
   return h('div', { class: 'composer' }, $slash, h('div', { class: 'cbox' }, $thumbs, $input, h('div', { class: 'cbar' },
     h('button', { class: 'icon-btn', 'aria-label': 'Attach image', title: 'Attach image', onclick: () => file.click() }, icon('clip')), file,
-    $mode, $agentBtn, $model, $promptBtn, $meter, $stopBtn, $sendBtn)));
+    $mode, $autoBtn, $agentBtn, $model, $promptBtn, $meter, $stopBtn, $sendBtn)));
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -776,6 +789,9 @@ function syncComposer() {
   if (!st || !$input?.isConnected) return;
   $mode.value = st.mode;
   $mode.className = st.mode;
+  $autoBtn.classList.toggle('on', Boolean(st.autopilot));
+  $autoBtn.setAttribute('aria-pressed', String(Boolean(st.autopilot)));
+  $autoBtn.title = st.autopilot ? 'Autopilot is on: the agent decides without asking. Click to turn it off.' : 'Autopilot: let the agent finish without stopping to ask';
   const info = S.models.find(m => m.id === st.model);
   $modelLabel.textContent = (info?.name || st.model) + (info?.efforts.length === 0 ? '' : ` · ${st.effort}`);
   const role = st.agent && S.meta.agents.find(a => a.name === st.agent);
@@ -831,7 +847,7 @@ async function agentPicker() {
     search, list,
     h('div', { class: 'mfoot afoot' },
       h('button', { class: 'btn small', type: 'button', onclick: () => { shut(); createWithAI(); } }, icon('spark'), 'Create with AI'),
-      h('button', { class: 'btn small', type: 'button', onclick: () => { shut(); marketplace('agents'); } }, icon('grid'), 'Marketplace'),
+      h('button', { class: 'btn small', type: 'button', onclick: () => { shut(); openMarket('agents'); } }, icon('grid'), 'Marketplace'),
       h('button', { class: 'btn small', type: 'button', onclick: () => { shut(); go(S.project, 'agents'); } }, 'Manage')));
   const shut = sheet(d);
   fill();
@@ -929,12 +945,14 @@ async function globalPromptsCard() {
 }
 
 // ---- marketplace ----
-// One dialog for both kinds: hand-picked agents and servers that ship with Nexus, plus aiagentslist.com and Hugging Face.
-const MARKET_TITLE = { agents: 'Agent marketplace', mcp: 'MCP server marketplace' };
+// A page like VS Code's Extensions view: the list beside the selected item on a wide screen, one at a time below that.
+// Hand-picked agents and servers that ship with Nexus, aiagentslist.com, Hugging Face, and what is already installed.
+const openMarket = kind => { S.marketKind = kind; go(S.project, 'marketplace'); };
+const backBtn = back => h('div', { class: 'dhead' }, h('button', { class: 'btn small', type: 'button', onclick: back }, icon('back'), 'Back'));
 
-async function marketplace(kind = 'agents', source = 'nexus') {
-  let items = [], category = '', seq = 0, timer;
-  const title = h('h2', {});
+function marketPage(hamb) {
+  let kind = S.marketKind || 'agents', source = 'nexus', items = [], category = '', picked = '', seq = 0, openSeq = 0, timer;
+  const srcs = {};
   const kinds = h('div', { class: 'seg2', role: 'tablist', 'aria-label': 'What to browse' });
   const sources = h('div', { class: 'seg2 msrc', role: 'tablist', 'aria-label': 'Source' });
   const search = h('input', { class: 'field', type: 'search', placeholder: 'Search', 'aria-label': 'Search the marketplace', autocomplete: 'off',
@@ -942,65 +960,113 @@ async function marketplace(kind = 'agents', source = 'nexus') {
   const chips = h('div', { class: 'mchips', hidden: true });
   const grid = h('div', { class: 'mgrid' });
   const links = h('div', { class: 'mlinks small muted' });
-  const top = h('div', { class: 'mtop' }, h('div', { class: 'mbar' }, kinds, sources), search, chips);
-  const detail = h('div', { class: 'mdetail', hidden: true });
-  const d = h('dialog', { class: 'market', 'aria-label': 'Marketplace', onclick: e => { if (e.target === d) shut(); },
-    oncancel: e => { e.preventDefault(); if (!detail.hidden) back(); else shut(); }, onclose: () => d.remove() },
-    h('div', { class: 'mhead' }, title, h('button', { class: 'btn small', type: 'button', onclick: () => shut() }, 'Done')), top, grid, detail, links);
-  const shut = sheet(d);
+  const detail = h('div', { class: 'mdetail' });
+  const page = h('div', { class: 'mpage' }, h('div', { class: 'mside' }, h('div', { class: 'mtop' }, kinds, sources, search, chips), grid, links), detail);
+  $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', {}, 'Marketplace')), h('div', { class: 'view' }, page));
+  const back = () => page.classList.remove('showing');
+  const placeholder = () => detail.replaceChildren(h('p', { class: 'mnone muted' }, kind === 'mcp' ? 'Pick a server to see what it does and add it.' : 'Pick an agent to see what it does and install it.'));
   const tab = (on, label, click) => h('button', { type: 'button', role: 'tab', class: on ? 'on' : '', 'aria-selected': String(on), onclick: click }, label);
-  const renderKinds = () => {
-    title.textContent = MARKET_TITLE[kind];
-    kinds.replaceChildren(...[['agents', 'Agents'], ['mcp', 'MCP servers']].map(([k, label]) => tab(k === kind, label, () => { if (k !== kind) { kind = k; source = 'nexus'; category = ''; load(); } })));
+  const renderTabs = () => {
+    kinds.replaceChildren(...[['agents', 'Agents'], ['mcp', 'MCP servers']].map(([k, label]) => tab(k === kind, label, () => {
+      if (k !== kind) { kind = S.marketKind = k; source = 'nexus'; category = ''; back(); placeholder(); load(); }
+    })));
+    sources.replaceChildren(...[...srcs[kind] || [['nexus', 'Nexus picks']], ['installed', 'Installed']].map(([id, label]) => tab(id === source, label, () => {
+      if (id !== source) { source = id; category = ''; load(); }
+    })));
   };
   const renderGrid = () => {
     const cats = [...new Set(items.map(i => i.category).filter(Boolean))];
     chips.hidden = source !== 'nexus' || cats.length < 3;
     chips.replaceChildren(...['', ...cats].map(c => h('button', { type: 'button', class: `mchip${c === category ? ' on' : ''}`, 'aria-pressed': String(c === category), onclick: () => { category = c; renderGrid(); } }, c || 'All')));
     const shown = items.filter(i => !category || i.category === category);
-    grid.replaceChildren(...(shown.length ? shown.map(tile) : [h('p', { class: 'mnone muted' }, search.value.trim() ? `Nothing matches "${search.value.trim()}".` : 'Nothing here.')]));
+    const empty = search.value.trim() ? `Nothing matches "${search.value.trim()}".` : source === 'installed' ? 'Nothing installed yet.' : 'Nothing here.';
+    grid.replaceChildren(...(shown.length ? shown.map(tile) : [h('p', { class: 'mnone muted' }, empty)]));
     grid.scrollTop = 0;
   };
-  const tile = it => h('div', { class: 'tile' },
+  const tile = it => h('div', { class: `tile${`${source}:${it.id}` === picked ? ' on' : ''}`, 'data-key': `${source}:${it.id}` },
     h('button', { class: 'tmain', type: 'button', onclick: () => open(it) },
       h('span', { class: 'ticon', 'aria-hidden': 'true' }, it.icon || (it.name[0] || '?').toUpperCase()),
       h('span', { class: 'ttext' },
         h('span', { class: 'tname' }, h('b', {}, it.name), it.featured && h('span', { class: 'mtag' }, 'Featured'), it.running === false && h('span', { class: 'mtag old' }, 'Asleep')),
         h('span', { class: 'tmeta' }, [it.author && `by ${it.author}`, it.category, it.stats].filter(Boolean).join(' · ')),
         h('span', { class: 'tdesc' }, it.description || 'No description.'))),
-    h('button', { class: `btn small${it.installable ? ' primary' : ''}`, type: 'button', onclick: () => open(it) }, it.installable ? 'Install' : 'View'));
+    h('button', { class: `btn small${it.installable ? ' primary' : ''}`, type: 'button', onclick: () => open(it) }, source === 'installed' ? 'Manage' : it.installable ? 'Install' : 'View'));
   async function load() {
     const mine = ++seq;
-    renderKinds();
+    renderTabs();
     grid.replaceChildren(h('p', { class: 'mnone muted' }, 'Loading…'));
     try {
-      const res = await api('GET', `/api/market?kind=${kind}&source=${source}&q=${encodeURIComponent(search.value.trim())}`);
+      const q = search.value.trim();
+      const res = source === 'installed' ? { items: await installedItems(kind, q) } : await api('GET', `/api/market?kind=${kind}&source=${source}&q=${encodeURIComponent(q)}`);
       if (mine !== seq) return;
       items = res.items;
-      sources.replaceChildren(...res.sources.map(([id, label]) => tab(id === source, label, () => { if (id !== source) { source = id; category = ''; load(); } })));
-      links.replaceChildren('Browse online: ', ...res.links.flatMap(([label, url], i) => [i ? ' · ' : '', extLink(label, url)]));
+      if (res.sources) {
+        srcs[kind] = res.sources;
+        links.replaceChildren('Browse online: ', ...res.links.flatMap(([label, url], i) => [i ? ' · ' : '', extLink(label, url)]));
+      }
+      renderTabs();
       renderGrid();
     } catch (e) {
       if (mine === seq) grid.replaceChildren(h('p', { class: 'mnone err' }, e.message));
     }
   }
-  const back = () => { detail.hidden = true; top.hidden = false; grid.hidden = false; };
   const open = async it => {
-    top.hidden = true; grid.hidden = true; detail.hidden = false;
+    const [mine, k, src] = [++openSeq, kind, source];
+    picked = `${src}:${it.id}`;
+    grid.querySelectorAll('.tile').forEach(t => t.classList.toggle('on', t.dataset.key === picked));
+    page.classList.add('showing');
     detail.replaceChildren(h('p', { class: 'mnone muted' }, 'Loading…'));
     detail.scrollTop = 0;
     try {
-      const full = await api('GET', `/api/market/item?kind=${kind}&source=${source}&id=${encodeURIComponent(it.id)}`);
-      detail.replaceChildren(...marketDetail({ ...it, ...full }, kind, back, shut).flat(Infinity).filter(Boolean));
+      const parts = src === 'installed' ? installedDetail(it, k, back, load)
+        : marketDetail({ ...it, ...await api('GET', `/api/market/item?kind=${k}&source=${src}&id=${encodeURIComponent(it.id)}`) }, k, back);
+      if (mine === openSeq) detail.replaceChildren(...parts.flat(Infinity).filter(Boolean));
     } catch (e) {
-      detail.replaceChildren(h('button', { class: 'btn small', type: 'button', onclick: back }, icon('back'), 'Back'), h('p', { class: 'err' }, e.message));
+      if (mine === openSeq) detail.replaceChildren(backBtn(back), h('p', { class: 'err' }, e.message));
     }
   };
-  renderKinds();
-  document.body.append(d);
-  d.showModal();
+  placeholder();
   if (!touch.matches) search.focus();
   load();
+}
+
+// What is already installed, shaped like marketplace items. Agents are the custom types of the project installs go to.
+async function installedItems(kind, q) {
+  const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const match = it => terms.every(t => `${it.name} ${it.description}`.toLowerCase().includes(t));
+  if (kind === 'mcp') {
+    const { mcp } = await api('GET', '/api/settings');
+    return mcp.map(s => ({ id: s.name, name: s.name, description: s.error || `${s.remote ? 'Remote · ' : ''}${s.status} · ${s.tools.length} tools`, server: s })).filter(match);
+  }
+  const project = projectForInstall();
+  const { agents } = project ? await api('GET', `${P(project)}/meta`) : { agents: [] };
+  return agents.filter(a => !a.builtin).map(a => ({ id: a.name, name: a.name, description: a.description, category: a.scope === 'user' ? 'All projects' : 'This project', def: a })).filter(match);
+}
+
+function installedDetail(it, kind, back, reload) {
+  const remove = (why, run) => h('button', { class: 'btn danger', type: 'button', onclick: guard(async () => {
+    if (!await confirmBox(`Remove ${it.name}?`, why, 'Remove', 'danger')) return;
+    await run();
+    toast(`Removed ${it.name}.`);
+    back();
+    reload();
+  }) }, 'Remove');
+  const head = [backBtn(back),
+    h('div', { class: 'dtitle' }, h('span', { class: 'ticon big', 'aria-hidden': 'true' }, it.name[0].toUpperCase()),
+      h('div', { class: 'grow' }, h('h3', {}, it.name), it.category && h('div', { class: 'small muted' }, it.category))),
+    it.description && h('p', {}, it.description)];
+  if (kind === 'mcp') {
+    return [...head, h('div', { class: 'small muted' }, `Tools: ${it.server.tools.join(', ') || 'none yet'}`),
+      h('div', { class: 'acts' }, remove('Its tools disappear from new messages. You can add it again from the marketplace.', () => api('DELETE', `/api/mcp-servers/${encodeURIComponent(it.name)}`)))];
+  }
+  const d = it.def, project = projectForInstall();
+  const use = () => { setOption('agent', d.name); toast(`This chat now works as ${d.name}.`); };
+  return [...head, h('div', { class: 'small muted' }, `Tools: ${d.tools?.join(', ') || 'every tool'}${d.model ? ` · ${d.model}` : ''}`),
+    h('details', { class: 'fold' }, h('summary', {}, 'Read its instructions', icon('down')), h('div', { class: 'out' }, d.prompt)),
+    h('div', { class: 'acts' },
+      remove('This removes the agent type from Nexus folders. Types in other folders stay.', () => api('DELETE', `${P(project)}/agent-defs/${encodeURIComponent(d.name)}`)),
+      h('button', { class: 'btn', type: 'button', onclick: () => editDef(project, d) }, 'Edit'),
+      S.project === project && S.state && h('button', { class: 'btn primary', type: 'button', onclick: use }, 'Use in this chat'))];
 }
 
 // The form for one MCP server: its settings as editable JSON, plus fields for the secrets it needs.
@@ -1030,11 +1096,11 @@ function serverForm(s) {
   return { el, value };
 }
 
-function marketDetail(it, kind, back, shut) {
+function marketDetail(it, kind, back) {
   const err = h('div', { class: 'err', role: 'alert' });
   const meta = [it.author && `by ${it.author}`, it.category, it.stats].filter(Boolean).join(' · ');
   const parts = [
-    h('div', { class: 'dhead' }, h('button', { class: 'btn small', type: 'button', onclick: back }, icon('back'), 'Back')),
+    backBtn(back),
     h('div', { class: 'dtitle' }, h('span', { class: 'ticon big', 'aria-hidden': 'true' }, it.icon || (it.name[0] || '?').toUpperCase()),
       h('div', { class: 'grow' }, h('h3', {}, it.name), meta && h('div', { class: 'small muted' }, meta))),
     it.description && h('p', {}, it.description),
@@ -1055,13 +1121,12 @@ function marketDetail(it, kind, back, shut) {
         const { name, config } = form.value();
         await api('POST', '/api/mcp-servers', { name, config });
         toast(`Added ${name}. Its tools arrive with your next message.`);
-        shut();
-        if (S.page === 'settings') render();
+        back();
       }) }, 'Install'))];
   }
   if (it.external) {
     return [...parts, h('p', { class: 'small muted' }, "This is a product listed on aiagentslist.com, not an agent file Nexus can install. The AI can write a Nexus agent that does the same job."),
-      h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', onclick: () => { shut(); createWithAI(`that works like ${it.name}: ${it.description}`); } }, icon('spark'), 'Create a Nexus agent like this'))];
+      h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', onclick: () => { createWithAI(`that works like ${it.name}: ${it.description}`); } }, icon('spark'), 'Create a Nexus agent like this'))];
   }
   const project = projectForInstall();
   if (!project) return [...parts, h('p', { class: 'err' }, 'Create a project first.')];
@@ -1077,8 +1142,7 @@ function marketDetail(it, kind, back, shut) {
     if (S.project === project) await loadMeta();
     if (use && S.project === project && S.state) setOption('agent', name);
     toast(use ? `Installed ${name}. This chat now works as it.` : `Installed ${name}.`);
-    shut();
-    if (S.page === 'agents') refreshAgentsSoon();
+    back();
   });
   return [...parts,
     h('div', { class: 'small muted' }, `Tools: ${it.agent.tools?.join(', ') || 'every tool'}`),
@@ -1272,7 +1336,7 @@ async function fillAgents() {
     h('div', { class: 'rowline', style: 'margin:22px auto 10px' }, h('h2', { style: 'margin:0', class: 'grow' }, `Agent types${project ? ` for ${project}` : ''}`),
       project && h('button', { class: 'btn small', onclick: () => editDef(project, null) }, icon('plus'), 'New type'),
       project && h('button', { class: 'btn small', onclick: () => createWithAI() }, icon('spark'), 'Create with AI'),
-      h('button', { class: 'btn small primary', onclick: () => marketplace('agents') }, icon('grid'), 'Marketplace')),
+      h('button', { class: 'btn small primary', onclick: () => openMarket('agents') }, icon('grid'), 'Marketplace')),
     meta.agents.map(d => h('div', { class: 'card rowline' },
       h('div', { class: 'grow' }, h('div', { class: 'title mono' }, d.name), h('div', { class: 'small muted' }, d.description),
         h('div', { class: 'small muted' }, `${d.builtin ? 'Built in' : d.scope} · tools: ${d.tools?.join(', ') || 'all'}${d.model ? ` · ${d.model}` : ''}`)),
@@ -1355,7 +1419,7 @@ async function settingsPage(hamb) {
     selfBot(),
     await versionCard(),
     h('div', { class: 'rowline', style: 'margin:22px auto 10px' }, h('h2', { style: 'margin:0', class: 'grow' }, 'MCP servers'),
-      h('button', { class: 'btn small primary', type: 'button', onclick: () => marketplace('mcp') }, icon('grid'), 'Add MCP server')),
+      h('button', { class: 'btn small primary', type: 'button', onclick: () => openMarket('mcp') }, icon('grid'), 'Add MCP server')),
     mcp.length ? mcp.map(s => h('div', { class: 'card rowline' }, h('span', { class: `dot ${s.status === 'connected' ? 'done' : s.status === 'error' ? 'error' : 'awaiting'}` }),
       h('div', { class: 'grow' }, h('div', { class: 'title mono' }, s.name), h('div', { class: 'small muted' }, s.error || `${s.remote ? 'remote · ' : ''}${s.status} · ${s.tools.length} tools`)),
       h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove ${s.name}`, onclick: remove(s.name) }, 'Remove'))) : h('p', { class: 'muted' }, 'None yet. Add Hugging Face, Playwright, Context7, GitHub or hundreds more from the marketplace.'),
@@ -1430,7 +1494,7 @@ async function boot() {
   shell();
   await refreshProjects();
   connect();
-  const m = /^#\/(?:p\/([^/]+)\/(\w+)|(agents|settings))?/.exec(location.hash) || [];
+  const m = /^#\/(?:p\/([^/]+)\/(\w+)|(agents|settings|marketplace))?/.exec(location.hash) || [];
   const name = m[1] ? decodeURIComponent(m[1]) : null;
   if (m[3]) go(null, m[3]);
   else if (name && S.projects.some(p => p.name === name)) go(name, null, ['chat', 'files', 'changes', 'terminal'].includes(m[2]) ? m[2] : 'chat');

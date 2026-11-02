@@ -16,19 +16,22 @@ const market = await import('../server/market.js');
 const settingsFile = path.join(process.env.NEXUS_HOME, 'settings.json');
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-// A model that answers "ok" and records what it was sent.
-function fakeModel() {
+// A model that records what it was sent and answers "ok", unless call(n) names a tool [name, args] for its nth request.
+function fakeModel(call = () => null) {
   const sent = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     if (!String(url).includes('api.openai.com/v1/responses')) return realFetch(url, init);
     sent.push(JSON.parse(init.body));
-    const done = { type: 'response.completed', response: { output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] }], usage: { input_tokens: 1, output_tokens: 1 } } };
+    const tool = call(sent.length);
+    const output = tool ? [{ type: 'function_call', call_id: `call${sent.length}`, name: tool[0], arguments: JSON.stringify(tool[1]) }]
+      : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] }];
+    const done = { type: 'response.completed', response: { output, usage: { input_tokens: 1, output_tokens: 1 } } };
     return new Response(`data: ${JSON.stringify(done)}\n\n`);
   };
   return { sent, restore: () => { globalThis.fetch = realFetch; } };
 }
-const idle = async s => { for (let i = 0; i < 200 && (s.running || s.queue.length); i++) await new Promise(r => setTimeout(r, 25)); };
+const idle = async (s, ms = 5000) => { for (let t = 0; t < ms && (s.running || s.queue.length); t += 25) await new Promise(r => setTimeout(r, 25)); };
 
 test('prompt layers: global rewrites the base, project and chat add to it, and injections combine', () => {
   const cwd = path.join(tmp, 'layers');
@@ -92,6 +95,77 @@ test('a chat sends its injection with each prompt, works as its agent, and keeps
   assert.equal(s.state.agent, 'reviewer');
   agent.setOption(s, 'agent', '');
   assert.doesNotMatch(agent.previewPrompt('swap'), /# Your role/);
+});
+
+test('autopilot in plan mode: plan stays read-only, then the plan approves itself and the work gets done', async () => {
+  projects.create('pilot');
+  const s = agent.getSession('pilot');
+  const outside = path.join(tmp, 'outside.txt');
+  fs.writeFileSync(outside, 'from outside');
+  agent.setOption(s, 'mode', 'plan');
+  agent.setOption(s, 'autopilot', true);
+  const script = [
+    ['Write', { file_path: 'a.txt', content: 'too early' }],
+    ['ExitPlanMode', { plan: '1. Write a.txt' }],
+    ['Write', { file_path: 'a.txt', content: 'hi' }],
+    ['Read', { file_path: outside }],
+    ['AskUserQuestion', { question: 'Tabs or spaces?' }],
+  ];
+  const model = fakeModel(n => script[n - 1]);
+  try {
+    await agent.submit('pilot', 'make a.txt');
+    await idle(s);
+  } finally { model.restore(); }
+
+  assert.match(model.sent[0].instructions, /AUTOPILOT IS ON[\s\S]*plan is approved automatically/);
+  const tools = s.state.log.filter(e => e.type === 'tool');
+  assert.deepEqual(tools.map(e => [e.name, e.status, Boolean(e.autopilot)]), [
+    ['Write', 'denied', false], ['ExitPlanMode', 'done', true], ['Write', 'done', false], ['Read', 'done', true], ['AskUserQuestion', 'done', true],
+  ], 'plan mode still denies edits; only what needed the user is marked');
+  assert.match(tools[1].output, /approved automatically/);
+  assert.match(tools[4].output, /Autopilot is on and the user is away/);
+  assert.equal(s.state.mode, 'acceptEdits');
+  assert.ok(s.state.log.some(e => e.type === 'system' && /Autopilot approved the plan/.test(e.text)));
+  assert.equal(fs.readFileSync(path.join(projects.projectDir('pilot'), 'a.txt'), 'utf8'), 'hi');
+  assert.equal(model.sent.length, 6);
+});
+
+test('turning autopilot on answers what is already waiting, and /autopilot switches it', async () => {
+  projects.create('waiting');
+  const s = agent.getSession('waiting');
+  assert.throws(() => agent.setOption(s, 'autopilot', 'yes'), /true or false/);
+  const model = fakeModel(n => (n === 1 ? ['Read', { file_path: path.join(tmp, 'outside.txt') }] : null));
+  try {
+    await agent.submit('waiting', 'read it');
+    for (let i = 0; i < 200 && !s.state.log.some(e => e.status === 'awaiting'); i++) await new Promise(r => setTimeout(r, 25));
+    agent.setOption(s, 'autopilot', true);
+    await idle(s);
+  } finally { model.restore(); }
+  const read = s.state.log.find(e => e.name === 'Read');
+  assert.equal(read.status, 'done');
+  assert.equal(read.autopilot, true);
+
+  await agent.submit('waiting', '/autopilot off');
+  assert.equal(s.state.autopilot, false);
+  await agent.submit('waiting', '/autopilot maybe');
+  assert.equal(s.state.log.at(-1).type, 'error');
+  await agent.submit('waiting', '/autopilot on');
+  assert.equal(s.state.autopilot, true);
+  assert.match(s.state.log.at(-1).text, /Autopilot is on/);
+});
+
+test('an autopilot turn stops after 150 model requests', async () => {
+  projects.create('looping');
+  const s = agent.getSession('looping');
+  agent.setOption(s, 'autopilot', true);
+  const model = fakeModel(() => ['TodoWrite', { todos: [] }]);
+  try {
+    await agent.submit('looping', 'go forever');
+    await idle(s, 60000);
+  } finally { model.restore(); }
+  assert.equal(model.sent.length, 150);
+  assert.match(s.state.log.at(-1).text, /Autopilot stopped here after 150 model requests/);
+  assert.equal(s.running, false);
 });
 
 test('/create-agent asks for a description, then hands the model the format and where to write it', async () => {
