@@ -14,6 +14,7 @@ import { agentDefs, commands, deleteAgentDef, saveAgentDef, skills } from './ext
 import * as market from './market.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
+import { findFiles } from './tools.js';
 import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
 import { childEnv, isInside, presentSocket, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
 
@@ -109,6 +110,7 @@ route('GET', '/api/projects/:name/tree', ({ p, q }) => {
     .map(d => ({ name: d.name, dir: d.isDirectory() }))
     .sort((a, b) => b.dir - a.dir || a.name.localeCompare(b.name));
 });
+route('GET', '/api/projects/:name/files', ({ p, q }) => findFiles(projectPath(p.name), q.get('q') || ''));
 route('GET', '/api/projects/:name/file', ({ p, q }) => {
   const file = projectPath(p.name, q.get('path'));
   const { size } = fs.statSync(file);

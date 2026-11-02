@@ -455,3 +455,14 @@ test('an isolated subagent edits in its own worktree and hands back a branch', {
   assert.match(fs.readFileSync(path.join(cwd, '.git', 'info', 'exclude'), 'utf8'), /^\.nexus\/worktrees\/$/m, 'a git add -A in the project skips the worktrees');
   assert.deepEqual(git('branch', '--list', 'nexus/*').split('\n').map(b => b.replace(/^[* ]+/, '')), [branch]);
 });
+
+test('@ suggests project files by name, skipping dependencies and Nexus data', async () => {
+  const { findFiles } = await import('../server/tools.js');
+  const dir = path.join(tmp, 'mention');
+  for (const f of ['src/app.js', 'src/lib/apply.js', 'docs/app-notes.md', 'node_modules/app/index.js', '.nexus/app.json', 'zapp.txt']) {
+    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+    fs.writeFileSync(path.join(dir, f), '');
+  }
+  assert.deepEqual(await findFiles(dir, 'app'), ['src/app.js', 'src/lib/apply.js', 'docs/app-notes.md', 'zapp.txt']);
+  assert.deepEqual(await findFiles(dir, 'LIB'), ['src/lib/apply.js']);
+});

@@ -386,7 +386,7 @@ function chatView(view) {
   $todos = h('div', { class: 'todos', hidden: true });
   if (S.state) {
     if (!S.state.log.length) $log.append(h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'),
-      h('p', { class: 'mono' }, `~/projects/${S.project}`), h('p', {}, 'Type a request, or / for commands.')));
+      h('p', { class: 'mono' }, `~/projects/${S.project}`), h('p', {}, 'Type a request. / runs a command and @ points at a file.')));
     for (const e of S.state.log) upsertEntry(e, false);
   }
   view.append($log, $todos, composer());
@@ -584,6 +584,10 @@ function localCommand(text) {
 let slashIndex = 0;
 function updateSlash() {
   const v = $input.value;
+  const at = /(?:^|\s)@(\S*)$/.exec(v.slice(0, $input.selectionStart));
+  $slash.dataset.mode = at ? '@' : '/';
+  if (at) return suggestFiles(at[1]);
+  fileHits.q = null;
   const m = /^\/(\S*)$/.exec(v);
   if (!m) { $slash.hidden = true; return; }
   const seen = new Set();
@@ -591,6 +595,28 @@ function updateSlash() {
   slashIndex = Math.min(slashIndex, Math.max(items.length - 1, 0));
   $slash.hidden = !items.length;
   $slash.replaceChildren(...items.map((c, i) => h('button', { class: i === slashIndex ? 'on' : '', type: 'button', onclick: () => { $input.value = `/${c.name} `; $slash.hidden = true; $input.focus(); } }, h('b', {}, `/${c.name}`), h('span', {}, c.argumentHint ? `${c.argumentHint} — ${c.description}` : c.description))));
+}
+
+// @ suggests project files; picking one puts its path in the message, where the model reads it as a pointer to that file.
+let fileHits = { q: null, files: [] };
+async function suggestFiles(q) {
+  if (fileHits.q !== q) {
+    fileHits = { q, files: fileHits.files };
+    const files = await api('GET', `${P(S.project)}/files?q=${encodeURIComponent(q)}`).catch(() => []);
+    if (fileHits.q !== q) return; // a newer keystroke won
+    fileHits.files = files;
+  }
+  const { files } = fileHits;
+  slashIndex = Math.min(slashIndex, Math.max(files.length - 1, 0));
+  $slash.hidden = !files.length;
+  $slash.replaceChildren(...files.map((f, i) => h('button', { class: i === slashIndex ? 'on' : '', type: 'button', onclick: () => {
+    const caret = $input.selectionStart, head = $input.value.slice(0, caret).replace(/@\S*$/, `@${f} `);
+    $input.value = head + $input.value.slice(caret);
+    drafts[S.project] = $input.value;
+    $slash.hidden = true;
+    $input.focus();
+    $input.setSelectionRange(head.length, head.length);
+  } }, h('b', {}, f.slice(f.lastIndexOf('/') + 1)), h('span', {}, f))));
 }
 
 function send() {
@@ -667,7 +693,7 @@ function composer() {
       if (!$slash.hidden) {
         const items = [...$slash.children];
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); slashIndex = (slashIndex + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length; updateSlash(); return; }
-        if (e.key === 'Tab') { e.preventDefault(); items[slashIndex].click(); return; }
+        if (e.key === 'Tab' || (e.key === 'Enter' && $slash.dataset.mode === '@')) { e.preventDefault(); items[slashIndex].click(); return; }
         if (e.key === 'Escape') { $slash.hidden = true; return; }
       }
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !touch.matches) { e.preventDefault(); send(); } else if (e.key === 'Tab' && e.shiftKey) {

@@ -151,6 +151,15 @@ function rg(args, cwd, signal) {
   });
 }
 
+// For @-mentions: project files whose name starts with q, then whose name or path contains it, shortest first.
+export async function findFiles(cwd, q) {
+  const t = q.toLowerCase();
+  const rank = f => { const l = f.toLowerCase(), name = l.slice(l.lastIndexOf('/') + 1); return name.startsWith(t) ? 0 : name.includes(t) ? 1 : l.includes(t) ? 2 : 3; };
+  return (await rg(['--files', '--hidden', '--no-messages', '-g', '!.git', '-g', '!.nexus', '-g', '!node_modules'], cwd))
+    .split('\n').filter(Boolean).map(f => f.replaceAll('\\', '/')).map(f => [rank(f), f]).filter(([r]) => r < 3)
+    .sort((a, b) => a[0] - b[0] || a[1].length - b[1].length || a[1].localeCompare(b[1])).slice(0, 20).map(([, f]) => f);
+}
+
 async function glob({ pattern, path: dir = '.' }, { cwd, signal }) {
   const base = resolve(cwd, dir);
   const out = await rg(['--files', '--hidden', '--no-messages', '-g', pattern, '-g', '!.git', '-g', '!.nexus', '-g', '!node_modules'], base, signal);
