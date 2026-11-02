@@ -88,7 +88,7 @@ export async function postWithRetry(label, url, headers, body, signal) {
       continue;
     }
     let message = text.slice(0, 500), code;
-    try { const e = JSON.parse(text).error; message = e.message; code = e.code; } catch { /* raw text */ }
+    try { const e = JSON.parse(text).error; message = typeof e === 'string' ? e : e?.message || message; code = e?.code; } catch { /* raw text */ }
     throw Object.assign(new Error(`${label} ${res.status}: ${message}`), { code });
   }
 }

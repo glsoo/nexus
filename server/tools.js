@@ -150,16 +150,16 @@ function rg(args, cwd, signal) {
     execFile('rg', args, { cwd, signal, env: childEnv(), maxBuffer: 32 * 1024 * 1024, timeout: 60000 }, (err, stdout, stderr) => {
       // A missing working directory also surfaces as "spawn rg ENOENT", which reads like ripgrep isn't installed.
       if (err?.code === 'ENOENT') fail(new Error(fs.existsSync(cwd) ? 'ripgrep (rg) is not installed or not on PATH.' : `No such directory: ${cwd}`));
-      else if (err && err.code !== 1) fail(new Error(stderr || err.message)); else done(stdout);
+      else if (err && err.code !== 1 && !(err.code === 2 && stdout)) fail(new Error(stderr || err.message)); else done(stdout);
     });
   });
 }
 
 // For /watch: comments that start or end with AI!, like `// handle empty input AI!`.
-const AI_MARK = String.raw`(//|#|--|/\*|<!--|;)\s*AI!|\bAI!\s*(\*/|-->)?\s*$`;
+const AI_MARK = String.raw`(^|\s)(//|#|--|/\*|<!--|;)\s*AI!|(^|\s)(//|#|--|/\*|<!--|;).*\bAI!\s*(\*/|-->)?\s*$`;
 export async function findAIComments(cwd) {
   return (await rg(['-n', '--no-heading', '--color', 'never', '--no-messages', '-M', '400', '-g', '!.nexus', '-g', '!node_modules', '-e', AI_MARK, '.'], cwd))
-    .split('\n').map(l => /^(.+?):(\d+):(.*)$/.exec(l)).filter(Boolean).map(([, file, line, text]) => ({ file: file.replaceAll('\\', '/').replace(/^\.\//, ''), line: Number(line), text: text.trim() }));
+    .split(/\r?\n/).map(l => /^(.+?):(\d+):(.*)$/.exec(l)).filter(Boolean).map(([, file, line, text]) => ({ file: file.replaceAll('\\', '/').replace(/^\.\//, ''), line: Number(line), text: text.trim() }));
 }
 
 // For @-mentions: project files whose name starts with q, then whose name or path contains it, shortest first.

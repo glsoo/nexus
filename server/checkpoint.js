@@ -12,7 +12,7 @@ const EXCLUDE = '.nexus/\nnode_modules/\n.venv/\n__pycache__/\n';
 const ID = ['-c', 'user.name=nexus', '-c', 'user.email=nexus@localhost', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
 
 async function git(cwd, ...args) {
-  const env = { ...childEnv(), GIT_DIR: path.join(cwd, '.nexus', 'checkpoints.git'), GIT_WORK_TREE: cwd };
+  const env = { ...childEnv(), GIT_DIR: path.join(cwd, '.nexus', 'checkpoints.git'), GIT_WORK_TREE: cwd, GIT_LITERAL_PATHSPECS: '1' };
   const { stdout } = await run('git', [...ID, ...args], { cwd, env, maxBuffer: 64 * 1024 * 1024, timeout: 120000 });
   return stdout;
 }
@@ -53,6 +53,7 @@ export async function restoreFile(cwd, sha, file) {
 export async function diff(cwd, sha) {
   await ensure(cwd);
   await git(cwd, 'add', '-A');
-  const out = await git(cwd, 'diff', '--no-color', sha);
+  // No rename detection and no quoting, so every header names one real path that Undo file can put back.
+  const out = await git(cwd, '-c', 'core.quotePath=false', 'diff', '--no-color', '--no-renames', sha);
   return out.length > 2_000_000 ? `${out.slice(0, 2_000_000)}\n… diff truncated …` : out;
 }

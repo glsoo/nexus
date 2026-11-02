@@ -266,7 +266,7 @@ async function execute(s, name, args, entry, ctx) {
       return 'Plan approved automatically, because autopilot is on and the user is away. Plan mode is off and file edits in the project are accepted. Implement the whole plan now, then verify it.';
     }
     case 'Skill': {
-      const skill = skills(cwd).find(k => k.name === args.name);
+      const skill = skills(cwdOf(s)).find(k => k.name === args.name);
       if (!skill) throw new Error(`Unknown skill ${args.name}.`);
       return `Skill base directory: ${skill.dir}\n\n${skill.body}`;
     }
@@ -339,8 +339,8 @@ async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLa
 
 // ---- subagents ----
 const agentFile = a => path.join(projects.projectDir(a.project), '.nexus', 'subagents', `${a.id}.json`);
-const agentPublic = ({ controller, items, log, ...a }) => a;
-const saveAgent = a => { const { controller, ...rest } = a; writeAtomic(agentFile(a), JSON.stringify(rest)); };
+const agentPublic = ({ controller, items, log, work, ...a }) => a;
+const saveAgent = a => { const { controller, work, ...rest } = a; writeAtomic(agentFile(a), JSON.stringify(rest)); };
 const announce = (a, entry) => hub.emit('agent', { agent: agentPublic(a), entry });
 
 export function listAgents() {
@@ -370,6 +370,7 @@ export async function runSubagent(s, args, parentSignal) {
   const background = Boolean(args.run_in_background);
   const controller = new AbortController();
   if (!background && parentSignal) parentSignal.addEventListener('abort', () => controller.abort(), { once: true });
+  if (!background && parentSignal?.aborted) controller.abort();
   const a = {
     id, branch: dir ? `nexus/${id}` : undefined, project: s.name, type: def.name, description: args.description || def.name, prompt: args.prompt, background,
     status: 'running', started: Date.now(), ended: null, tokens: 0, model: def.model || s.state.model, log: [], controller, result: '',
@@ -384,6 +385,7 @@ export async function runSubagent(s, args, parentSignal) {
     delta() {},
   };
   const allowed = def.tools ? new Set(def.tools) : null;
+  let final;
   const work = loop(s, {
     items: () => items, sink, model: () => a.model, effort: () => s.state.effort, signal: controller.signal, agentLabel: a.description, cwd: dir || undefined,
     sys: () => systemPrompt(s, `\n\n# Your role\n${def.prompt}\nYour final message is returned to the agent that launched you, so include everything it needs.${dir ? `\n\nYou work in your own git worktree, on branch ${a.branch} made from the last commit, so other agents can work at the same time. Change files only inside ${dir}. It holds only tracked files, so install dependencies first if you need to run anything. Whatever you leave there is committed to the branch for review when you finish.` : ''}`, true, dir || cwd),
@@ -393,24 +395,27 @@ export async function runSubagent(s, args, parentSignal) {
     }),
     onUsage: u => { addUsage(s, u); a.tokens += u?.total_tokens || 0; persist(s); status(s); announce(a); },
   }).then(text => {
-    a.result = text; a.status = 'completed';
+    a.result = text; final = 'completed';
     return text || '(The subagent returned no text.)';
   }).catch(err => {
-    a.status = controller.signal.aborted ? 'stopped' : 'failed';
+    final = controller.signal.aborted ? 'stopped' : 'failed';
     a.result = err.message;
-    return `Subagent ${a.status}: ${err.message}`;
+    return `Subagent ${final}: ${err.message}`;
   }).then(async text => {
-    runHooks('SubagentStop', { agent: a.type, description: a.description, status: a.status }, cwd).catch(() => {});
+    runHooks('SubagentStop', { agent: a.type, description: a.description, status: final }, cwd).catch(() => {});
     if (dir) {
       const note = await closeWorktree(cwd, dir, a.branch, a.description);
       a.result += `\n\n${note}`;
       text += `\n\n${note}`;
     }
+    // Running until its worktree is closed, so the project can't be renamed or deleted under the git calls.
+    a.status = final;
     a.ended = Date.now();
     saveAgent(a);
     announce(a);
     return text;
   });
+  a.work = work;
   if (!background) return work;
   if (args.notify !== false) work.then(text => {
     enqueue(s, { text: `<background-agent id="${a.id}" description="${a.description}" status="${a.status}">\n${text}\n</background-agent>`, label: `Background agent "${a.description}" ${a.status}.` });
@@ -459,7 +464,7 @@ export function runSchedules(now = new Date()) {
     return submit(x.project, x.prompt).catch(err => console.error(`Schedule ${x.id}:`, err.message));
   }));
 }
-export const startSchedules = () => setInterval(runSchedules, 20_000).unref();
+export const startSchedules = () => setInterval(() => Promise.resolve().then(() => runSchedules()).catch(err => console.error('schedules:', err.message)), 20_000).unref();
 
 // /watch: an AI! comment saved in any editor becomes a prompt, once it has stayed the same for one poll.
 // The flag is a file in .nexus, so it follows renames and costs a stat per poll.
@@ -473,6 +478,7 @@ async function watchAI(s) {
   const ready = [...hits].filter(([k]) => last?.has(k) && !s.aiDone.has(k));
   if (!ready.length) return;
   for (const [k] of ready) s.aiDone.add(k);
+  if (sessions.get(s.name) !== s) return; // deleted while rg ran
   await submit(s.name, `I left instructions as AI! comments in my editor:\n${ready.map(([, x]) => `- ${x.file}:${x.line}: ${x.text}`).join('\n')}\nDo what they ask, then remove the AI! comments you handled.`);
 }
 export function runWatches() {
@@ -482,7 +488,7 @@ export function runWatches() {
     return (s.watching = watchAI(s).catch(err => console.error(`/watch ${name}:`, err.message)).finally(() => { s.watching = null; }));
   }));
 }
-export const startWatches = () => setInterval(runWatches, 3000).unref();
+export const startWatches = () => setInterval(() => Promise.resolve().then(runWatches).catch(err => console.error('/watch:', err.message)), 3000).unref();
 
 // ---- worktrees ----
 // An isolated agent works on its own branch in .nexus/worktrees, so agents editing at the same time never collide.
@@ -515,11 +521,12 @@ async function closeWorktree(cwd, dir, branch, label) {
       await git(dir, ...who, 'commit', '-q', '-m', `Agent: ${label}`);
     }
     await git(cwd, 'worktree', 'remove', dir);
-    if (!files.length) {
-      await git(cwd, 'branch', '-D', branch);
+    if (!Number(await git(cwd, 'rev-list', '--count', `HEAD..${branch}`))) {
+      await git(cwd, 'branch', '-d', branch);
       return 'It changed no files, so its worktree and branch are gone.';
     }
-    return `Its changes (${files.length} file${files.length === 1 ? '' : 's'}) are committed on branch ${branch}. Review them with \`git diff HEAD...${branch}\`, then \`git merge ${branch}\`, or drop them with \`git branch -D ${branch}\`.`;
+    const n = (await git(cwd, 'diff', '--name-only', `HEAD...${branch}`)).split('\n').filter(Boolean).length;
+    return `Its changes (${n} file${n === 1 ? '' : 's'}) are committed on branch ${branch}. Review them with \`git diff HEAD...${branch}\`, then \`git merge ${branch}\`, or drop them with \`git branch -D ${branch}\`.`;
   } catch (err) {
     return `Its worktree is still at ${dir} on branch ${branch}, because cleaning up failed: ${err.stderr?.trim() || err.message}`;
   }
@@ -915,9 +922,12 @@ export async function stopForRestart() {
   const running = a => a.status === 'running';
   const busy = [...sessions.values()].filter(s => s.running || [...agents.values()].some(a => a.project === s.name && running(a)));
   for (const s of busy) fs.writeFileSync(resumeMark(s.name), '');
-  for (const a of agents.values()) if (running(a)) a.controller?.abort();
+  const stopped = [...agents.values()].filter(running);
+  for (const a of stopped) a.controller?.abort();
   for (const s of busy) s.controller?.abort();
   while (busy.some(s => s.running)) await new Promise(r => setTimeout(r, 50));
+  // Background agents still commit what their worktree holds and save their record.
+  await Promise.allSettled(stopped.map(a => a.work));
 }
 
 export function resumeAfterRestart() {
@@ -939,6 +949,9 @@ export function trashProject(name) {
   if (isBusy(name)) throw projects.httpError(409, 'This project is busy. Stop its agents and shells before deleting.');
   projects.trash(name);
   sessions.delete(name);
+  // A new chat can reuse the name, and must not inherit these.
+  const list = schedules();
+  if (list.some(x => x.project === name)) saveSchedules(list.filter(x => x.project !== name));
   for (const [id, a] of agents) if (a.project === name) agents.delete(id);
   for (const [id, sh] of shells) if (sh.project === name) shells.delete(id);
 }

@@ -752,3 +752,93 @@ test('the autopilot request limit comes from settings, and spending adds up ever
   assert.deepEqual(sp.chats.filter(c => c.name.startsWith('spend-')).map(c => [c.name, c.cost]), [['spend-a', 1.25], ['spend-b', 0.5]]);
   assert.ok(sp.total >= 1.75 && sp.unpriced >= 2);
 });
+
+test('provider quirks: odd prices count as unknown, error bodies, context overflow codes, Mistral ids, bad tool arguments', async () => {
+  const compat = await import('../server/compat.js');
+  const anthropic = await import('../server/anthropic.js');
+  const server = http.createServer(async (req, res) => {
+    if (req.url === '/v1/models') {
+      return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [
+        { id: 'router', pricing: { prompt: '-1', completion: '-1' } }, { id: 'other-shape', pricing: { input: 1, output: 2 } }, { id: 'priced', pricing: { prompt: '0.000001', completion: '0.000002' } },
+      ] }));
+    }
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const error = JSON.parse(raw).model === 'big' ? { code: 400, message: "This endpoint's maximum context length is 8192 tokens" } : 'model not found';
+    res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error }));
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ providers: { quirk: { name: 'Quirk', baseURL: `http://127.0.0.1:${server.address().port}/v1` } } }));
+  try {
+    const models = (await compat.compatModels()).filter(m => m.provider === 'quirk');
+    assert.deepEqual(models.map(m => [m.id, m.price]), [['quirk:router', undefined], ['quirk:other-shape', undefined], ['quirk:priced', [1, 2]]]);
+    assert.equal(await compat.costOf('quirk:router', { input_tokens: 20000, output_tokens: 10 }), undefined, 'a router price of -1 is unknown, not negative');
+    const call = model => compat.callCompat({ model, instructions: '', input: [{ role: 'user', content: 'hi' }], tools: [] }, {}, AbortSignal.timeout(20000));
+    await assert.rejects(call('quirk:big'), err => err.code === 'context_length_exceeded', 'a numeric code still means overflow, so the chat compacts');
+    await assert.rejects(call('quirk:gone'), /Quirk 400: model not found/);
+  } finally {
+    server.close();
+    fs.writeFileSync(settingsFile, '{}');
+  }
+  const history = [{ type: 'function_call', call_id: 'call_abc_123', name: 'Read', arguments: '{"file_' }, { type: 'function_call_output', call_id: 'call_abc_123', output: 'ok' }];
+  const [, asked, answered] = compat.toMessages('sys', history, 'mistral');
+  assert.match(asked.tool_calls[0].id, /^[a-zA-Z0-9]{9}$/);
+  assert.equal(answered.tool_call_id, asked.tool_calls[0].id);
+  assert.equal(compat.toMessages('sys', history, 'local')[1].tool_calls[0].id, 'call_abc_123', 'other providers keep the id');
+  assert.deepEqual(anthropic.toMessages(history)[0].content[0].input, {}, 'cut-off JSON arguments from another model become an empty object');
+});
+
+test('Undo file handles renames and treats paths literally', { timeout: 30000 }, async () => {
+  projects.create('undo2');
+  const s = agent.getSession('undo2');
+  const dir = projects.projectDir('undo2');
+  for (const [f, c] of [['old.txt', 'old'], ['[id].txt', 'bracket'], ['i.txt', 'i1'], ['d.txt', 'd1']]) fs.writeFileSync(path.join(dir, f), c);
+  agent.setOption(s, 'mode', 'acceptEdits');
+  const script = [['Write', { file_path: '[id].txt', content: 'changed' }], ['Write', { file_path: 'i.txt', content: 'i2' }]];
+  const model = fakeModel(n => script[n - 1]);
+  try {
+    await agent.submit('undo2', 'change things');
+    await idle(s);
+  } finally { model.restore(); }
+  fs.renameSync(path.join(dir, 'old.txt'), path.join(dir, 'new.txt'));
+  const heads = (await agent.changes('undo2')).diff.split('\n').filter(l => l.startsWith('diff --git'));
+  assert.ok(heads.includes('diff --git a/old.txt b/old.txt') && heads.includes('diff --git a/new.txt b/new.txt'), `a rename is a delete plus an add: ${heads}`);
+  await agent.undoFile('undo2', 'new.txt');
+  await agent.undoFile('undo2', 'old.txt');
+  assert.equal(fs.readFileSync(path.join(dir, 'old.txt'), 'utf8'), 'old');
+  assert.ok(!fs.existsSync(path.join(dir, 'new.txt')));
+  await agent.undoFile('undo2', '[id].txt');
+  assert.equal(fs.readFileSync(path.join(dir, '[id].txt'), 'utf8'), 'bracket');
+  assert.equal(fs.readFileSync(path.join(dir, 'i.txt'), 'utf8'), 'i2', '[id] is a file name, not a pattern matching i.txt');
+});
+
+test('an isolated subagent that commits by itself keeps its branch', { timeout: 30000 }, async () => {
+  projects.create('selfcommit');
+  const s = agent.getSession('selfcommit');
+  const cwd = projects.projectDir('selfcommit');
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd }).toString().trim();
+  git('init', '-q'); fs.writeFileSync(path.join(cwd, 'a.txt'), 'a'); git('add', '-A'); git('commit', '-qm', 'base');
+  agent.setOption(s, 'mode', 'bypass');
+  const model = fakeModel(n => (n === 1 ? ['Bash', { command: 'echo mine > mine.txt && git add -A && git -c user.name=t -c user.email=t@t commit -qm "agent commit"' }] : null));
+  let text;
+  try { text = await agent.runSubagent(s, { description: 'commit it', prompt: 'commit', isolation: 'worktree' }); } finally { model.restore(); }
+  const branch = /committed on branch (nexus\/\S+)\./.exec(text)?.[1];
+  assert.ok(branch, text);
+  assert.equal(git('show', `${branch}:mine.txt`), 'mine');
+  assert.ok(agent.listAgents().some(a => a.branch === branch && a.status === 'completed'));
+});
+
+test('deleting a chat drops its schedules, and /watch reads CRLF files but not quoted text', async () => {
+  projects.create('doomed');
+  await agent.submit('doomed', '/schedule 0 9 * * * /review');
+  assert.ok(agent.schedules().some(x => x.project === 'doomed'));
+  agent.trashProject('doomed');
+  assert.ok(!agent.schedules().some(x => x.project === 'doomed'), 'a new chat that reuses the name must not inherit it');
+
+  const { findAIComments } = await import('../server/tools.js');
+  const dir = fs.mkdtempSync(path.join(tmp, 'ai-'));
+  fs.writeFileSync(path.join(dir, 'a.js'), 'x();\r\n  // handle empty input AI!\r\nconst s = "# AI! not a comment";\r\n');
+  fs.writeFileSync(path.join(dir, 'b.py'), "write('# AI! inside a string\\n')\n# AI! real one\n");
+  assert.deepEqual((await findAIComments(dir)).map(x => `${x.file}:${x.line}:${x.text}`).sort(), ['a.js:2:// handle empty input AI!', 'b.py:2:# AI! real one']);
+});

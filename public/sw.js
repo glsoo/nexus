@@ -7,7 +7,7 @@ self.addEventListener('push', e => e.waitUntil((async () => {
   // Someone looking at Nexus already sees it. Safari drops subscriptions that receive a push without a notification, so it always shows one.
   const safari = /Safari/.test(navigator.userAgent) && !/Chrom|Edg|Android/.test(navigator.userAgent);
   if (!safari && windows.some(w => w.focused && w.visibilityState === 'visible')) return;
-  await self.registration.showNotification(title, { body, tag: `nexus-${project}`, icon: '/icon-180.png', data: { project } });
+  await self.registration.showNotification(title, { body, tag: `nexus-${project}`, renotify: true, icon: '/icon-180.png', data: { project } });
 })()));
 
 self.addEventListener('notificationclick', e => {

@@ -37,10 +37,12 @@ function userBlocks(content) {
   return content.map(c => (c.type === 'input_image' ? imageBlock(c.image_url) : { type: 'text', text: c.text })).filter(c => c.type !== 'text' || c.text);
 }
 
+const objectArgs = s => { try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; } };
+
 function blocksOf(item) {
   if (item.anthropic) return null;
   if (item.type === 'anthropic_turn') return ['assistant', item.content];
-  if (item.type === 'function_call') return ['assistant', [{ type: 'tool_use', id: item.call_id, name: item.name, input: JSON.parse(item.arguments || '{}') }]];
+  if (item.type === 'function_call') return ['assistant', [{ type: 'tool_use', id: item.call_id, name: item.name, input: objectArgs(item.arguments) }]];
   if (item.type === 'function_call_output') {
     const content = typeof item.output === 'string' ? item.output : item.output.map(c => imageBlock(c.image_url));
     return ['user', [{ type: 'tool_result', tool_use_id: item.call_id, content }]];

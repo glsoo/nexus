@@ -52,12 +52,14 @@ export async function clone(url) {
     try { fs.mkdirSync(projectDir(name)); break; } catch (err) { if (err.code !== 'EEXIST') throw err; name = `${base}-${n}`; }
   }
   try {
-    await promisify(execFile)('git', ['clone', '-q', '--', url, projectDir(name)], { env: { ...childEnv(), GIT_TERMINAL_PROMPT: '0' }, timeout: 600000, windowsHide: true });
+    // Nobody can answer a password or host-key prompt here, so those fail fast instead of hanging until the timeout.
+    await promisify(execFile)('git', ['clone', '-q', '--', url, projectDir(name)], { env: { ...childEnv(), GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes' }, timeout: 600000, windowsHide: true });
   } catch (err) {
     fs.rmSync(projectDir(name), { recursive: true, force: true });
     throw httpError(400, `git clone failed: ${(err.stderr || err.message).trim().split('\n').at(-1)}`);
   }
   // The chat's own files stay out of the repo's commits and pull requests.
+  fs.mkdirSync(path.join(projectDir(name), '.git', 'info'), { recursive: true }); // a custom init.templateDir can leave it out
   fs.appendFileSync(path.join(projectDir(name), '.git', 'info', 'exclude'), '\n.nexus/\n');
   return name;
 }

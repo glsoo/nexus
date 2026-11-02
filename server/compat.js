@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { isAnthropic } from './anthropic.js';
 import { postWithRetry, readSettings, sseEvents } from './util.js';
 
@@ -39,6 +40,8 @@ const headers = (id, p) => ({
 
 // ---- models ----
 const lists = new Map();
+// Per-token prices become per-million. Routers list -1 ("varies") and other servers use other shapes, so anything else is no price.
+const perM = v => { const n = Number(v) * 1e6; return v !== null && v !== '' && Number.isFinite(n) && n >= 0 ? n : undefined; };
 async function listModels(id, p) {
   const hit = lists.get(id);
   if (hit && Date.now() - hit.at < (p.local ? 15_000 : 3600_000)) return hit.list;
@@ -49,7 +52,8 @@ async function listModels(id, p) {
   const list = data.filter(m => (!m.supported_parameters || m.supported_parameters.includes('tools')) && !/embed|moderation|whisper|tts|transcri|dall-e|imagen|veo|guard/i.test(m.id)).map(m => ({
     id: `${id}:${m.id.replace(/^models\//, '')}`, name: m.name || m.id, provider: id, providerName: p.local ? `${p.name} · this computer` : p.name,
     context: m.context_length || undefined, efforts: [],
-    ...(m.pricing ? { price: [Number(m.pricing.prompt) * 1e6, Number(m.pricing.completion) * 1e6], cachedPrice: m.pricing.input_cache_read ? Number(m.pricing.input_cache_read) * 1e6 : undefined } : p.local ? { price: [0, 0] } : {}),
+    ...(perM(m.pricing?.prompt) !== undefined && perM(m.pricing?.completion) !== undefined
+      ? { price: [perM(m.pricing.prompt), perM(m.pricing.completion)], cachedPrice: perM(m.pricing.input_cache_read) } : p.local ? { price: [0, 0] } : {}),
   }));
   lists.set(id, { at: Date.now(), list });
   return list;
@@ -71,8 +75,10 @@ export async function costOf(model, u) {
   const id = providerOf(model);
   const own = id ? (await listModels(id, providers()[id]).catch(() => [])).find(x => x.id === model) : null;
   // A server that lists no prices (DeepSeek, Gemini, ...) borrows the catalog's price for the same model name.
-  const vendor = `openrouter:${id ? '' : isAnthropic(model) ? 'anthropic/' : 'openai/'}`, want = bare(id ? model.slice(id.length + 1) : model);
-  const m = own?.price ? own : (await priceList()).find(x => x.id.startsWith(vendor) && bare(x.id) === want);
+  const vendor = `openrouter:${id ? '' : isAnthropic(model) ? 'anthropic/' : 'openai/'}`, name = id ? model.slice(id.length + 1) : model, want = bare(name);
+  const list = own?.price ? [] : await priceList();
+  // A dated model keeps its own price when the catalog has it, before falling back to any version of the same name.
+  const m = own?.price ? own : list.find(x => x.id === vendor + name) || list.find(x => x.id.startsWith(vendor) && bare(x.id) === want);
   if (!m?.price || !u) return undefined;
   const cached = u.input_tokens_details?.cached_tokens || 0;
   return (((u.input_tokens || 0) - cached) * m.price[0] + cached * (m.cachedPrice ?? m.price[0]) + (u.output_tokens || 0) * m.price[1]) / 1e6;
@@ -89,7 +95,10 @@ export const compatContext = model => lists.get(providerOf(model))?.list.find(m 
 // ---- requests ----
 const part = c => (c.type === 'input_image' ? { type: 'image_url', image_url: { url: c.image_url } } : { type: 'text', text: c.text });
 
-export function toMessages(instructions, items) {
+// Mistral only accepts 9-character alphanumeric tool call ids, so a chat that started elsewhere maps its ids onto that shape.
+const mistralId = id => /^[a-zA-Z0-9]{9}$/.test(id) ? id : createHash('sha256').update(String(id)).digest('hex').slice(0, 9);
+export function toMessages(instructions, items, provider) {
+  const cid = provider === 'mistral' ? mistralId : x => x;
   const messages = [{ role: 'system', content: instructions }];
   let images = []; // a tool message can only hold text, so screenshots follow the tool results as a user message
   const flush = () => { if (images.length) messages.push({ role: 'user', content: images }); images = []; };
@@ -97,12 +106,12 @@ export function toMessages(instructions, items) {
     if (item.type !== 'function_call_output') flush();
     const last = messages.at(-1);
     if (item.type === 'function_call') {
-      const call = { id: item.call_id, type: 'function', function: { name: item.name, arguments: item.arguments || '{}' } };
+      const call = { id: cid(item.call_id), type: 'function', function: { name: item.name, arguments: item.arguments || '{}' } };
       if (last.role === 'assistant') (last.tool_calls ||= []).push(call);
       else messages.push({ role: 'assistant', content: null, tool_calls: [call] });
     } else if (item.type === 'function_call_output') {
       const text = typeof item.output === 'string';
-      messages.push({ role: 'tool', tool_call_id: item.call_id, content: text ? item.output : 'The image is attached in the next message.' });
+      messages.push({ role: 'tool', tool_call_id: cid(item.call_id), content: text ? item.output : 'The image is attached in the next message.' });
       if (!text) images.push(...item.output.map(part));
     } else if (item.type === 'message' && item.role === 'assistant') {
       messages.push({ role: 'assistant', content: item.content.map(c => c.text || '').join('') });
@@ -118,7 +127,7 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
   const id = providerOf(model), p = providers()[id];
   const fns = tools.filter(t => t.type === 'function').map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
   const body = {
-    model: model.slice(id.length + 1), messages: toMessages(instructions, input), stream: true, stream_options: { include_usage: true },
+    model: model.slice(id.length + 1), messages: toMessages(instructions, input, id), stream: true, stream_options: { include_usage: true },
     ...(fns.length ? { tools: fns, ...(toolChoice ? { tool_choice: toolChoice } : {}) } : {}),
   };
   let res;
@@ -126,7 +135,7 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
     res = await postWithRetry(p.name, `${p.baseURL}/chat/completions`, headers(id, p), body, signal);
   } catch (err) {
     if (err.name === 'TypeError') throw new Error(`Couldn't reach ${p.name} at ${p.baseURL}. Is it running?`);
-    if (/context.{0,20}(length|window)|too long|maximum context/i.test(err.message)) err.code ||= 'context_length_exceeded';
+    if (/context.{0,20}(length|window)|too long|maximum context/i.test(err.message)) err.code = 'context_length_exceeded'; // OpenRouter sends a numeric code
     throw err;
   }
   const calls = [], open = {};
