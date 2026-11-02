@@ -26,7 +26,7 @@ function screen({ editing = false, height = 844, offsetTop = 0, visual = true } 
     addEventListener: (k, fn) => { documentEvents[k] = fn; },
   };
   const context = {
-    window: { visualViewport: visual ? vv : undefined }, document, innerHeight: 844,
+    window: { visualViewport: visual ? vv : undefined }, document, innerHeight: 844, innerWidth: 390,
     addEventListener: (k, fn) => { events[k] = fn; }, requestAnimationFrame: fn => fn(),
     scrollTo() {}, termState: null, $log: { isConnected: true, scrollTop: 0, scrollHeight: 2000 },
   };
@@ -51,6 +51,19 @@ test('keyboard layout follows both visual viewport height and panning offset', (
   s.vv.offsetTop = 110;
   s.visualEvents.scroll();
   assert.equal(s.properties.get('--app-top'), '110px');
+});
+
+test('a keyboard is detected even when innerHeight shrinks with it, and rotating resets the measurement', () => {
+  const s = screen({ editing: true });
+  s.context.innerHeight = s.vv.height = 380;
+  s.visualEvents.resize();
+  assert.equal(s.properties.get('--app-h'), '380px');
+  assert.ok(s.classes.has('kb'));
+  s.context.innerWidth = 844;
+  s.context.innerHeight = s.vv.height = 390;
+  s.visualEvents.resize();
+  assert.equal(s.properties.has('--app-h'), false);
+  assert.equal(s.classes.has('kb'), false);
 });
 
 test('blur releases keyboard height even before the visual viewport recovers', () => {

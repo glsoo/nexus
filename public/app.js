@@ -1049,12 +1049,16 @@ async function boot() {
 
 // Let CSS fill the screen normally; only constrain it to the visual viewport for a keyboard.
 // Keeping a pixel height after the keyboard closes can leave a large empty area below the composer.
+// innerHeight can shrink along with the keyboard, so measure against the tallest height seen at this width.
 const vv = window.visualViewport;
+let tallest = 0, seenWidth;
 function viewport() {
   if (vv?.scale > 1.01) return;
   const root = document.documentElement;
   const editing = document.activeElement?.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
-  const opened = !!(vv && editing && innerHeight - vv.height > 120);
+  if (innerWidth !== seenWidth) { seenWidth = innerWidth; tallest = 0; }
+  tallest = Math.max(tallest, innerHeight, vv?.height || 0);
+  const opened = !!(vv && editing && tallest - vv.height > 120);
   const was = root.classList.contains('kb');
   if (opened) {
     root.style.setProperty('--app-h', `${Math.round(vv.height)}px`);
