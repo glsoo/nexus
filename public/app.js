@@ -1261,6 +1261,16 @@ function filesView(view) {
     toast('Saved.');
   });
   const newBtn = h('button', { class: 'btn small', onclick: () => newFile(open) }, 'New file');
+  // Hands the open file, and the selected lines if any, to the chat as an @ mention.
+  const askBtn = h('button', { class: 'btn small', disabled: true, title: 'Ask about this file, or about the selected lines', onclick: () => {
+    const line = i => area.value.slice(0, i).split('\n').length;
+    const [a, b] = [line(area.selectionStart), line(Math.max(area.selectionStart, area.selectionEnd - 1))];
+    const ref = `@${current}${area.selectionEnd > area.selectionStart ? (a === b ? ` line ${a}` : ` lines ${a}-${b}`) : ''} `;
+    drafts[S.project] = `${(drafts[S.project] || '').trimEnd()} ${ref}`.trimStart();
+    go(S.project, null, 'chat');
+    $input.focus();
+    $input.setSelectionRange($input.value.length, $input.value.length);
+  } }, 'Ask Nexus');
   const open = guard(async rel => {
     if (!saveBtn.disabled && !await confirmBox('Discard unsaved changes?', `${current} has changes that aren't saved.`, 'Discard', 'danger')) return;
     try {
@@ -1272,7 +1282,7 @@ function filesView(view) {
       if (!/no such file/i.test(e.message)) throw e;
       area.value = ''; area.disabled = false;
     }
-    current = rel; pathEl.textContent = rel; pathEl.classList.remove('muted'); saveBtn.disabled = true;
+    current = rel; pathEl.textContent = rel; pathEl.classList.remove('muted'); saveBtn.disabled = true; askBtn.disabled = false;
     tree.querySelectorAll('.on').forEach(b => b.classList.remove('on'));
     tree.querySelector(`[data-path="${CSS.escape(rel)}"]`)?.classList.add('on');
   });
@@ -1294,7 +1304,7 @@ function filesView(view) {
   }
   const root = h('ul');
   tree.append(root);
-  view.append(h('div', { class: 'files' }, tree, h('div', { class: 'editor' }, h('div', { class: 'ebar' }, pathEl, newBtn, saveBtn), area)));
+  view.append(h('div', { class: 'files' }, tree, h('div', { class: 'editor' }, h('div', { class: 'ebar' }, pathEl, askBtn, newBtn, saveBtn), area)));
   guard(list)('.', root);
   if (pendingOpen) { open(pendingOpen); pendingOpen = null; }
 }
