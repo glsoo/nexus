@@ -203,9 +203,10 @@ const BROWSERS = {
 };
 
 async function screenshot({ url, width = 1280, height = 800 }, { cwd, signal }) {
+  // Checked before looking for a browser, so the answer is the same on servers that have none.
+  if (/^(\\\\|\/\/)/.test(String(url)) || /^\\\\/.test(resolve(cwd, String(url)))) throw new Error('Network paths are not supported.'); // Windows would send your login hash to that host
   const browser = (BROWSERS[process.platform] || BROWSERS.linux).find(f => fs.existsSync(f));
   if (!browser) throw new Error('Screenshot needs Chrome, Edge or Chromium installed.');
-  if (/^(\\\\|\/\/)/.test(String(url)) || /^\\\\/.test(resolve(cwd, String(url)))) throw new Error('Network paths are not supported.'); // Windows would send your login hash to that host
   const target = /^https?:\/\//i.test(url) ? url : pathToFileURL(resolve(cwd, url)).href;
   const w = Math.min(Math.max(Math.round(width) || 1280, 200), 3840), h = Math.min(Math.max(Math.round(height) || 800, 200), 4000);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-shot-'));
