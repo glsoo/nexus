@@ -719,7 +719,7 @@ const setMode = async value => {
   sendWs({ t: 'option', key: 'mode', value });
 };
 const toggleAutopilot = async () => {
-  if (!S.state.autopilot && !await confirmBox('Turn on autopilot?', `The agent stops asking you. It runs commands and edits files without approval, approves its own plan in plan mode, and answers its own questions, until the task is done or it has made 150 model requests. Plan mode still can't change anything before the plan. Stop works as usual.`, 'Turn on', 'danger')) return;
+  if (!S.state.autopilot && !await confirmBox('Turn on autopilot?', `The agent stops asking you. It runs commands and edits files without approval, approves its own plan in plan mode, and answers its own questions, until the task is done or it reaches the request limit in Settings. Plan mode still can't change anything before the plan. Stop works as usual.`, 'Turn on', 'danger')) return;
   setOption('autopilot', !S.state.autopilot);
 };
 
@@ -1575,6 +1575,8 @@ async function settingsPage(hamb) {
     h('p', { class: 'small muted mlinks' }, 'Browse online: ', extLink('aiagentslist.com', 'https://aiagentslist.com/mcp-servers'), ' · ', extLink('Hugging Face Spaces', 'https://huggingface.co/spaces?filter=mcp-server'), ' · ', extLink('MCP on GitHub', 'https://github.com/modelcontextprotocol/servers')),
     await globalPromptsCard(),
     notifyCard(),
+    await spendCard(),
+    autopilotCard(area),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact and Notification; a hook exiting with 2 blocks a tool call or prompt. MCP servers reconnect within seconds of saving.'),
     h('p', { class: 'small muted' }, 'Models: Ollama and LM Studio appear in the model picker while they run on this computer. Set OPENROUTER_API_KEY (hundreds of models, some free), GEMINI_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY, MISTRAL_API_KEY or XAI_API_KEY in Nexus\'s environment, or add any OpenAI-compatible server under "providers", as in the example.'),
@@ -1586,6 +1588,33 @@ async function settingsPage(hamb) {
     h('h2', {}, 'Example'),
     h('pre', { class: 'out' }, JSON.stringify({ autoCompactTokens: 300000, providers: { openrouter: { apiKey: 'sk-or-…' }, groq: { name: 'Groq', baseURL: 'https://api.groq.com/openai/v1', apiKey: 'gsk_…' } }, hooks: { PreToolUse: [{ matcher: 'Bash', command: 'jq -r .input.command >> ~/.nexus/bash.log' }] }, mcpServers: { memory: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] } } }, null, 2)),
   ].flat());
+}
+
+async function spendCard() {
+  const sp = await guard(() => api('GET', '/api/spending'))();
+  if (!sp) return [];
+  return [h('h2', {}, 'Spending'),
+    h('div', { class: 'card' }, h('div', { class: 'title' }, `About ${usd(sp.total)} across all chats`),
+      h('div', { class: 'small muted' }, `Estimated from list prices, like each chat's meter.${sp.unpriced ? ` Not counting ${sp.unpriced} requests to models with no known price.` : ''}`),
+      sp.chats.map(c => h('div', { class: 'rowline spend' }, h('button', { class: 'linkbtn grow', type: 'button', onclick: () => go(c.name, null, 'chat') }, pretty(c.name)), h('span', { class: 'mono' }, usd(c.cost)))))];
+}
+
+// Writes one key of settings.json through the same endpoint as the editor below, keeping the editor in step.
+function autopilotCard(area) {
+  const input = h('input', { class: 'field', type: 'number', id: 'apreq', min: 0, step: 1, inputmode: 'numeric', 'aria-describedby': 'apreq-hint' });
+  guard(async () => { input.value = JSON.parse((await api('GET', '/api/settings')).text).autopilotRequests ?? 150; })();
+  const save = guard(async () => {
+    const n = Number(input.value);
+    if (!Number.isInteger(n) || n < 0) return toast('Use a whole number, or 0 for no limit.');
+    const { text } = await api('GET', '/api/settings');
+    const next = `${JSON.stringify({ ...JSON.parse(text), autopilotRequests: n }, null, 2)}\n`;
+    await api('PUT', '/api/settings', { text: next });
+    if (area.value === text) area.value = next;
+    toast(n ? `Autopilot now pauses after ${n} requests in one go.` : 'Autopilot has no request limit now. Only a budget stops it.');
+  });
+  return [h('h2', {}, h('label', { htmlFor: 'apreq' }, 'Autopilot request limit')),
+    h('div', { class: 'card' }, h('div', { class: 'rowline' }, input, h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Save')),
+      h('p', { class: 'small muted', id: 'apreq-hint' }, 'How many model requests autopilot makes in one go before it pauses for you. Long tasks may need 500 or more. 0 means no limit, so set a budget with /budget to cap the cost. Applies right away, even to a running chat.'))];
 }
 
 function notifyCard() {

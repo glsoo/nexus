@@ -203,7 +203,8 @@ function askUser(s, sink, entry, signal, kind) {
   return waitFor(s, entry, signal);
 }
 const AUTO_ANSWER = 'Autopilot is on and the user is away, so nobody will answer. Use your best judgment, state the assumption you made, and continue.';
-const AUTOPILOT_STEPS = 150; // ponytail: fixed cap so an unwatched turn can't run up an unbounded bill; make it a setting if people hit it
+// A cap so an unwatched turn can't run up an unbounded bill. settings.json "autopilotRequests" changes it; 0 means no cap, leaving only the budget.
+export const autopilotLimit = () => { const n = readSettings().autopilotRequests; return Number.isInteger(n) && n >= 0 ? n : 150; };
 
 async function runTool(s, call, ctx) {
   const { sink, signal } = ctx;
@@ -328,8 +329,8 @@ async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLa
     if (signal.aborted) throw new DOMException('Interrupted', 'AbortError');
     if (compact && compactAt(s) && (result.usage?.input_tokens || 0) > compactAt(s)) await compact();
     if (!calls.length && !drain?.pendingCount?.()) return result.output.filter(o => o.type === 'message').flatMap(o => o.content).map(c => c.text || '').join('');
-    if (s.state.autopilot && ++autoSteps >= AUTOPILOT_STEPS) {
-      const text = `Autopilot stopped here after ${AUTOPILOT_STEPS} model requests in one go, so an unwatched loop can't run up the bill. Send a message to continue.`;
+    if (s.state.autopilot && ++autoSteps >= (autopilotLimit() || Infinity)) {
+      const text = `Autopilot stopped here after ${autoSteps} model requests in one go, so an unwatched loop can't run up the bill. Send a message to continue, or raise the limit in Settings.`;
       sink.add({ type: 'system', text });
       return text;
     }
@@ -772,7 +773,7 @@ async function slash(s, text) {
       if (arg === 'on' || arg === 'off') setOption(s, 'autopilot', arg === 'on');
       else if (arg) return note(s, 'Usage: /autopilot [on|off]', 'error');
       return note(s, s.state.autopilot
-        ? `Autopilot is on. The agent approves its own tool calls${s.state.mode === 'plan' ? ' and its plan' : ''}, answers its own questions and keeps going, for up to ${AUTOPILOT_STEPS} model requests at a time.`
+        ? `Autopilot is on. The agent approves its own tool calls${s.state.mode === 'plan' ? ' and its plan' : ''}, answers its own questions and keeps going, ${autopilotLimit() ? `for up to ${autopilotLimit()} model requests at a time` : 'with no request limit'}. Change the limit in Settings.`
         : 'Autopilot is off. The agent stops to ask when it needs you.');
     case 'cost': {
       const u = s.state.usage;
@@ -1047,6 +1048,16 @@ export function search(q) {
     if (hits.length || terms.every(t => name.toLowerCase().replace(/[-_]+/g, ' ').includes(t))) out.push({ name, hits });
   }
   return out.slice(0, 30);
+}
+
+// Settings shows what every chat has cost, from the same estimates as each chat's meter.
+export function spending() {
+  const chats = projects.list().map(({ name }) => {
+    const { cost = 0, unpriced = 0 } = (sessions.get(name)?.state ?? projects.load(name)).usage;
+    return { name, cost, unpriced };
+  });
+  const sum = key => chats.reduce((a, c) => a + c[key], 0);
+  return { total: sum('cost'), unpriced: sum('unpriced'), chats: chats.filter(c => c.cost > 0).sort((a, b) => b.cost - a.cost).slice(0, 10) };
 }
 
 export { killGroup, shells };

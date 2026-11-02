@@ -60,6 +60,9 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .found .snip { width: 100%; background: none; border: 0; border-radius: 6px; text-align: left; padding: 4px 8px 6px 16px; color: var(--muted); font-size: 12.5px; cursor: pointer; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .found .snip:hover { background: var(--card); color: var(--fg); }
 .nohit { padding: 8px; }
+.spend { margin-top: 6px; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--info); text-align: left; cursor: pointer; font: inherit; }
+#apreq { width: 140px; }
 .e.jumped { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); flex: none; }
 .dot.busy { background: var(--accent); animation: pulse 1.4s infinite; }

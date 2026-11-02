@@ -225,6 +225,7 @@ route('POST', '/api/shells/:id/kill', ({ p }) => {
   return {};
 });
 
+route('GET', '/api/spending', () => agent.spending());
 route('GET', '/api/settings', () => ({
   text: fs.existsSync(settingsPath()) ? fs.readFileSync(settingsPath(), 'utf8') : '{\n  "hooks": {},\n  "mcpServers": {}\n}\n',
   mcp: mcp.status(),

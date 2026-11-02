@@ -724,3 +724,31 @@ test('/watch turns an AI! comment saved in any editor into a prompt, once', { ti
     assert.equal(prompts().length, 2);
   } finally { model.restore(); }
 });
+
+test('the autopilot request limit comes from settings, and spending adds up every chat', { timeout: 30000 }, async () => {
+  const before = fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile, 'utf8') : null;
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ autopilotRequests: 3 }));
+  projects.create('longrun');
+  const s = agent.getSession('longrun');
+  agent.setOption(s, 'autopilot', true);
+  const model = fakeModel(() => ['Glob', { pattern: '*' }]); // never finishes on its own
+  try {
+    await agent.submit('longrun', 'keep going');
+    await idle(s, 15000);
+  } finally {
+    model.restore();
+    if (before === null) fs.rmSync(settingsFile); else fs.writeFileSync(settingsFile, before);
+  }
+  assert.equal(model.sent.length, 3);
+  assert.match(s.state.log.at(-1).text, /stopped here after 3 model requests.*raise the limit in Settings/);
+  assert.equal(agent.autopilotLimit(), 150, 'the default once the setting is gone');
+
+  projects.create('spend-a');
+  projects.create('spend-b');
+  agent.getSession('spend-a').state.usage.cost = 1.25;
+  projects.save('spend-b', { usage: { cost: 0.5, unpriced: 2 } });
+  const sp = agent.spending();
+  assert.deepEqual(sp.chats.filter(c => c.name.startsWith('spend-')).map(c => [c.name, c.cost]), [['spend-a', 1.25], ['spend-b', 0.5]]);
+  assert.ok(sp.total >= 1.75 && sp.unpriced >= 2);
+});
