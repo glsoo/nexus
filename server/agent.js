@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { askAnthropic, callAnthropic, anthropicContext, isAnthropic } from './anthropic.js';
 import * as checkpoint from './checkpoint.js';
 import { callCompat, compatContext, costOf, providerOf } from './compat.js';
@@ -9,7 +11,7 @@ import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
 import { decide, execTool, hasTool, killGroup, ruleKey, shells, TOOL_DEFS } from './tools.js';
-import { clip, NEXUS_HOME, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
+import { childEnv, clip, NEXUS_HOME, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
 
 export const hub = new EventEmitter();
 hub.setMaxListeners(0);
@@ -135,7 +137,7 @@ function activeAgent(s) {
 }
 
 // sub: a subagent brings its own role, so the chat's agent type stays out of its prompt.
-function systemPrompt(s, extra = '', sub = false) {
+function systemPrompt(s, extra = '', sub = false, dir = cwdOf(s)) {
   const cwd = cwdOf(s);
   const skillList = skills(cwd).map(k => `- ${k.name}: ${k.description}`).join('\n');
   const agentList = agentDefs(cwd).map(a => `- ${a.name}: ${a.description}`).join('\n');
@@ -149,7 +151,7 @@ function systemPrompt(s, extra = '', sub = false) {
   return `${base}
 
 # Environment
-Project directory: ${cwd}
+Project directory: ${dir}
 The conversation is stored in .nexus/ inside it. Leave that folder alone.
 Platform: ${process.platform}. Date: ${new Date().toISOString().slice(0, 10)}. Permission mode: ${s.state.mode}.
 
@@ -213,7 +215,7 @@ async function runTool(s, call, ctx) {
     return output;
   };
   if (!args) return finish('Tool arguments were not valid JSON. Retry with valid JSON.', 'error');
-  const cwd = cwdOf(s);
+  const cwd = ctx.cwd || cwdOf(s);
 
   let verdict = decide(s.state, call.name, args, cwd);
   if (verdict.action === 'deny') return finish(verdict.reason, 'denied');
@@ -238,7 +240,7 @@ async function runTool(s, call, ctx) {
 
 async function execute(s, name, args, entry, ctx) {
   const { sink, signal } = ctx;
-  const cwd = cwdOf(s);
+  const cwd = ctx.cwd || cwdOf(s);
   switch (name) {
     case 'TodoWrite':
       s.state.todos = Array.isArray(args.todos) ? args.todos : [];
@@ -289,7 +291,7 @@ async function runCalls(s, calls, ctx) {
 }
 
 // ---- the loop, shared by conversations and subagents ----
-async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLabel, drain, onUsage, compact }) {
+async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLabel, drain, onUsage, compact, cwd }) {
   let retriedCompact = false, autoSteps = 0;
   for (;;) {
     await drain?.();
@@ -319,7 +321,7 @@ async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLa
     items().push(...result.output);
     if (result.incomplete) sink.add({ type: 'system', text: `The model stopped early: ${result.incomplete}.` });
     const calls = result.output.filter(o => o.type === 'function_call');
-    if (calls.length) items().push(...await runCalls(s, calls, { sink, signal, agentLabel }));
+    if (calls.length) items().push(...await runCalls(s, calls, { sink, signal, agentLabel, cwd }));
     if (sink.persist) sink.persist();
     if (signal.aborted) throw new DOMException('Interrupted', 'AbortError');
     if (compact && compactAt(s) && (result.usage?.input_tokens || 0) > compactAt(s)) await compact();
@@ -356,15 +358,17 @@ export function listAgents() {
 export const getAgent = id => agents.get(id);
 export function stopAgent(id) { agents.get(id)?.controller?.abort(); }
 
-export function runSubagent(s, args, parentSignal) {
+export async function runSubagent(s, args, parentSignal) {
   const cwd = cwdOf(s);
   const def = agentDefs(cwd).find(d => d.name === (args.subagent_type || 'general-purpose'));
   if (!def) throw new Error(`Unknown subagent type "${args.subagent_type}". Available: ${agentDefs(cwd).map(d => d.name).join(', ')}`);
+  const id = newId('agent');
+  const dir = args.isolation === 'worktree' ? await addWorktree(cwd, id) : null;
   const background = Boolean(args.run_in_background);
   const controller = new AbortController();
   if (!background && parentSignal) parentSignal.addEventListener('abort', () => controller.abort(), { once: true });
   const a = {
-    id: newId('agent'), project: s.name, type: def.name, description: args.description || def.name, prompt: args.prompt, background,
+    id, branch: dir ? `nexus/${id}` : undefined, project: s.name, type: def.name, description: args.description || def.name, prompt: args.prompt, background,
     status: 'running', started: Date.now(), ended: null, tokens: 0, model: def.model || s.state.model, log: [], controller, result: '',
   };
   agents.set(a.id, a);
@@ -378,8 +382,8 @@ export function runSubagent(s, args, parentSignal) {
   };
   const allowed = def.tools ? new Set(def.tools) : null;
   const work = loop(s, {
-    items: () => items, sink, model: () => a.model, effort: () => s.state.effort, signal: controller.signal, agentLabel: a.description,
-    sys: () => systemPrompt(s, `\n\n# Your role\n${def.prompt}\nYour final message is returned to the agent that launched you, so include everything it needs.`, true),
+    items: () => items, sink, model: () => a.model, effort: () => s.state.effort, signal: controller.signal, agentLabel: a.description, cwd: dir || undefined,
+    sys: () => systemPrompt(s, `\n\n# Your role\n${def.prompt}\nYour final message is returned to the agent that launched you, so include everything it needs.${dir ? `\n\nYou work in your own git worktree, on branch ${a.branch} made from the last commit, so other agents can work at the same time. Change files only inside ${dir}. It holds only tracked files, so install dependencies first if you need to run anything. Whatever you leave there is committed to the branch for review when you finish.` : ''}`, true, dir || cwd),
     tools: () => toolList(t => {
       const n = t.name || t.type;
       return !SUB_EXCLUDED.has(n) && (!allowed || allowed.has(n));
@@ -392,7 +396,12 @@ export function runSubagent(s, args, parentSignal) {
     a.status = controller.signal.aborted ? 'stopped' : 'failed';
     a.result = err.message;
     return `Subagent ${a.status}: ${err.message}`;
-  }).then(text => {
+  }).then(async text => {
+    if (dir) {
+      const note = await closeWorktree(cwd, dir, a.branch, a.description);
+      a.result += `\n\n${note}`;
+      text += `\n\n${note}`;
+    }
     a.ended = Date.now();
     saveAgent(a);
     announce(a);
@@ -403,6 +412,47 @@ export function runSubagent(s, args, parentSignal) {
     enqueue(s, { text: `<background-agent id="${a.id}" description="${a.description}" status="${a.status}">\n${text}\n</background-agent>`, label: `Background agent "${a.description}" ${a.status}.` });
   });
   return `Started background agent ${a.id}. You will be notified when it finishes.`;
+}
+
+// ---- worktrees ----
+// An isolated agent works on its own branch in .nexus/worktrees, so agents editing at the same time never collide.
+const readText = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
+const git = (cwd, ...args) => promisify(execFile)('git', args, { cwd, env: childEnv(), timeout: 120000, windowsHide: true }).then(r => r.stdout.trim());
+
+async function addWorktree(cwd, id) {
+  const dir = path.join(cwd, '.nexus', 'worktrees', id);
+  try {
+    await git(cwd, 'worktree', 'add', '-q', '-b', `nexus/${id}`, dir, 'HEAD');
+  } catch (err) {
+    throw projects.httpError(400, `An isolated agent needs the project to be a git repository with at least one commit. ${err.stderr?.trim() || err.message}`);
+  }
+  // Otherwise a \`git add -A\` in the project would commit the worktrees as embedded repositories.
+  const exclude = path.resolve(cwd, await git(cwd, 'rev-parse', '--git-path', 'info/exclude'));
+  if (!(readText(exclude) ?? '').includes('.nexus/worktrees/')) {
+    fs.mkdirSync(path.dirname(exclude), { recursive: true });
+    fs.appendFileSync(exclude, '\n.nexus/worktrees/\n');
+  }
+  return dir;
+}
+
+// What the agent left is committed even after a failure or a stop, so no work is lost; the worktree only goes once that worked.
+async function closeWorktree(cwd, dir, branch, label) {
+  try {
+    await git(dir, 'add', '-A');
+    const files = (await git(dir, 'diff', '--cached', '--name-only')).split('\n').filter(Boolean);
+    if (files.length) {
+      const who = await git(dir, 'config', 'user.email').then(() => [], () => ['-c', 'user.name=Nexus', '-c', 'user.email=nexus@localhost']);
+      await git(dir, ...who, 'commit', '-q', '-m', `Agent: ${label}`);
+    }
+    await git(cwd, 'worktree', 'remove', dir);
+    if (!files.length) {
+      await git(cwd, 'branch', '-D', branch);
+      return 'It changed no files, so its worktree and branch are gone.';
+    }
+    return `Its changes (${files.length} file${files.length === 1 ? '' : 's'}) are committed on branch ${branch}. Review them with \`git diff HEAD...${branch}\`, then \`git merge ${branch}\`, or drop them with \`git branch -D ${branch}\`.`;
+  } catch (err) {
+    return `Its worktree is still at ${dir} on branch ${branch}, because cleaning up failed: ${err.stderr?.trim() || err.message}`;
+  }
 }
 
 // ---- compaction ----

@@ -189,9 +189,9 @@ route('GET', '/api/agents/:id', ({ p }) => {
 });
 route('POST', '/api/agents/:id/stop', ({ p }) => { agent.stopAgent(p.id); return {}; });
 route('POST', '/api/agents', async ({ req }) => {
-  const { project, type, description, prompt } = await body(req);
+  const { project, type, description, prompt, isolation } = await body(req);
   if (!prompt) throw fail(400, 'A prompt is required.');
-  agent.runSubagent(agent.getSession(need(project)), { subagent_type: type, description, prompt, run_in_background: true, notify: false });
+  await agent.runSubagent(agent.getSession(need(project)), { subagent_type: type, description, prompt, run_in_background: true, notify: false, isolation: isolation === 'worktree' ? 'worktree' : undefined });
   return {};
 });
 route('GET', '/api/shells/:id', ({ p }) => {

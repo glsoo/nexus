@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -407,4 +408,34 @@ test('the phone app manifest is linked, served publicly with its MIME type, and 
   const server = read('server/index.js');
   assert.match(server, /'\/manifest\.webmanifest': 'manifest\.webmanifest'/);
   assert.match(server, /'\.webmanifest': 'application\/manifest\+json'/);
+});
+
+test('an isolated subagent edits in its own worktree and hands back a branch', { timeout: 30000 }, async () => {
+  projects.create('trees');
+  const s = agent.getSession('trees');
+  const cwd = projects.projectDir('trees');
+  await assert.rejects(agent.runSubagent(s, { description: 'too early', prompt: 'x', isolation: 'worktree' }), /needs the project to be a git repository/);
+
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' }).trim();
+  git('init', '-q');
+  fs.writeFileSync(path.join(cwd, 'base.txt'), 'base');
+  git('add', 'base.txt');
+  git('commit', '-qm', 'base');
+  agent.setOption(s, 'mode', 'acceptEdits');
+  const model = fakeModel(n => (n === 1 ? ['Write', { file_path: 'made.txt', content: 'by the agent' }] : null));
+  let text, idle2;
+  try {
+    text = await agent.runSubagent(s, { description: 'make a file', prompt: 'write made.txt', isolation: 'worktree' });
+    idle2 = await agent.runSubagent(s, { description: 'look only', prompt: 'change nothing', isolation: 'worktree' });
+  } finally { model.restore(); }
+
+  const branch = /committed on branch (nexus\/\S+)\./.exec(text)?.[1];
+  assert.ok(branch, text);
+  assert.match(model.sent[0].instructions, /Project directory: .*worktrees/);
+  assert.equal(git('show', `${branch}:made.txt`), 'by the agent');
+  assert.ok(!fs.existsSync(path.join(cwd, 'made.txt')), 'the main checkout is untouched');
+  assert.deepEqual(fs.readdirSync(path.join(cwd, '.nexus', 'worktrees')), [], 'worktrees are removed once committed');
+  assert.match(idle2, /changed no files/);
+  assert.match(fs.readFileSync(path.join(cwd, '.git', 'info', 'exclude'), 'utf8'), /^\.nexus\/worktrees\/$/m, 'a git add -A in the project skips the worktrees');
+  assert.deepEqual(git('branch', '--list', 'nexus/*').split('\n').map(b => b.replace(/^[* ]+/, '')), [branch]);
 });

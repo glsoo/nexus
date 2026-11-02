@@ -28,7 +28,7 @@ export const TOOL_DEFS = [
   fn('TodoWrite', 'Replace the task list. Use it for multi-step work and keep exactly one item in_progress.',
     obj({ todos: { type: 'array', items: obj({ content: { type: 'string' }, status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] } }, ['content', 'status']) } }, ['todos'])),
   fn('Task', 'Launch a subagent with its own context. Multiple calls in one response run in parallel. With run_in_background you are notified when it finishes.',
-    obj({ description: str('3-5 word summary'), prompt: str('Complete, self-contained task'), subagent_type: str('Agent type, default general-purpose'), run_in_background: bool('Do not wait for the result') }, ['description', 'prompt'])),
+    obj({ description: str('3-5 word summary'), prompt: str('Complete, self-contained task'), subagent_type: str('Agent type, default general-purpose'), run_in_background: bool('Do not wait for the result'), isolation: { type: 'string', enum: ['worktree'], description: 'worktree: work on a new branch in its own git worktree, made from the last commit (uncommitted changes are not in it), so agents editing files in parallel never collide. Its changes come back as a branch to review and merge.' } }, ['description', 'prompt'])),
   fn('AskUserQuestion', 'Ask the user a question when blocked on a decision only they can make.', obj({ question: str('The question'), options: { type: 'array', items: { type: 'string' }, description: 'Suggested answers' } }, ['question'])),
   fn('ExitPlanMode', 'In plan mode, present the finished plan for the user to approve.', obj({ plan: str('The plan, in markdown') }, ['plan'])),
   fn('Skill', 'Load the full instructions of a listed skill.', obj({ name: str('Skill name') }, ['name'])),

@@ -1358,7 +1358,7 @@ async function fillAgents() {
     agents.length ? agents.slice(0, 100).map(a => h('div', { class: 'card rowline' },
       h('span', { class: `dot ${statusDot(a.status)}`, title: a.status }),
       h('div', { class: 'grow' }, h('div', { class: 'title' }, a.description),
-        h('div', { class: 'small muted' }, `${a.type} · ${pretty(a.project)} · ${a.status} · ${ago(a.started)} · ${fmt(a.tokens || 0)} tokens`)),
+        h('div', { class: 'small muted' }, `${a.type} · ${pretty(a.project)}${a.branch ? ` · ${a.branch}` : ''} · ${a.status} · ${ago(a.started)} · ${fmt(a.tokens || 0)} tokens`)),
       h('button', { class: 'btn small', onclick: () => agentDetail(a.id) }, 'View'),
       a.status === 'running' && h('button', { class: 'btn small danger', onclick: guard(() => api('POST', `/api/agents/${a.id}/stop`)) }, 'Stop'))) : h('p', { class: 'muted' }, 'No agents have run yet.'),
     h('h2', {}, `Background shells (${shells.length})`),
@@ -1388,15 +1388,17 @@ function launchForm(defs, project) {
   const type = h('select', { class: 'field', id: 'lt' }, defs.map(d => h('option', { value: d.name }, d.name)));
   const desc = h('input', { class: 'field', id: 'ld', placeholder: 'Audit dependencies' });
   const prompt = h('textarea', { class: 'field', id: 'lq', placeholder: 'A complete, self-contained task' });
+  const isolate = h('input', { type: 'checkbox', id: 'li' });
   return h('form', { class: 'card form', onsubmit: guard(async e => {
     e.preventDefault();
-    await api('POST', '/api/agents', { project: proj.value, type: type.value, description: desc.value || 'Manual agent', prompt: prompt.value });
+    await api('POST', '/api/agents', { project: proj.value, type: type.value, description: desc.value || 'Manual agent', prompt: prompt.value, isolation: isolate.checked ? 'worktree' : undefined });
     prompt.value = ''; desc.value = ''; document.activeElement.blur();
     refreshAgentsSoon();
   }) },
   h('div', { class: 'two' }, h('div', {}, h('label', { class: 'lbl', htmlFor: 'lp' }, 'Project'), proj), h('div', {}, h('label', { class: 'lbl', htmlFor: 'lt' }, 'Type'), type)),
   h('div', {}, h('label', { class: 'lbl', htmlFor: 'ld' }, 'Description'), desc),
   h('div', {}, h('label', { class: 'lbl', htmlFor: 'lq' }, 'Task'), prompt),
+  h('label', { class: 'rowline check', htmlFor: 'li' }, isolate, h('span', { class: 'grow' }, 'Own branch: work in a separate git worktree, so agents can edit at the same time. The changes come back as a branch to merge.')),
   h('div', {}, h('button', { class: 'btn primary', disabled: false }, 'Launch')),
   h('p', { class: 'small muted', style: 'margin:0' }, 'It runs in the background. Permission prompts appear in that project’s chat.'));
 }
