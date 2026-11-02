@@ -47,7 +47,8 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .side-head { display: flex; align-items: center; gap: 8px; padding: calc(12px + var(--sat)) 12px 8px max(12px, var(--sal)); font: 600 15px var(--mono); }
 .side-head img { width: 22px; height: 22px; }
 .side-head .icon-btn { margin-left: auto; }
-.side .new { margin: 4px 12px 10px; }
+.side .newrow { display: flex; gap: 6px; margin: 4px 12px 10px; }
+.side .new { flex: 1; }
 .plist { flex: 1; overflow-y: auto; padding: 0 8px; min-height: 0; }
 .pitem { display: flex; align-items: center; border-radius: 6px; position: relative; }
 .pitem.on { background: var(--card); }
@@ -156,6 +157,7 @@ details.fold > summary::-webkit-details-marker { display: none; }
 
 .empty { flex: 1; display: grid; place-content: center; text-align: center; gap: 12px; padding: 24px; color: var(--muted); }
 .empty h2 { color: var(--fg); font-size: 18px; }
+.empty .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .log .empty { min-height: 100%; }
 
 /* files */
@@ -372,6 +374,7 @@ label.check input { width: 18px; height: 18px; accent-color: var(--accent); flex
   input, select, textarea { font-size: 16px !important; }
   .icon-btn { width: 44px; height: 44px; }
   .btn, .btn.small, .tab, .cbar select, .mbtn, .seg button { min-height: 44px; }
+  .newrow .btn { min-width: 44px; }
   .tab { display: grid; place-items: center; }
   .pitem > button.open, .found .snip, .navbtn, .menu button, .slash button, .tree button { min-height: 44px; align-items: center; }
   .tree button { padding-block: 11px; }

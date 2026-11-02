@@ -680,3 +680,20 @@ test('/check runs after a turn that changed files and hands failures back until 
   assert.deepEqual(checks, ['error', 'done'], 'failed once, passed after the fix, and not rerun for a turn without changes');
   assert.ok(s.state.log.some(e => e.type === 'system' && /fixing it \(1\/3\)/.test(e.text)));
 });
+
+test('cloning a repo makes a project named after it and keeps .nexus out of its commits', { timeout: 60000 }, async () => {
+  const { pathToFileURL } = await import('node:url');
+  const src = path.join(tmp, 'src', 'my-lib');
+  fs.mkdirSync(src, { recursive: true });
+  fs.writeFileSync(path.join(src, 'README.md'), 'hi');
+  const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: src });
+  g('init', '-q'); g('add', '-A'); g('commit', '-qm', 'init');
+  const url = pathToFileURL(src).href;
+  assert.equal(await projects.clone(url), 'my-lib');
+  assert.equal(fs.readFileSync(path.join(projects.projectDir('my-lib'), 'README.md'), 'utf8'), 'hi');
+  assert.match(fs.readFileSync(path.join(projects.projectDir('my-lib'), '.git', 'info', 'exclude'), 'utf8'), /^\.nexus\/$/m);
+  assert.equal(await projects.clone(url), 'my-lib-2', 'a taken name gets a number');
+  await assert.rejects(projects.clone('--upload-pack=touch /tmp/x'), /https, ssh or git@/);
+  await assert.rejects(projects.clone(`${pathToFileURL(path.join(tmp, 'missing')).href}`), /git clone failed/);
+  assert.ok(!fs.existsSync(projects.projectDir('missing')), 'a failed clone leaves nothing behind');
+});

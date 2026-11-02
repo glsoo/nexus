@@ -94,6 +94,11 @@ route('POST', '/api/projects', async ({ req }) => {
   broadcast({ t: 'projects' });
   return { name };
 });
+route('POST', '/api/projects/clone', async ({ req }) => {
+  const name = await projects.clone((await body(req)).url);
+  broadcast({ t: 'projects' });
+  return { name };
+});
 route('POST', '/api/projects/:name/rename', async ({ req, p }) => {
   const { to } = await body(req);
   agent.renameProject(need(p.name), to);

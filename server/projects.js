@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { PROJECTS, readJson, validName, writeAtomic } from './util.js';
+import { promisify } from 'node:util';
+import { childEnv, PROJECTS, readJson, validName, writeAtomic } from './util.js';
 
 // One project = one conversation = one directory: ~/projects/<name>, which is also the agent's cwd.
 export const DEFAULT_MODEL = process.env.NEXUS_MODEL || 'gpt-6.1-sol';
@@ -35,6 +37,28 @@ export function create(name) {
   if (!validName(name)) throw httpError(400, 'Names use letters, numbers, dot, dash or underscore, and start with a letter or number.');
   if (fs.existsSync(projectDir(name))) throw httpError(409, `"${name}" already exists.`);
   fs.mkdirSync(projectDir(name));
+  return name;
+}
+
+// Clones a repository into a new project named after it (repo, repo-2, ...).
+export async function clone(url) {
+  url = String(url || '').trim();
+  if (!/^(https?:\/\/|ssh:\/\/|file:\/\/|git@[\w.-]+:)\S+$/.test(url)) throw httpError(400, 'Paste an https, ssh or git@ URL, like https://github.com/owner/repo.');
+  const base = url.replace(/[/]+$/, '').replace(/\.git$/, '').split(/[/:]/).pop().replace(/[^\w.-]+/g, '-').replace(/^[^a-zA-Z0-9]+/, '').slice(0, 60) || 'repo';
+  fs.mkdirSync(PROJECTS, { recursive: true });
+  // Claiming the folder first means a failed clone only ever removes a folder it made.
+  let name = base;
+  for (let n = 2; ; n++) {
+    try { fs.mkdirSync(projectDir(name)); break; } catch (err) { if (err.code !== 'EEXIST') throw err; name = `${base}-${n}`; }
+  }
+  try {
+    await promisify(execFile)('git', ['clone', '-q', '--', url, projectDir(name)], { env: { ...childEnv(), GIT_TERMINAL_PROMPT: '0' }, timeout: 600000, windowsHide: true });
+  } catch (err) {
+    fs.rmSync(projectDir(name), { recursive: true, force: true });
+    throw httpError(400, `git clone failed: ${(err.stderr || err.message).trim().split('\n').at(-1)}`);
+  }
+  // The chat's own files stay out of the repo's commits and pull requests.
+  fs.appendFileSync(path.join(projectDir(name), '.git', 'info', 'exclude'), '\n.nexus/\n');
   return name;
 }
 

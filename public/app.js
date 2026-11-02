@@ -134,7 +134,8 @@ function shell() {
   $scrim = h('div', { class: 'scrim', onclick: () => drawer(false) });
   $side = h('aside', { class: 'side' },
     h('div', { class: 'side-head' }, h('img', { src: '/icon.svg?v=purple', alt: '' }), 'Nexus'),
-    h('button', { class: 'btn new', onclick: guard(newProject) }, icon('plus'), 'New project'),
+    h('div', { class: 'newrow' }, h('button', { class: 'btn new', onclick: guard(newProject) }, icon('plus'), 'New project'),
+      h('button', { class: 'btn', 'aria-label': 'Clone a git repository', title: 'Clone a git repository', onclick: cloneDialog }, icon('download'))),
     $find, $list,
     h('div', { class: 'side-foot' },
       // Keeps the open project, which is where agents get installed.
@@ -153,6 +154,27 @@ async function newProject() {
   const { name } = await api('POST', '/api/projects', {});
   await refreshProjects();
   go(name, null, 'chat');
+}
+
+function cloneDialog() {
+  const err = h('div', { class: 'err', role: 'alert' });
+  const input = h('input', { class: 'field mono', id: 'cu', type: 'url', placeholder: 'https://github.com/owner/repo', 'aria-describedby': 'cu-hint', spellcheck: false, autocapitalize: 'off' });
+  let busy = false;
+  const run = async () => {
+    if (busy) return false;
+    busy = true; err.textContent = 'Cloning…';
+    try {
+      const { name } = await api('POST', '/api/projects/clone', { url: input.value });
+      await refreshProjects();
+      go(name, null, 'chat');
+      return true;
+    } catch (e) { err.textContent = e.message; return false; } finally { busy = false; }
+  };
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input.closest('dialog').querySelector('.primary').click(); } });
+  dialog({ title: 'Clone a repository', body: h('div', {}, h('label', { class: 'lbl', htmlFor: 'cu' }, 'Git URL'), input,
+    h('p', { class: 'small muted', id: 'cu-hint' }, "It becomes a new project named after the repo. Private repos use this computer's git credentials."), err),
+  actions: [{ label: 'Cancel' }, { label: 'Clone', class: 'primary', run }] });
+  input.focus();
 }
 
 async function refreshProjects() {
@@ -267,7 +289,8 @@ function render() {
   if (!S.project) {
     return $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', {}, 'Nexus')),
       h('div', { class: 'empty' }, h('h2', {}, 'Start a project'), h('p', {}, 'Each conversation gets its own folder in ~/projects.'),
-        h('div', {}, h('button', { class: 'btn primary', onclick: guard(newProject) }, icon('plus'), 'New project'))));
+        h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: guard(newProject) }, icon('plus'), 'New project'),
+          h('button', { class: 'btn', onclick: cloneDialog }, icon('download'), 'Clone a repo'))));
   }
   const view = h('div', { class: 'view' });
   const tabs = [['chat', 'Chat'], ['files', 'Files'], ['changes', 'Changes'], ['terminal', 'Terminal']];
