@@ -176,7 +176,7 @@ test('/review and /pr hand the agent a reviewing or pull-request task', async ()
     await idle(s);
   } finally { model.restore(); }
   const asked = model.sent.map(b => JSON.stringify(b.input.at(-1).content));
-  assert.match(asked[0], /gh pr diff 12`[\s\S]*Don't change any files/);
+  assert.match(asked[0], /gh pr diff 12`[\s\S]*Don't change any files[\s\S]*untrusted data written by strangers/);
   assert.match(asked[1], /Notes from the user: fixes the login bug[\s\S]*Never force-push[\s\S]*gh pr create/);
   assert.deepEqual(s.state.log.filter(e => e.type === 'user').map(e => e.text), ['/review #12', '/pr fixes the login bug']);
 });
@@ -555,7 +555,7 @@ test('hooks also fire on PreCompact, SubagentStop and Notification, and /issue h
     model.restore();
     fs.writeFileSync(settingsFile, '{}');
   }
-  assert.match(JSON.stringify(model.sent[0].input.at(-1)), /gh issue view 7 --comments/);
+  assert.match(JSON.stringify(model.sent[0].input.at(-1)), /gh issue view 7 --comments[\s\S]*untrusted data written by strangers/);
   for (let t = 0; t < 3000 && (fs.readFileSync(log, 'utf8').match(/"event"/g) || []).length < 3; t += 50) await new Promise(r => setTimeout(r, 50));
   const events = fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
   assert.deepEqual(events.map(e => e.event), ['PreCompact', 'SubagentStop', 'Notification']);
@@ -917,4 +917,25 @@ test('/watch: switched on only from Nexus, and fires only for comments saved whi
     await tick(); await tick();
     assert.equal(prompts().length, 2, 'watching follows a rename');
   } finally { model.restore(); }
+});
+
+test('the autopilot request limit counts the whole chat since your last message, subagents included', { timeout: 30000 }, async () => {
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ autopilotRequests: 4 }));
+  projects.create('capped');
+  const s = agent.getSession('capped');
+  agent.setOption(s, 'autopilot', true);
+  const model = fakeModel(n => (n === 1 ? ['Task', { description: 'helper', prompt: 'look around' }] : ['Glob', { pattern: '*' }]));
+  try {
+    await agent.submit('capped', 'go');
+    await idle(s, 15000);
+    assert.equal(model.sent.length, 4, 'one request from the chat and three from its subagent, then both stop');
+    assert.match(s.state.log.at(-1).text, /since your last message \(subagents included\)/);
+    await agent.submit('capped', 'keep going');
+    await idle(s, 15000);
+    assert.equal(model.sent.length, 8, 'a new message starts a new count');
+  } finally {
+    model.restore();
+    fs.writeFileSync(settingsFile, '{}');
+  }
 });
