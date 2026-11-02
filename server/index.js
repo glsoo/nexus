@@ -205,7 +205,7 @@ route('GET', '/api/agents/:id', ({ p }) => {
   return rest;
 });
 route('GET', '/api/push/key', () => ({ key: push.publicKey() }));
-route('POST', '/api/push/subscribe', async ({ req }) => { push.subscribe(await body(req)); return {}; });
+route('POST', '/api/push/subscribe', async ({ req }) => { push.subscribe(await body(req), auth.sessionKey(cookieToken(req))); return {}; });
 route('POST', '/api/push/unsubscribe', async ({ req }) => { push.unsubscribe(String((await body(req)).endpoint || '')); return {}; });
 route('POST', '/api/agents/:id/stop', ({ p }) => { agent.stopAgent(p.id); return {}; });
 route('POST', '/api/agents', async ({ req }) => {
@@ -453,7 +453,7 @@ wss.on('connection', ws => {
 
 // Subscribed browsers get a push when a chat finishes or waits on the user, even with Nexus closed.
 const busy = new Set(), pinged = new WeakSet();
-const ping = (title, body, project) => push.notify({ title, body, project }).catch(err => console.error('Web Push:', err.message));
+const ping = (title, body, project) => push.notify({ title, body, project }, auth.liveSessionKey).catch(err => console.error('Web Push:', err.message));
 const asks = { AskUserQuestion: 'has a question for you', ExitPlanMode: 'has a plan for you to approve' };
 agent.hub.on('project', (name, ev) => {
   for (const ws of wss.clients) if (ws.project === name) sendTo(ws, ev);

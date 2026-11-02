@@ -21,13 +21,13 @@ const save = data => writeAtomic(file(), JSON.stringify(data));
 
 export const publicKey = () => load().publicKey;
 
-export function subscribe(sub) {
+export function subscribe(sub, session) {
   let url;
   try { url = new URL(sub?.endpoint); } catch { url = null; }
   const key = Buffer.from(String(sub?.keys?.p256dh), 'base64url'), auth = Buffer.from(String(sub?.keys?.auth), 'base64url');
   if (url?.protocol !== 'https:' || key.length !== 65 || auth.length !== 16) throw httpError(400, 'That is not a valid push subscription.');
   const data = load();
-  data.subscriptions = [...data.subscriptions.filter(s => s.endpoint !== url.href), { endpoint: url.href, keys: { p256dh: b64(key), auth: b64(auth) } }];
+  data.subscriptions = [...data.subscriptions.filter(s => s.endpoint !== url.href), { endpoint: url.href, keys: { p256dh: b64(key), auth: b64(auth) }, ...(session ? { session } : {}) }];
   save(data);
 }
 
@@ -61,11 +61,12 @@ export function vapid(endpoint, data = load()) {
   return `vapid t=${unsigned}.${b64(sig)}, k=${data.publicKey}`;
 }
 
-// Sends to every subscribed browser; ones the push service says are gone (404/410) are dropped.
-export async function notify(message) {
+// Sends to every subscribed browser; ones the push service says are gone (404/410), or whose session ended
+// (signed out or expired), are dropped. Subscriptions from before sessions were recorded keep working.
+export async function notify(message, live = () => true) {
   const data = load();
-  const gone = [];
-  await Promise.all(data.subscriptions.map(async sub => {
+  const gone = data.subscriptions.filter(s => s.session && !live(s.session)).map(s => s.endpoint);
+  await Promise.all(data.subscriptions.filter(s => !gone.includes(s.endpoint)).map(async sub => {
     try {
       const res = await fetch(sub.endpoint, {
         method: 'POST', body: encrypt(sub, JSON.stringify(message)), signal: AbortSignal.timeout(15000),

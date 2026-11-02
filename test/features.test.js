@@ -969,3 +969,20 @@ test('shared .nexus agents clone fine, and chat state a repo tracks loses its ap
   const u = agent.getSession('untracked');
   assert.deepEqual([u.state.mode, u.state.autopilot], ['acceptEdits', true]);
 });
+
+test('a push subscription stops when the session that made it ends', async () => {
+  const push = await import('../server/push.js');
+  const keys = { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' };
+  const at = id => `https://push.example.net/send/${id}`;
+  push.subscribe({ endpoint: at('mine'), keys }, 'live-session');
+  push.subscribe({ endpoint: at('stolen'), keys }, 'signed-out-session');
+  push.subscribe({ endpoint: at('older'), keys });
+  const posts = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async url => { posts.push(String(url)); return new Response('', { status: 201 }); };
+  try { await push.notify({ title: 't', body: 'b', project: 'p' }, key => key === 'live-session'); } finally { globalThis.fetch = realFetch; }
+  assert.ok(posts.includes(at('mine')) && posts.includes(at('older')), 'a live session and a subscription from before sessions were kept');
+  assert.ok(!posts.includes(at('stolen')));
+  const kept = JSON.parse(fs.readFileSync(path.join(process.env.NEXUS_HOME, 'push.json'), 'utf8')).subscriptions.map(x => x.endpoint);
+  assert.ok(!kept.includes(at('stolen')) && kept.includes(at('mine')), 'the ended one is removed');
+});

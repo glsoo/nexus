@@ -37,6 +37,9 @@ export function validSession(token) {
   return false;
 }
 
+// Push subscriptions remember the session that made them, by this key, and stop once it ends.
+export const sessionKey = token => sha(String(token || '')).toString('hex');
+export const liveSessionKey = key => sessions.get(key) > Date.now();
 export function endSession(token) {
   if (token && sessions.delete(sha(token).toString('hex'))) persist();
 }
