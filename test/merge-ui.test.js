@@ -20,7 +20,7 @@ const find = (el, predicate) => typeof el !== 'object' ? [] : [
 ];
 const hasClass = (el, name) => el.class?.split(' ').includes(name);
 
-test('merged composer keeps all settings in the disclosure and dictation on the compact row', () => {
+test('default composer keeps every control inline exactly once with optional dictation and text actions', () => {
   const start = app.indexOf('function composer()');
   const end = app.indexOf('\nconst EFFORTS', start);
   assert.ok(start >= 0 && end > start);
@@ -32,17 +32,38 @@ test('merged composer keeps all settings in the disclosure and dictation on the 
       tokenPanel() {}, send() {}, syncThumbs() {},
     };
     const composer = vm.runInNewContext(`(${app.slice(start, end)})`, context)();
-    const options = find(composer, el => hasClass(el, 'composer-options'))[0];
-    const bar = find(composer, el => hasClass(el, 'cbar'))[0];
-    for (const control of ['$mode', '$autoBtn', '$agentBtn', '$promptBtn', '$meter']) {
-      assert.equal(find(options, el => el === context[control]).length, 1, `${control} must remain inside settings`);
-      assert.equal(bar.children.includes(context[control]), false, `${control} must not be moved onto the main row`);
+    const bars = find(composer, el => hasClass(el, 'cbar'));
+    assert.equal(bars.length, 1);
+    const bar = bars[0];
+    const controls = ['$mode', '$autoBtn', '$agentBtn', '$model', '$promptBtn', '$meter', '$stopBtn', '$sendBtn'];
+    let previous = -1;
+    for (const control of controls) {
+      assert.ok(context[control], `${control} must exist`);
+      assert.equal(find(composer, el => el === context[control]).length, 1, `${control} must appear exactly once`);
+      const index = bar.children.indexOf(context[control]);
+      assert.ok(index > previous, `${control} must be a direct child in the default control order`);
+      previous = index;
     }
-    assert.equal(context.$autoBtn.children.at(-1), 'Autopilot', 'autopilot needs a visible text label');
-    assert.equal(hasClass(context.$autoBtn, 'btn'), true, 'autopilot uses a full-size settings button');
-    for (const control of ['$model', '$stopBtn', '$sendBtn']) assert.ok(bar.children.includes(context[control]));
-    assert.equal(find(bar, el => el['aria-label'] === 'Dictate').length, Speech ? 1 : 0);
-    assert.equal(find(bar, el => hasClass(el, 'cbar')).length, 1);
+    assert.equal(find(composer, el => hasClass(el, 'composer-options') || hasClass(el, 'composer-settings')).length, 0);
+    for (const control of ['$autoBtn', '$promptBtn']) {
+      assert.equal(hasClass(context[control], 'icon-btn'), true);
+      assert.equal(hasClass(context[control], 'btn'), false);
+      assert.equal(context[control].children.length, 1);
+      assert.equal(context[control].children[0].tag, 'svg');
+      assert.ok(context[control]['aria-label'], `${control} needs an accessible icon label`);
+    }
+    for (const [control, label] of [['$sendBtn', 'Send'], ['$stopBtn', 'Stop']]) {
+      assert.equal(hasClass(context[control], 'btn'), true);
+      assert.equal(hasClass(context[control], 'small'), true);
+      assert.deepEqual(context[control].children, [label]);
+    }
+    assert.equal(context.$stopBtn.hidden, true);
+    assert.equal(context.$mode['aria-label'], 'Permission mode');
+    assert.equal(context.$autoBtn['aria-label'], 'Autopilot');
+    assert.equal(context.$promptBtn['aria-label'], 'System prompts and injected text');
+    const microphones = find(composer, el => el['aria-label'] === 'Dictate');
+    assert.equal(microphones.length, Speech ? 1 : 0);
+    if (Speech) assert.ok(bar.children.includes(microphones[0]), 'dictation stays on the inline bar');
   }
 });
 
@@ -83,5 +104,8 @@ test('merged sidebar keeps clone, search, marketplace and the accessible drawer 
   const row = find(side, el => hasClass(el, 'newrow'))[0];
   assert.equal(find(row, el => el.tag === 'button').length, 2);
   assert.equal(find(row, el => el['aria-label'] === 'Clone a git repository').length, 1);
-  assert.equal(find(side, el => hasClass(el, 'side-label'))[0].children[0], 'Projects');
+  assert.equal(find(side, el => hasClass(el, 'side-label')).length, 0, 'the default sidebar has no custom Projects heading');
+  const projects = find(side, el => hasClass(el, 'plist'));
+  assert.equal(projects.length, 1);
+  assert.equal(projects[0]['aria-label'], 'Projects', 'project navigation keeps its accessible name');
 });

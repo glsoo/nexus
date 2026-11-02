@@ -18,27 +18,27 @@ const contrast = (a, b) => {
   return (values[0] + .05) / (values[1] + .05);
 };
 
-test('glass theme keeps black canvas and readable purple action states', () => {
-  assert.equal(token('bg'), '#000000');
-  assert.equal(token('accent'), '#7e22ce');
-  for (const background of ['accent', 'accent-hover']) {
-    assert.ok(contrast(token('on-accent'), token(background)) >= 4.5, `${background} button text contrast`);
+test('default theme keeps opaque black surfaces and readable purple actions', () => {
+  for (const [name, value] of Object.entries({ bg: '#000000', panel: '#000000', card: '#111111', raised: '#1c1c1c', fg: '#f5f5f5', muted: '#a1a1a1', accent: '#7e22ce', 'on-accent': '#ffffff' })) {
+    assert.equal(token(name), value, `${name} uses the default theme`);
   }
-  for (const foreground of ['fg', 'muted', 'accent-text']) {
-    for (const background of ['bg', 'glass-solid']) {
+  assert.ok(contrast(token('on-accent'), token('accent')) >= 4.5, 'primary button text contrast');
+  for (const foreground of ['fg', 'muted']) {
+    for (const background of ['bg', 'card']) {
       assert.ok(contrast(token(foreground), token(background)) >= 4.5, `${foreground} on ${background}`);
     }
   }
-  assert.match(css, /\.btn\.primary:hover\s*\{[^}]*var\(--accent-hover\)/);
+  assert.match(css, /\.btn\.primary\s*\{[^}]*background: var\(--accent\);[^}]*color: var\(--on-accent\)/);
+  assert.match(css, /\.btn\.primary:hover\s*\{[^}]*background: #9333ea;/);
 });
 
-test('glass surfaces have opaque fallbacks and reduced transparency support', () => {
-  assert.match(css, /background: var\(--glass-solid\); border: 1px solid var\(--glass-edge\)/);
-  assert.match(css, /@supports \(\(backdrop-filter: blur\(1px\)\)/);
-  const fallback = css.slice(css.indexOf('@media (prefers-reduced-transparency: reduce)'));
-  assert.match(fallback, /backdrop-filter: none/);
-  assert.match(fallback, /@media \(forced-colors: active\)/);
-  assert.match(fallback, /@media \(prefers-reduced-motion: reduce\)/);
+test('default layout uses opaque surfaces without glass tokens or backdrop filters', () => {
+  assert.doesNotMatch(css, /--glass-[\w-]+|(?:-webkit-)?backdrop-filter\s*:/);
+  assert.match(css, /\.shell\s*\{[^}]*grid-template-columns: 264px minmax\(0, 1fr\);/);
+  for (const [selector, background] of [['.side', 'panel'], ['.cbox', 'card'], ['.menu', 'card'], ['.slash', 'card'], ['dialog', 'panel']]) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(css, new RegExp(`(?:^|\\n)${escaped}\\s*\\{[^}]*background: var\\(--${background}\\);`));
+  }
   assert.match(css, /\.composer\s*\{ flex: none;/);
 });
 

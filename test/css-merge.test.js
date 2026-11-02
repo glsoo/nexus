@@ -10,62 +10,71 @@ const rule = selector => {
   return match[1];
 };
 
-test('merged sidebar keeps glass spacing around New and Clone, not inside the flex row', () => {
+test('default sidebar keeps New and Clone spacing outside the flex buttons and touch targets intact', () => {
   assert.doesNotMatch(css, /^(?:<{7}|={7}|>{7})(?: |$)/m);
   assert.match(rule('.side .newrow'), /display: flex;/);
-  assert.match(rule('.side .newrow'), /margin: 0 14px 22px;/);
+  assert.match(rule('.side .newrow'), /margin: 4px 12px 10px;/);
   assert.match(rule('.side .new'), /flex: 1;/);
-  assert.match(rule('.side .new'), /color: var\(--accent-text\)/);
   assert.doesNotMatch(rule('.side .new'), /\bmargin(?:-[\w-]+)?:/);
+  assert.doesNotMatch(css, /\.side-label\b/);
   const touch = css.slice(css.indexOf('@media (pointer: coarse)'));
   assert.match(touch, /\.newrow \.btn\s*\{ min-width: 44px;/);
   assert.match(touch, /\.pitem > button\.open, \.found \.snip,[^{]*\{ min-height: 44px;/);
   assert.match(rule('.found .snip'), /-webkit-line-clamp: 2;/);
 });
 
-test('short drawers scroll all projects and navigation instead of clipping the new controls', () => {
-  const short = css.slice(css.indexOf('@media (max-height: 520px) {'), css.indexOf('@media (max-width: 760px) and (orientation: portrait)'));
-  assert.match(short, /\.side\s*\{ overflow-y: auto;/);
-  assert.match(short, /\.side > \*\s*\{ flex-shrink: 0;/);
-  assert.match(short, /\.side \.plist\s*\{ flex: none; overflow-y: visible;/);
+test('short drawers scroll all projects and navigation instead of clipping the controls', () => {
+  const start = css.search(/@media\s*\(max-height:\s*520px\)\s*\{/);
+  assert.ok(start >= 0, 'short-height drawer rules must exist');
+  const short = css.slice(start, css.indexOf('\n@media', start + 1) < 0 ? undefined : css.indexOf('\n@media', start + 1));
+  assert.match(short, /\.side\s*\{\s*overflow-y: auto;/);
+  assert.match(short, /\.side\s*>\s*\*\s*\{\s*flex-shrink: 0;/);
+  assert.match(short, /\.side \.plist\s*\{\s*flex: none;\s*overflow-y: visible;/);
 });
 
-test('welcome actions and autopilot output styles coexist with readable purple tags', () => {
+test('default welcome and autopilot output retain their baseline layout and state colors', () => {
   assert.match(rule('.empty .row'), /display: flex; flex-wrap: wrap;/);
-  assert.match(rule('.empty'), /justify-items: center;/);
-  assert.match(rule('.welcome-mark'), /var\(--glass-solid\)/);
+  assert.match(rule('.empty'), /display: grid; place-content: center;/);
+  assert.match(rule('.empty h2'), /color: var\(--fg\); font-size: 18px;/);
+  assert.doesNotMatch(css, /\.welcome-mark\b|\.chat-activity\b|\.loading-dot\b/);
   assert.match(rule('.cbar .apbtn.on'), /color: var\(--warn\)/);
   assert.match(rule('.tool .aptag'), /color: var\(--warn\)/);
   assert.match(rule('.tool .plan'), /border-left: 2px solid var\(--line-strong\)/);
-  assert.match(rule('.e.user .itag'), /color: var\(--accent-text\)/);
+  assert.match(rule('.e.user .itag'), /color: var\(--accent\)/);
 });
 
-test('merged composer stays compact without reordering controls or hiding settings cost', () => {
-  assert.match(rule('.cbar'), /flex-wrap: nowrap;/);
-  assert.match(rule('.composer-settings'), /position: absolute;/);
-  assert.match(rule('.composer-setting-actions'), /flex-wrap: wrap;/);
-  assert.doesNotMatch(css, /\.cbar[^{}]*\{[^}]*\border:/);
-  assert.doesNotMatch(css, /\.cbar\s+\.mcost\s*\{[^}]*display: none/);
-  assert.doesNotMatch(css, /\.short \.cbar/);
-  assert.doesNotMatch(css, /\.cbar select\s*\{/);
+test('default composer wraps controls and reorders mobile actions while hiding only inline cost', () => {
+  assert.match(rule('.cbar'), /display: flex; flex-wrap: wrap;/);
+  assert.match(rule('.cbox'), /background: var\(--card\); border: 1px solid var\(--line-strong\); border-radius: 12px;/);
+  assert.match(rule('.cbox textarea'), /min-height: 44px;/);
+  assert.match(rule('.cbar select'), /max-width: 150px; min-height: 30px;/);
+  assert.doesNotMatch(css, /\.composer-(?:options|settings|setting-actions)\b|\.send-btn\b|\.stop-btn\b/);
+  const mobile = css.slice(css.indexOf('@media (max-width: 760px),'), css.indexOf('@media (max-width: 760px) and (orientation: portrait)'));
+  assert.match(mobile, /\.cbar \.icon-btn, \.cbar \.meter\s*\{ order: 1;/);
+  assert.match(mobile, /\.cbar \.btn\s*\{ order: 2;/);
+  assert.match(mobile, /\.cbar \.mcost\s*\{ display: none;/);
+  assert.match(mobile, /\.cbar \.abtn\s*\{ flex: 1 1 24%;/);
+  assert.match(mobile, /\.cbar \.mbtn:not\(\.abtn\)\s*\{ flex-basis: 38%;/);
+  assert.match(css, /\.short \.cbar select, \.short \.cbar \.mbtn, \.short \.cbar \.meter\s*\{ display: none;/);
 });
 
-test('autopilot status fits the existing summary target and survives forced colors', () => {
-  const indicator = rule('.composer-options-toggle.autopilot::after');
-  assert.match(indicator, /position: absolute;/);
-  assert.match(indicator, /var\(--control-inset\)/);
-  assert.match(indicator, /width: 6px; height: 6px;/);
-  assert.match(indicator, /background: var\(--warn\)/);
-  assert.match(indicator, /pointer-events: none;/);
-  const forced = css.slice(css.indexOf('@media (forced-colors: active)'));
-  assert.match(forced, /\.composer-options-toggle\.autopilot::after\s*\{[^}]*background: Highlight; border-color: ButtonText;/);
-  assert.match(forced, /\.cbar \.apbtn\.on\s*\{ outline: 1px solid ButtonText;/);
+test('inline autopilot state retains its warning treatment and survives forced colors', () => {
+  const indicator = rule('.cbar .apbtn.on');
+  assert.match(indicator, /color: var\(--warn\)/);
+  assert.match(indicator, /background: color-mix\(in srgb, var\(--warn\)/);
+  assert.match(indicator, /box-shadow:/);
+  const forcedStart = css.indexOf('@media (forced-colors: active)');
+  assert.ok(forcedStart >= 0, 'forced colors must preserve the active autopilot outline');
+  const forced = css.slice(forcedStart);
+  assert.match(forced, /\.cbar \.apbtn\.on\s*\{\s*outline: 1px solid ButtonText;/);
 });
 
-test('merged CSS retains drawer dismissal and reduced-motion pseudo-element coverage', () => {
+test('default CSS retains drawer dismissal and reduced-motion pseudo-element coverage', () => {
   assert.match(rule('.side-close'), /display: none;/);
-  assert.match(css, /\.side-close\s*\{ display: inline-grid;/);
-  assert.match(css, /@media \(prefers-reduced-transparency: reduce\), \(prefers-contrast: more\)/);
-  const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
-  assert.match(reduced, /\*, \*::before, \*::after\s*\{ animation: none !important; transition: none !important;/);
+  const mobile = css.slice(css.indexOf('@media (max-width: 760px),'), css.indexOf('@media (max-width: 760px) and (orientation: portrait)'));
+  assert.match(mobile, /\.side-close\s*\{ display: inline-grid;/);
+  const reducedStart = css.indexOf('@media (prefers-reduced-motion: reduce)');
+  assert.ok(reducedStart >= 0, 'reduced-motion support must exist');
+  const reduced = css.slice(reducedStart);
+  assert.match(reduced, /\*\s*,\s*\*::before\s*,\s*\*::after\s*\{\s*animation: none !important;\s*transition: none !important;/);
 });

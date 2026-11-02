@@ -25,10 +25,7 @@ const ICONS = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', back: '<path d="M15 18l-6-6 6-6"/>',
-  close: '<path d="M6 6l12 12M6 18L18 6"/>', chat: '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9H13a8.5 8.5 0 0 1 8 8v.5z"/>',
-  files: '<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-  changes: '<path d="M8 3v12a3 3 0 0 0 3 3h5M8 9h8"/><circle cx="8" cy="3" r="2"/><circle cx="18" cy="9" r="2"/><circle cx="18" cy="18" r="2"/>',
-  terminal: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9l3 3-3 3M13 15h4"/>',
+  close: '<path d="M6 6l12 12M6 18L18 6"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
   plane: '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.3c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
 };
@@ -142,7 +139,7 @@ function shell() {
       h('button', { class: 'icon-btn side-close', type: 'button', 'aria-label': 'Close menu', onclick: () => drawer(false) }, icon('close'))),
     h('div', { class: 'newrow' }, h('button', { class: 'btn new', onclick: guard(newProject) }, icon('plus'), 'New project'),
       h('button', { class: 'btn', 'aria-label': 'Clone a git repository', title: 'Clone a git repository', onclick: cloneDialog }, icon('download'))),
-    $find, h('div', { class: 'side-label' }, 'Projects'), $list,
+    $find, $list,
     h('div', { class: 'side-foot' },
       // Keeps the open project, which is where agents get installed.
       h('button', { class: 'navbtn', id: 'nav-market', onclick: () => go(S.project, 'marketplace') }, icon('grid'), 'Marketplace'),
@@ -322,7 +319,7 @@ function render() {
   $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', { title: pretty(S.project) }, pretty(S.project)),
     h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(S.project)}`, onclick: e => projectMenu(e.currentTarget, S.project) }, icon('dots')),
     h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Project views', onkeydown: e => navigateTabs(e, tabs, at) }, pill,
-      tabs.map(([id, label]) => h('button', { class: `tab ${S.tab === id ? 'on' : ''}`, id: `tab-${id}`, role: 'tab', 'aria-selected': String(S.tab === id), 'aria-controls': 'project-view', tabIndex: S.tab === id ? 0 : -1, onclick: () => go(S.project, null, id) }, icon(id), label)))),
+      tabs.map(([id, label]) => h('button', { class: `tab ${S.tab === id ? 'on' : ''}`, id: `tab-${id}`, role: 'tab', 'aria-selected': String(S.tab === id), 'aria-controls': 'project-view', tabIndex: S.tab === id ? 0 : -1, onclick: () => go(S.project, null, id) }, label)))),
   view);
   ({ chat: chatView, files: filesView, changes: changesView, terminal: termView })[S.tab](view);
   // The header is rebuilt on each render, so the pill slides from the last index.
@@ -427,7 +424,11 @@ function onEvent(m) {
       { const first = !S.state;
         S.state = m.state;
         if (m.state.name !== S.project) return;
-        if (S.tab === 'chat' && !S.page) { render(); if (first) motion($log, FADE); if (S.jump) { jumpTo(S.jump); S.jump = null; } } }
+        if (S.tab === 'chat' && !S.page) {
+          if ($input?.isConnected) { syncTitle(); syncChat(); } else render();
+          if (first) motion($log, FADE);
+          if (S.jump) { jumpTo(S.jump); S.jump = null; }
+        } }
       break;
     case 'entry': {
       if (!S.state) return;
@@ -468,27 +469,29 @@ function onEvent(m) {
 }
 
 // ---- chat ----
-let $log, $todos, $activity, $input, $sendBtn, $stopBtn, $mode, $autoBtn, $model, $modelLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
+let $log, $todos, $input, $sendBtn, $stopBtn, $mode, $autoBtn, $model, $modelLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
 
 function chatView(view) {
-  entries.clear();
   $log = h('div', { class: 'log', role: 'log', 'aria-live': 'polite', 'aria-relevant': 'additions' });
   $log.addEventListener('touchstart', stopFollow, { passive: true });
   $log.addEventListener('wheel', stopFollow, { passive: true });
   $todos = h('div', { class: 'todos', hidden: true });
-  $activity = h('div', { class: 'chat-activity', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true', hidden: true },
-    h('span', { class: 'loading-dot', 'aria-hidden': 'true' }), 'Working…');
+  view.append($log, $todos, composer());
+  syncChat();
+  if (matchMedia('(hover: hover)').matches) $input.focus();
+}
+
+// Refresh snapshots without replacing the composer during an in-flight click or tap.
+function syncChat() {
+  entries.clear();
+  $log.replaceChildren();
   if (S.state) {
-    if (!S.state.log.length) $log.append(h('div', { class: 'empty', id: 'hello' },
-      h('div', { class: 'welcome-mark', 'aria-hidden': 'true' }, h('img', { src: '/icon.svg?v=purple', alt: '' })),
-      h('h2', {}, 'What should we build?'), h('p', {}, 'Code, design, and explore in one workspace.'),
+    if (!S.state.log.length) $log.append(h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'),
       h('p', { class: 'mono' }, `~/projects/${S.project}`), h('p', {}, 'Type a request. / runs a command and @ points at a file.')));
     for (const e of S.state.log) upsertEntry(e, false);
   }
-  view.append($log, $todos, $activity, composer());
   syncComposer();
   $log.scrollTop = $log.scrollHeight;
-  if (matchMedia('(hover: hover)').matches) $input.focus();
 }
 
 let following = 0;
@@ -784,20 +787,6 @@ try { drafts = JSON.parse(localStorage.getItem('nexus.drafts')) || {}; } catch {
 function saveDrafts() { try { localStorage.setItem('nexus.drafts', JSON.stringify(drafts)); } catch { /* private window */ } }
 addEventListener('pagehide', saveDrafts);
 const grow = () => { if (!CSS.supports('field-sizing', 'content')) { $input.style.height = 'auto'; $input.style.height = `${$input.scrollHeight}px`; } };
-// Keep secondary settings out of the message bar without removing any controls.
-function closeComposerOptions(e) {
-  const options = document.querySelector('.composer-options[open]');
-  if (!options || document.querySelector('dialog[open]')) return;
-  if (e.type === 'keydown') {
-    if (e.key !== 'Escape') return;
-    options.open = false;
-    options.querySelector('summary').focus();
-    e.preventDefault(); e.stopPropagation();
-  } else if (!options.contains(e.target)) options.open = false;
-}
-document.addEventListener('pointerdown', closeComposerOptions);
-document.addEventListener('keydown', closeComposerOptions, true);
-
 function composer() {
   fileHits = { q: null, files: [] };
   $input = h('textarea', { rows: 1, placeholder: 'Message Nexus', 'aria-label': 'Message', oninput: () => { drafts[S.project] = $input.value; grow(); updateSlash(); },
@@ -820,28 +809,20 @@ function composer() {
   $slash = h('div', { class: 'slash', hidden: true });
   const file = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true, onchange: () => { addFiles(file.files); file.value = ''; } });
   $mode = h('select', { 'aria-label': 'Permission mode', title: 'Permission mode (Shift+Tab)', onchange: () => setMode($mode.value) }, MODES.map(([v, l]) => h('option', { value: v }, l)));
-  $autoBtn = h('button', { class: 'btn apbtn', type: 'button', 'aria-label': 'Autopilot', onclick: guard(toggleAutopilot) }, icon('plane'), 'Autopilot');
+  $autoBtn = h('button', { class: 'icon-btn apbtn', type: 'button', 'aria-label': 'Autopilot', onclick: guard(toggleAutopilot) }, icon('plane'));
   $agentLabel = h('span', { class: 'mlabel' });
   $agentBtn = h('button', { class: 'mbtn abtn', type: 'button', 'aria-label': 'Choose the agent for this chat', onclick: guard(agentPicker) }, icon('bot'), $agentLabel, icon('down'));
-  $promptBtn = h('button', { class: 'btn small pbtn', type: 'button', 'aria-label': 'System prompts and injected text', title: 'Prompts', onclick: guard(() => promptsDialog()) }, icon('sliders'), 'Prompts');
+  $promptBtn = h('button', { class: 'icon-btn pbtn', type: 'button', 'aria-label': 'System prompts and injected text', title: 'Prompts', onclick: guard(() => promptsDialog()) }, icon('sliders'));
   $modelLabel = h('span', { class: 'mlabel' });
   $model = h('button', { class: 'mbtn', type: 'button', 'aria-label': 'Choose model and effort', title: 'Model and effort', onclick: modelPicker }, $modelLabel, icon('down'));
   $meter = h('button', { class: 'meter', type: 'button', onclick: tokenPanel });
-  $sendBtn = h('button', { class: 'btn primary send-btn', 'aria-label': 'Send', title: 'Send', onmousedown: e => e.preventDefault(), onclick: send }, 'Send');
-  $stopBtn = h('button', { class: 'btn danger stop-btn', 'aria-label': 'Stop', title: 'Stop', hidden: true, onclick: () => sendWs({ t: 'interrupt' }) }, 'Stop');
-  const options = h('details', { class: 'composer-options' },
-    h('summary', { class: 'icon-btn composer-options-toggle', 'aria-label': 'Message options', title: 'Message options' }, icon('dots')),
-    h('div', { class: 'composer-settings' },
-      h('span', { class: 'options-title' }, 'Message settings'),
-      h('label', { class: 'composer-setting' }, h('span', { class: 'lbl' }, 'Permissions'), $mode),
-      h('div', { class: 'composer-setting' }, h('span', { class: 'lbl' }, 'Automatic approvals'), $autoBtn),
-      h('div', { class: 'composer-setting' }, h('span', { class: 'lbl' }, 'Agent'), $agentBtn),
-      h('div', { class: 'composer-setting-actions' }, $promptBtn, $meter)));
+  $sendBtn = h('button', { class: 'btn small primary', type: 'button', 'aria-label': 'Send', title: 'Send', onmousedown: e => e.preventDefault(), onclick: send }, 'Send');
+  $stopBtn = h('button', { class: 'btn small danger', type: 'button', 'aria-label': 'Stop', title: 'Stop', hidden: true, onclick: () => sendWs({ t: 'interrupt' }) }, 'Stop');
   syncThumbs();
   return h('div', { class: 'composer' }, $slash, h('div', { class: 'cbox' }, $thumbs, $input, h('div', { class: 'cbar' },
     h('button', { class: 'icon-btn', 'aria-label': 'Attach image', title: 'Attach image', onclick: () => file.click() }, icon('clip')), file,
     Speech && h('button', { class: 'icon-btn mic', type: 'button', 'aria-label': 'Dictate', 'aria-pressed': 'false', title: "Dictate: speak and it types (your browser's speech recognition)", onclick: e => dictate(e.currentTarget) }, icon('mic')),
-    $model, options, $stopBtn, $sendBtn)));
+    $mode, $autoBtn, $agentBtn, $model, $promptBtn, $meter, $stopBtn, $sendBtn)));
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -970,11 +951,6 @@ function syncComposer() {
   if (!st || !$input?.isConnected) return;
   $mode.value = st.mode;
   $mode.className = st.mode;
-  const options = $mode.closest('.composer-options').querySelector('summary');
-  const permission = MODES.find(([value]) => value === st.mode)?.[1] || st.mode;
-  options.dataset.mode = st.mode;
-  options.classList.toggle('autopilot', Boolean(st.autopilot));
-  options.title = options.ariaLabel = `Message options, permissions: ${permission}${st.autopilot ? ', Autopilot on: automatic approvals' : ''}`;
   $autoBtn.classList.toggle('on', Boolean(st.autopilot));
   $autoBtn.setAttribute('aria-pressed', String(Boolean(st.autopilot)));
   $autoBtn.title = st.autopilot ? 'Autopilot is on: the agent decides without asking. Click to turn it off.' : 'Autopilot: let the agent finish without stopping to ask';
@@ -987,7 +963,6 @@ function syncComposer() {
   const p = S.prompts;
   $promptBtn.classList.toggle('on', Boolean(p && [p.chat, p.project, p.global].some(x => x.system.trim() || x.inject.trim())));
   $stopBtn.hidden = !st.running;
-  $activity.hidden = !st.running;
   $sendBtn.textContent = $sendBtn.ariaLabel = $sendBtn.title = st.running ? 'Queue' : 'Send';
   $meter.replaceChildren(`${fmt(st.usage.lastInput)} / ${st.compactAt ? fmt(st.compactAt) : 'off'}`, st.usage.cost ? h('span', { class: 'mcost' }, ` · ${usd(st.usage.cost)}`) : '');
   $meter.title = $meter.ariaLabel = 'Tokens, cost and compacting';

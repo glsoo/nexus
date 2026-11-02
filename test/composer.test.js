@@ -5,120 +5,206 @@ import vm from 'node:vm';
 
 const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-
-test('compact message options close outside or on Escape, but not inside a modal', () => {
-  const start = app.indexOf('function closeComposerOptions(');
-  const end = app.indexOf('\ndocument.addEventListener', start);
-  assert.ok(start >= 0 && end > start);
-  assert.match(app, /document\.addEventListener\('keydown', closeComposerOptions, true\)/, 'dismissal must run before the textarea interrupt handler');
-  let modal = false, focused = 0, prevented = 0, stopped = 0;
-  const inside = {};
-  const options = { open: true, contains: target => target === inside, querySelector: () => ({ focus: () => focused++ }) };
-  const document = { querySelector: selector => selector === 'dialog[open]' ? modal : options.open ? options : null };
-  const close = vm.runInNewContext(`(${app.slice(start, end)})`, { document });
-  close({ type: 'pointerdown', target: inside });
-  assert.equal(options.open, true);
-  close({ type: 'keydown', key: 'Tab' });
-  assert.equal(options.open, true);
-  close({ type: 'pointerdown', target: {} });
-  assert.equal(options.open, false);
-  assert.equal(focused, 0, 'outside clicks must not steal focus from their target');
-  options.open = true;
-  const escape = { type: 'keydown', key: 'Escape', preventDefault: () => prevented++, stopPropagation: () => stopped++ };
-  modal = true;
-  close(escape);
-  assert.equal(options.open, true, 'Escape belongs to the open modal');
-  assert.equal(prevented, 0);
-  modal = false;
-  close(escape);
-  assert.equal(options.open, false);
-  assert.equal(focused, 1);
-  assert.equal(prevented, 1);
-  assert.equal(stopped, 1, 'closing options must not also interrupt the agent');
-  close(escape);
-  assert.equal(focused, 1);
+const section = (start, end) => {
+  const at = app.indexOf(start), to = app.indexOf(end, at);
+  assert.ok(at >= 0 && to > at);
+  return app.slice(at, to);
+};
+const node = (tag, props = {}, ...children) => ({
+  tag, ...props, children: children.flat(Infinity),
+  replaceChildren(...kids) { this.children = kids; },
+  append(...kids) { this.children.push(...kids); },
 });
 
-test('compact controls keep permission status and Send/Queue names accessible', () => {
-  const start = app.indexOf('function syncComposer(');
-  const end = app.indexOf('\nlet uidN', start);
-  assert.ok(start >= 0 && end > start);
+function sendContext() {
+  const sent = [], notices = [], commands = [];
+  const context = {
+    S: { project: 'demo', images: [], ws: { readyState: 1 } },
+    $input: { value: '  First message  ' }, $slash: { hidden: false },
+    drafts: { demo: '  First message  ' }, fileHits: {},
+    dictation: { abort() { context.aborted = true; } },
+    toast: text => notices.push(text), sendWs: message => sent.push(message),
+    localCommand: text => { commands.push(text); return text === '/files'; },
+    grow() {}, syncThumbs() {},
+  };
+  vm.runInNewContext(section('function send()', '\nfunction addFiles'), context);
+  return { context, sent, notices, commands };
+}
+
+function mountComposer(context) {
+  Object.assign(context, {
+    h: node, icon: name => node('svg', { name }), guard: fn => fn,
+    MODES: [['default', 'Ask first']], Speech: undefined,
+    setMode() {}, toggleAutopilot() {}, agentPicker() {}, promptsDialog() {}, modelPicker() {}, tokenPanel() {},
+    touch: { matches: false }, updateSlash() {},
+  });
+  return vm.runInNewContext(`(${section('function composer()', '\nconst EFFORTS')})`, context)();
+}
+
+test('one completed Send activation submits once, while pressing or canceling does not submit', () => {
+  const { context, sent } = sendContext();
+  mountComposer(context);
+  let prevented = false;
+  context.$sendBtn.onmousedown({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true, 'keep the textarea focused so the keyboard cannot move Send');
+  assert.equal(sent.length, 0, 'pressing without completing the click must not send');
+  assert.equal(context.$sendBtn.onpointerdown, undefined, 'do not submit on pointerdown');
+  context.$sendBtn.onclick();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].t, 'send');
+  assert.equal(sent[0].text, 'First message');
+  assert.equal(context.$input.value, '');
+  assert.equal(context.drafts.demo, undefined);
+  assert.equal(context.aborted, true);
+  context.$sendBtn.onclick();
+  assert.equal(sent.length, 1, 'an empty second activation must not duplicate the message');
+});
+
+test('disconnected sending preserves text, attachments and drafts until one successful retry', () => {
+  const { context, sent, notices } = sendContext();
+  const images = context.S.images = ['data:image/png;base64,fixture'];
+  context.S.ws.readyState = 3;
+  context.send();
+  assert.equal(sent.length, 0);
+  assert.equal(context.$input.value, '  First message  ');
+  assert.equal(context.drafts.demo, '  First message  ');
+  assert.equal(context.S.images, images);
+  assert.equal(context.$slash.hidden, false);
+  assert.match(notices[0], /Not connected/);
+  context.S.ws.readyState = 1;
+  context.send();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].images, images);
+  assert.equal(context.S.images.length, 0);
+});
+
+test('Send supports image-only messages and keeps local slash commands local', () => {
+  const { context, sent, commands } = sendContext();
+  context.$input.value = '/files';
+  context.send();
+  assert.deepEqual(commands, ['/files']);
+  assert.equal(sent.length, 0);
+  assert.equal(context.$input.value, '');
+  context.S.images = ['data:image/png;base64,fixture'];
+  context.send();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, '');
+  assert.equal(sent[0].images.length, 1);
+});
+
+test('desktop Enter sends once but Shift+Enter, IME composition and mobile Enter do not send', () => {
+  const { context, sent } = sendContext();
+  mountComposer(context);
+  context.$slash.hidden = true;
+  let prevented = 0;
+  const key = extra => context.$input.onkeydown({ key: 'Enter', preventDefault() { prevented++; }, ...extra });
+  key({ shiftKey: true });
+  key({ isComposing: true });
+  context.touch.matches = true;
+  key({});
+  assert.equal(sent.length, 0);
+  context.touch.matches = false;
+  key({});
+  assert.equal(sent.length, 1);
+  assert.equal(prevented, 1);
+});
+
+test('same-project state snapshots refresh the transcript without detaching the composer or stealing focus', () => {
+  const input = { isConnected: true, value: 'Unsent draft', focus() { assert.fail('snapshot must not steal focus'); } };
+  const send = {}, stop = {}, old = { id: 'old' }, log = node('div');
+  const context = {
+    S: { project: 'demo', tab: 'chat', page: null, state: { name: 'demo', log: [] }, images: ['attachment'] },
+    $input: input, $sendBtn: send, $stopBtn: stop, $log: log,
+    drafts: { demo: 'Unsent draft' }, entries: new Map([['old', old]]), h: node,
+    upsertEntry(entry, follow) { assert.equal(follow, false); context.entries.set(entry.id, entry); log.append(entry); },
+    syncComposer() { context.synced = (context.synced || 0) + 1; },
+    render() { assert.fail('replacing the composer between pointerdown and pointerup loses the first click'); },
+    syncTitle() { context.titleSynced = true; },
+    motion() {}, FADE: [], jumpTo: id => { context.jumped = id; },
+  };
+  vm.runInNewContext(section('function syncChat()', '\nlet following'), context);
+  vm.runInNewContext(section('function onEvent(', '\n// ---- chat'), context);
+  const snapshot = { name: 'demo', running: true, log: [{ id: 'new', text: 'Updated' }] };
+  context.S.jump = 'new';
+  context.onEvent({ t: 'state', state: snapshot });
+  assert.equal(context.S.state, snapshot);
+  assert.equal(context.$input, input);
+  assert.equal(context.$sendBtn, send);
+  assert.equal(context.$stopBtn, stop);
+  assert.equal(input.value, 'Unsent draft');
+  assert.equal(context.drafts.demo, 'Unsent draft');
+  assert.deepEqual(context.S.images, ['attachment']);
+  assert.equal(context.entries.has('old'), false);
+  assert.equal(log.children[0], snapshot.log[0]);
+  assert.equal(context.synced, 1);
+  assert.equal(context.titleSynced, true);
+  assert.equal(context.jumped, 'new');
+  context.S.state = null;
+  context.onEvent({ t: 'state', state: { name: 'demo', log: [] } });
+  assert.equal(context.$input, input, 'even the first snapshot must preserve an already-mounted composer');
+  assert.equal(log.children[0].id, 'hello');
+  input.isConnected = false;
+  context.render = () => { context.rendered = true; };
+  context.onEvent({ t: 'state', state: snapshot });
+  assert.equal(context.rendered, true, 'rebuild only when there is no mounted chat');
+});
+
+test('inline controls synchronize permissions, Send/Queue, Stop, autopilot and costs', () => {
   const classes = new Set();
-  const summary = { dataset: {}, classList: { toggle: (name, on) => on ? classes.add(name) : classes.delete(name) } };
   const emptyClasses = { toggle() {} };
   const context = {
     S: { state: { mode: 'default', model: 'preview', effort: 'medium', running: false, usage: { lastInput: 0 }, compactAt: 100000, todos: [] }, models: [], meta: { agents: [] }, prompts: null },
-    MODES: [['default', 'Ask first'], ['bypass', 'Bypass'], ['plan', 'Plan']],
-    $input: { isConnected: true },
-    $mode: { closest: () => ({ querySelector: () => summary }) },
+    $input: { isConnected: true }, $mode: {},
     $modelLabel: {}, $agentLabel: {}, $agentBtn: { classList: emptyClasses }, $promptBtn: { classList: emptyClasses },
-    $autoBtn: { classList: emptyClasses, setAttribute(name, value) { this[name] = value; } },
-    $activity: {}, $stopBtn: {}, $sendBtn: {}, $meter: { replaceChildren(...children) { this.children = children; } }, $todos: { replaceChildren() {} }, syncTokens: null, fmt: n => String(n),
-    h: (tag, props, text) => ({ tag, ...props, text }), usd: n => `$${n.toFixed(2)}`,
+    $autoBtn: { classList: { toggle: (name, on) => on ? classes.add(name) : classes.delete(name) }, setAttribute(name, value) { this[name] = value; } },
+    $stopBtn: {}, $sendBtn: {}, $meter: node('button'), $todos: node('div'), syncTokens: null, fmt: n => String(n),
+    h: node, usd: n => `$${n.toFixed(2)}`,
   };
-  vm.runInNewContext(app.slice(start, end), context);
+  vm.runInNewContext(section('function syncComposer(', '\nlet uidN'), context);
   context.syncComposer();
+  assert.equal(context.$mode.value, 'default');
   assert.equal(context.$sendBtn.ariaLabel, 'Send');
   assert.equal(context.$stopBtn.hidden, true);
-  assert.equal(context.$activity.hidden, true, 'no loading indicator while idle');
-  assert.equal(summary.dataset.mode, 'default');
-  assert.match(summary.ariaLabel, /Ask first/);
   context.S.state.running = true;
-  context.S.state.mode = 'bypass';
-  context.syncComposer();
+  for (const mode of ['bypass', 'plan']) {
+    context.S.state.mode = mode;
+    context.syncComposer();
+    assert.equal(context.$mode.value, mode);
+    assert.equal(context.$mode.className, mode);
+  }
+  assert.equal(context.$sendBtn.textContent, 'Queue');
   assert.equal(context.$sendBtn.ariaLabel, 'Queue');
   assert.equal(context.$sendBtn.title, 'Queue');
   assert.equal(context.$stopBtn.hidden, false);
-  assert.equal(context.$activity.hidden, false, 'loading indicator follows the real running state');
-  assert.equal(summary.dataset.mode, 'bypass');
-  assert.match(summary.ariaLabel, /Bypass/);
-  context.S.state.mode = 'plan';
-  context.syncComposer();
-  assert.equal(summary.dataset.mode, 'plan');
-  assert.match(summary.ariaLabel, /Plan/);
-  context.S.state.mode = 'default';
   context.S.state.autopilot = true;
   context.S.state.usage.cost = 1.23;
   context.syncComposer();
-  assert.match(summary.ariaLabel, /Ask first.*Autopilot on: automatic approvals/);
-  assert.equal(classes.has('autopilot'), true, 'automatic approvals must be visible even with settings closed');
+  assert.equal(classes.has('on'), true);
   assert.equal(context.$autoBtn['aria-pressed'], 'true');
   assert.match(context.$autoBtn.title, /without asking/);
   assert.equal(context.$meter.ariaLabel, 'Tokens, cost and compacting');
   assert.equal(context.$meter.children[1].class, 'mcost');
-  assert.equal(context.$meter.children[1].text, ' · $1.23');
+  assert.equal(context.$meter.children[1].children[0], ' · $1.23');
   context.S.state.autopilot = false;
   context.S.state.usage.cost = 0;
-  context.syncComposer();
-  assert.equal(classes.has('autopilot'), false);
-  assert.doesNotMatch(summary.ariaLabel, /Autopilot on/);
-  assert.equal(context.$autoBtn['aria-pressed'], 'false');
-  assert.equal(context.$meter.children[1], '');
   context.S.state.running = false;
   context.syncComposer();
-  assert.equal(context.$activity.hidden, true, 'completion, errors and Stop all clear the indicator');
+  assert.equal(classes.has('on'), false);
+  assert.equal(context.$autoBtn['aria-pressed'], 'false');
+  assert.equal(context.$meter.children[1], '');
+  assert.equal(context.$sendBtn.textContent, 'Send');
   context.$input.isConnected = false;
   context.S.state.running = true;
   context.syncComposer();
-  assert.equal(context.$activity.hidden, true, 'updates must not touch a detached chat view');
+  assert.equal(context.$stopBtn.hidden, true, 'updates do not touch detached controls');
 });
 
-test('shorter visible controls keep separate full-size touch targets', () => {
-  assert.match(css, /\.cbar\s*\{ --control-inset: 0px;/);
-  assert.match(css, /\.cbar > \.mbtn::before\s*\{[^}]*inset: var\(--control-inset\) 0/);
-  assert.match(css, /\.send-btn::after, \.stop-btn::after\s*\{[^}]*inset: var\(--control-inset\)/);
+test('default wrapping composer keeps a fixed right-aligned Send/Queue slot and full touch targets', () => {
+  assert.match(css, /\.cbar\s*\{[^}]*flex-wrap: wrap;/);
+  assert.match(css, /\.cbar > \.btn\.primary\s*\{[^}]*margin-left: auto; width: 72px; flex: none; align-self: flex-end;/);
+  assert.match(css, /\.cbar > \.btn\.primary:active\s*\{ transform: none; \}/, 'pressing Send must not shrink its hit target away from the pointer');
   const touch = css.slice(css.indexOf('@media (pointer: coarse)'));
-  assert.match(touch, /\.cbar\s*\{ --control-inset: 6px;/);
-  assert.match(touch, /\.cbar > \.icon-btn, \.composer-options > summary\s*\{ width: 44px; height: 44px;/);
-  assert.match(touch, /\.cbar > \.mbtn\s*\{ height: 44px; min-height: 44px;/);
-});
-
-test('compact composer uses a single tool row and suppresses pseudo-element motion when requested', () => {
-  assert.match(css, /\.cbar\s*\{[^}]*flex-wrap: nowrap/);
-  assert.match(css, /\.composer-settings\s*\{[^}]*position: absolute/);
-  assert.match(css, /@media \(prefers-reduced-motion: no-preference\)/);
-  assert.match(css, /@media \(hover: hover\) and \(prefers-reduced-motion: no-preference\)\s*\{\s*\.btn:hover:not\(:disabled\):not\(:active\)/);
-  const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
-  assert.match(reduced, /\*, \*::before, \*::after\s*\{[^}]*animation: none !important/);
-  assert.match(css, /\.cbar \.send-btn, \.cbar \.stop-btn\s*\{ width: 44px; height: 44px; min-height: 44px/);
+  assert.match(touch, /\.icon-btn\s*\{ width: 44px; height: 44px;/);
+  assert.match(touch, /\.btn, \.btn\.small, \.tab, \.cbar select, \.mbtn, \.seg button\s*\{ min-height: 44px;/);
+  assert.doesNotMatch(css, /\.send-btn::|\.stop-btn::|\.composer-settings/);
 });
