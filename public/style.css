@@ -249,6 +249,7 @@ dialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 1
 .cbar .abtn .mlabel { max-width: 150px; }
 .cbar .abtn.on { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); }
 .cbar .abtn.on svg:first-child { color: var(--accent); }
+.cbar .mic.on { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); animation: pulse 1.4s infinite; }
 .pbtn { position: relative; }
 .pbtn.on { color: var(--fg); }
 .pbtn.on::after { content: ''; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--card); }

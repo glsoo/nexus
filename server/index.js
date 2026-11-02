@@ -34,7 +34,7 @@ const VENDOR = {
   'inter.woff2': '@fontsource-variable/inter/files/inter-latin-wght-normal.woff2',
   'mono.woff2': '@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2',
 };
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 const SECURITY = {
   'content-security-policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
   'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY',
@@ -358,7 +358,7 @@ const server = http.createServer(async (req, res) => {
     serveStatic(res, path.join(NM, file), true);
     return;
   }
-  const rel = { '/app.js': 'app.js', '/style.css': 'style.css', '/icon.svg': 'icon.svg', '/icon-180.png': 'icon-180.png' }[url.pathname] || 'index.html';
+  const rel = { '/app.js': 'app.js', '/style.css': 'style.css', '/icon.svg': 'icon.svg', '/icon-180.png': 'icon-180.png', '/manifest.webmanifest': 'manifest.webmanifest' }[url.pathname] || 'index.html';
   if (rel !== 'index.html') return serveStatic(res, path.join(PUBLIC, rel));
   // Cloudflare gives static files a 4h browser TTL whatever we send, so each build needs its own URLs.
   const html = fs.readFileSync(path.join(PUBLIC, rel), 'utf8').replace(/"\/(app\.js|style\.css)"/g, `"/$1?v=${BUILD}"`);

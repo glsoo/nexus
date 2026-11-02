@@ -24,7 +24,7 @@ const ICONS = {
   sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>', spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
-  download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', back: '<path d="M15 18l-6-6 6-6"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>', back: '<path d="M15 18l-6-6 6-6"/>',
   plane: '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.3c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
 };
 const icon = name => { const t = document.createElement('template'); t.innerHTML = `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return t.content.firstChild; };
@@ -597,6 +597,7 @@ function send() {
   if (!text && !S.images.length) return;
   if (S.ws?.readyState !== 1) { toast('Not connected. Your message is still here, so send it once you are back.'); return; }
   $slash.hidden = true;
+  dictation?.abort();
   delete drafts[S.project];
   if (text.startsWith('/') && localCommand(text)) { $input.value = ''; grow(); return; }
   sendWs({ t: 'send', text, images: S.images.length ? S.images : undefined });
@@ -628,6 +629,29 @@ const toggleAutopilot = async () => {
   if (!S.state.autopilot && !await confirmBox('Turn on autopilot?', `The agent stops asking you. It runs commands and edits files without approval, approves its own plan in plan mode, and answers its own questions, until the task is done or it has made 150 model requests. Plan mode still can't change anything before the plan. Stop works as usual.`, 'Turn on', 'danger')) return;
   setOption('autopilot', !S.state.autopilot);
 };
+
+// Dictation types what you say into the message box, using the browser's own speech recognition (Chrome, Edge and Safari; Firefox has none, so the button hides).
+const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+let dictation = null;
+function dictate(btn) {
+  if (dictation) { dictation.stop(); return; }
+  const rec = dictation = new Speech();
+  const before = $input.value.trim() ? `${$input.value.trimEnd()} ` : '';
+  const mark = on => { btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', String(on)); };
+  Object.assign(rec, { lang: navigator.language, interimResults: true, continuous: true });
+  rec.onresult = e => {
+    $input.value = before + Array.from(e.results, r => r[0].transcript).join('');
+    drafts[S.project] = $input.value;
+    grow();
+  };
+  rec.onerror = e => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('The microphone is blocked. Allow it for this site; browsers only offer it over https or on localhost.');
+    else if (e.error !== 'aborted' && e.error !== 'no-speech') toast(`Dictation stopped: ${e.error}.`);
+  };
+  rec.onend = () => { if (dictation === rec) dictation = null; mark(false); };
+  rec.start();
+  mark(true);
+}
 
 // Reconnects rebuild the composer, and iOS reconnects often, so drafts live outside it.
 let drafts = {};
@@ -668,6 +692,7 @@ function composer() {
   syncThumbs();
   return h('div', { class: 'composer' }, $slash, h('div', { class: 'cbox' }, $thumbs, $input, h('div', { class: 'cbar' },
     h('button', { class: 'icon-btn', 'aria-label': 'Attach image', title: 'Attach image', onclick: () => file.click() }, icon('clip')), file,
+    Speech && h('button', { class: 'icon-btn mic', type: 'button', 'aria-label': 'Dictate', 'aria-pressed': 'false', title: "Dictate: speak and it types (your browser's speech recognition)", onclick: e => dictate(e.currentTarget) }, icon('mic')),
     $mode, $autoBtn, $agentBtn, $model, $promptBtn, $meter, $stopBtn, $sendBtn)));
 }
 

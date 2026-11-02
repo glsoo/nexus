@@ -364,3 +364,14 @@ test('Hugging Face Spaces connect natively on Gradio 6 and through mcp-remote be
     await assert.rejects(market.item('mcp', 'huggingface', '../../etc'), /Bad Space id/);
   } finally { globalThis.fetch = realFetch; }
 });
+
+test('the phone app manifest is linked, served publicly with its MIME type, and installable', () => {
+  const read = f => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+  const manifest = JSON.parse(read('public/manifest.webmanifest'));
+  assert.equal(manifest.display, 'standalone');
+  assert.ok(manifest.start_url && manifest.icons.some(i => i.sizes === 'any' || parseInt(i.sizes, 10) >= 144));
+  assert.match(read('public/index.html'), /<link rel="manifest" href="\/manifest\.webmanifest">/);
+  const server = read('server/index.js');
+  assert.match(server, /'\/manifest\.webmanifest': 'manifest\.webmanifest'/);
+  assert.match(server, /'\.webmanifest': 'application\/manifest\+json'/);
+});
