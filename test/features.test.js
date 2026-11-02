@@ -741,7 +741,7 @@ test('the autopilot request limit comes from settings, and spending adds up ever
     if (before === null) fs.rmSync(settingsFile); else fs.writeFileSync(settingsFile, before);
   }
   assert.equal(model.sent.length, 3);
-  assert.match(s.state.log.at(-1).text, /stopped here after 3 model requests.*raise the limit in Settings/);
+  assert.match(s.state.log.at(-1).text, /stopped here after 3 model requests.*Settings → Autopilot request limit, or `autopilotRequests` in ~\/\.nexus\/settings\.json/);
   assert.equal(agent.autopilotLimit(), 150, 'the default once the setting is gone');
 
   projects.create('spend-a');

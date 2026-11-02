@@ -330,7 +330,7 @@ async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLa
     if (compact && compactAt(s) && (result.usage?.input_tokens || 0) > compactAt(s)) await compact();
     if (!calls.length && !drain?.pendingCount?.()) return result.output.filter(o => o.type === 'message').flatMap(o => o.content).map(c => c.text || '').join('');
     if (s.state.autopilot && ++autoSteps >= (autopilotLimit() || Infinity)) {
-      const text = `Autopilot stopped here after ${autoSteps} model requests in one go, so an unwatched loop can't run up the bill. Send a message to continue, or raise the limit in Settings.`;
+      const text = `Autopilot stopped here after ${autoSteps} model requests in one go, so an unwatched loop can't run up the bill. Send a message to continue. To let it run longer, raise the limit in Settings → Autopilot request limit, or \`autopilotRequests\` in ~/.nexus/settings.json (0 means no limit).`;
       sink.add({ type: 'system', text });
       return text;
     }
@@ -773,7 +773,7 @@ async function slash(s, text) {
       if (arg === 'on' || arg === 'off') setOption(s, 'autopilot', arg === 'on');
       else if (arg) return note(s, 'Usage: /autopilot [on|off]', 'error');
       return note(s, s.state.autopilot
-        ? `Autopilot is on. The agent approves its own tool calls${s.state.mode === 'plan' ? ' and its plan' : ''}, answers its own questions and keeps going, ${autopilotLimit() ? `for up to ${autopilotLimit()} model requests at a time` : 'with no request limit'}. Change the limit in Settings.`
+        ? `Autopilot is on. The agent approves its own tool calls${s.state.mode === 'plan' ? ' and its plan' : ''}, answers its own questions and keeps going, ${autopilotLimit() ? `for up to ${autopilotLimit()} model requests at a time` : 'with no request limit'}. Change the limit in Settings → Autopilot request limit, or \`autopilotRequests\` in ~/.nexus/settings.json (0 means no limit).`
         : 'Autopilot is off. The agent stops to ask when it needs you.');
     case 'cost': {
       const u = s.state.usage;

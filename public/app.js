@@ -719,7 +719,7 @@ const setMode = async value => {
   sendWs({ t: 'option', key: 'mode', value });
 };
 const toggleAutopilot = async () => {
-  if (!S.state.autopilot && !await confirmBox('Turn on autopilot?', `The agent stops asking you. It runs commands and edits files without approval, approves its own plan in plan mode, and answers its own questions, until the task is done or it reaches the request limit in Settings. Plan mode still can't change anything before the plan. Stop works as usual.`, 'Turn on', 'danger')) return;
+  if (!S.state.autopilot && !await confirmBox('Turn on autopilot?', `The agent stops asking you. It runs commands and edits files without approval, approves its own plan in plan mode, and answers its own questions, until the task is done or it hits the autopilot request limit (150 by default; change it in Settings → Autopilot request limit). Plan mode still can't change anything before the plan. Stop works as usual.`, 'Turn on', 'danger')) return;
   setOption('autopilot', !S.state.autopilot);
 };
 
