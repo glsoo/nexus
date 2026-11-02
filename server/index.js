@@ -58,13 +58,13 @@ function setCookie(req, res, value, maxAge) {
   res.setHeader('set-cookie', `nexus_session=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`);
 }
 
-function body(req) {
+function body(req, max = 40_000_000) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on('data', c => {
       size += c.length;
-      if (size > 40_000_000) { reject(fail(413, 'Request too large.')); req.destroy(); } else chunks.push(c);
+      if (size > max) { reject(fail(413, 'Request too large.')); req.destroy(); } else chunks.push(c);
     });
     req.on('end', () => {
       try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks)) : {}); } catch { reject(fail(400, 'Invalid JSON.')); }
@@ -302,11 +302,11 @@ async function api(req, res, url) {
   if (url.pathname === '/api/login' && req.method === 'POST') {
     const ip = clientIp(req);
     if (auth.loginBlocked(ip)) throw fail(429, 'Too many failed attempts. Try again later.');
-    const { user, pass } = await body(req);
-    if (!await auth.verifyPassword(user ?? '', pass ?? '')) {
-      auth.recordFail(ip);
-      throw fail(401, 'Incorrect username or password.');
-    }
+    // Counted before anything is awaited, so guesses sent in parallel can't all pass the check above.
+    const attempt = auth.recordFail(ip);
+    const { user, pass } = await body(req, 10_000);
+    if (!await auth.verifyPassword(user ?? '', pass ?? '')) throw fail(401, 'Incorrect username or password.');
+    auth.forgive(attempt);
     setCookie(req, res, auth.createSession(), 30 * 24 * 3600);
     return { ok: true };
   }
@@ -355,9 +355,16 @@ function present(req, res, url) {
   up.end();
 }
 
-const server = http.createServer(async (req, res) => {
+// Anything a handler throws ends that request, never the server.
+const server = http.createServer((req, res) => handle(req, res).catch(err => {
+  console.error(req.method, req.url, err);
+  if (!res.headersSent) res.writeHead(500);
+  res.end();
+}));
+async function handle(req, res) {
   for (const [k, v] of Object.entries(SECURITY)) res.setHeader(k, v);
-  const url = new URL(req.url, 'http://x');
+  let url;
+  try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400).end(); return; }
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('cache-control', 'no-store');
     try {
@@ -374,7 +381,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname.startsWith('/present/')) return present(req, res, url);
   if (url.pathname.startsWith('/vendor/')) {
-    const file = VENDOR[url.pathname.slice(8)];
+    const file = Object.hasOwn(VENDOR, url.pathname.slice(8)) ? VENDOR[url.pathname.slice(8)] : null; // not "constructor"
     if (!file) { res.writeHead(404).end(); return; }
     serveStatic(res, path.join(NM, file), true);
     return;
@@ -384,7 +391,7 @@ const server = http.createServer(async (req, res) => {
   // Cloudflare gives static files a 4h browser TTL whatever we send, so each build needs its own URLs.
   const html = fs.readFileSync(path.join(PUBLIC, rel), 'utf8').replace(/"\/(app\.js|style\.css)"/g, `"/$1?v=${BUILD}"`);
   res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-cache' }).end(html);
-});
+}
 
 // ---- WebSockets: /ws for the conversation, /term for the terminal ----
 const wss = new WebSocketServer({ noServer: true, maxPayload: 40_000_000 });
@@ -393,7 +400,8 @@ const sendTo = (ws, msg) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON
 const broadcast = msg => wss.clients.forEach(ws => sendTo(ws, msg));
 
 server.on('upgrade', (req, socket, head) => {
-  const url = new URL(req.url, 'http://x');
+  let url;
+  try { url = new URL(req.url, 'http://x'); } catch { socket.destroy(); return; }
   const token = cookieToken(req);
   const target = { '/ws': wss, '/term': termWss }[url.pathname];
   if (!target || !originOk(req, true) || !auth.validSession(token)) {

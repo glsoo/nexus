@@ -205,6 +205,7 @@ const BROWSERS = {
 async function screenshot({ url, width = 1280, height = 800 }, { cwd, signal }) {
   const browser = (BROWSERS[process.platform] || BROWSERS.linux).find(f => fs.existsSync(f));
   if (!browser) throw new Error('Screenshot needs Chrome, Edge or Chromium installed.');
+  if (/^(\\\\|\/\/)/.test(String(url)) || /^\\\\/.test(resolve(cwd, String(url)))) throw new Error('Network paths are not supported.'); // Windows would send your login hash to that host
   const target = /^https?:\/\//i.test(url) ? url : pathToFileURL(resolve(cwd, url)).href;
   const w = Math.min(Math.max(Math.round(width) || 1280, 200), 3840), h = Math.min(Math.max(Math.round(height) || 800, 200), 4000);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-shot-'));
@@ -257,14 +258,22 @@ const READS = new Set(['Read', 'Glob', 'Grep']);
 const EDITS = new Set(['Write', 'Edit', 'NotebookEdit']);
 const targetPath = (tool, a) => a.file_path ?? a.path ?? '.';
 
-// Writes into .nexus (conversation, agents, checkpoints) are never auto-approved.
+// Writes into .nexus (conversation, agents, checkpoints) or any .git (config and hooks run commands) are never auto-approved.
 const inProject = (cwd, tool, a) => isInside(cwd, resolve(cwd, targetPath(tool, a)));
-const inNexus = (cwd, a) => isInside(path.join(cwd, '.nexus'), resolve(cwd, targetPath('', a)));
+const inNexus = (cwd, a) => {
+  const file = resolve(cwd, targetPath('', a));
+  return isInside(path.join(cwd, '.nexus'), file) || path.relative(cwd, file).split(/[\\/]/).some(p => p.toLowerCase() === '.git');
+};
 
 // "Always allow" rules are exact matches: a prefix rule like `npm test` would also pass `npm test; rm -rf ~`.
 export function ruleKey(tool, args, cwd) {
   if (tool === 'Bash') return `Bash:${args.command}`;
   if (tool === 'WebFetch') { try { return `WebFetch:${new URL(args.url).host}`; } catch { return `WebFetch:${args.url}`; } }
+  // Like WebFetch per site, and like Read per file, so allowing one page never allows reading ~/.ssh.
+  if (tool === 'Screenshot') {
+    if (!/^https?:\/\//i.test(args.url)) return `Screenshot:${resolve(cwd, String(args.url))}`;
+    try { return `Screenshot:${new URL(args.url).host}`; } catch { return `Screenshot:${args.url}`; }
+  }
   if (EDITS.has(tool) || READS.has(tool)) {
     return inProject(cwd, tool, args) && !inNexus(cwd, args) ? `${tool}:*` : `${tool}:${resolve(cwd, targetPath(tool, args))}`;
   }

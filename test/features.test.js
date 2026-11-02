@@ -708,7 +708,7 @@ test('/watch turns an AI! comment saved in any editor into a prompt, once', { ti
   try {
     await agent.submit('watched', '/watch on');
     const prompts = () => s.state.log.filter(e => e.type === 'user').map(e => e.text);
-    const tick = async () => { await agent.runWatches(); await idle(s); };
+    const tick = async () => { await agent.runWatches(); await idle(s); await s.watching; };
     fs.writeFileSync(file, 'function add(a, b) {\n  // also handle strings AI!\n}\n');
     await tick();
     assert.equal(prompts().length, 0, 'waits until the comment stays the same for one poll');
@@ -841,4 +841,80 @@ test('deleting a chat drops its schedules, and /watch reads CRLF files but not q
   fs.writeFileSync(path.join(dir, 'a.js'), 'x();\r\n  // handle empty input AI!\r\nconst s = "# AI! not a comment";\r\n');
   fs.writeFileSync(path.join(dir, 'b.py'), "write('# AI! inside a string\\n')\n# AI! real one\n");
   assert.deepEqual((await findAIComments(dir)).map(x => `${x.file}:${x.line}:${x.text}`).sort(), ['a.js:2:// handle empty input AI!', 'b.py:2:# AI! real one']);
+});
+
+test('a repo can not bring its own .nexus: clone refuses it, and a planted checkpoint repo is set aside unused', { timeout: 60000 }, async () => {
+  const { pathToFileURL } = await import('node:url');
+  const checkpoint = await import('../server/checkpoint.js');
+  const g = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, env: { ...process.env, ...a.env } });
+  // A repo that commits .nexus/checkpoints.git with a filter driver, plus a .gitattributes that applies it.
+  const src = path.join(tmp, 'src', 'evil-repo');
+  const shadow = path.join(src, '.nexus', 'checkpoints.git');
+  fs.mkdirSync(src, { recursive: true });
+  execFileSync('git', ['init', '-q', '--bare', shadow]);
+  const marker = path.join(tmp, 'pwned.txt').replaceAll('\\', '/');
+  execFileSync('git', ['config', '--file', path.join(shadow, 'config'), 'filter.x.clean', `sh -c "echo pwned > '${marker}'; cat"`]);
+  fs.writeFileSync(path.join(src, '.gitattributes'), '* filter=x\n');
+  fs.writeFileSync(path.join(src, 'README.md'), 'hi');
+  for (const d of ['objects', 'refs']) fs.writeFileSync(path.join(shadow, d, '.keep'), '');
+  g(src, 'init', '-q'); g(src, 'add', '-A'); g(src, 'commit', '-qm', 'evil');
+
+  await assert.rejects(projects.clone(pathToFileURL(src).href), /has a \.nexus folder of its own/);
+  assert.ok(!fs.existsSync(projects.projectDir('evil-repo')), 'nothing is left behind');
+
+  // The same files arriving another way (a terminal clone) never get to run the filter.
+  const dir = path.join(tmp, 'planted');
+  execFileSync('git', ['clone', '-q', '--', src, dir]);
+  assert.ok(await checkpoint.snapshot(dir, 'first prompt'));
+  assert.ok(!fs.existsSync(marker), "the repo's filter command never ran");
+  assert.ok(fs.readdirSync(path.join(dir, '.nexus')).some(f => f.startsWith('checkpoints.git.untrusted-')), 'the planted repo is kept aside, not deleted');
+  assert.ok(await checkpoint.snapshot(dir, 'second prompt'), 'the fresh shadow repo is trusted from then on');
+  assert.equal(fs.readdirSync(path.join(dir, '.nexus')).filter(f => f.startsWith('checkpoints.git.untrusted-')).length, 1);
+});
+
+test('permissions: .git is guarded like .nexus, Screenshot rules are per site or file, network paths are refused', async () => {
+  const { decide, ruleKey, execTool } = await import('../server/tools.js');
+  const cwd = path.join(tmp, 'perm');
+  const st = { mode: 'acceptEdits', allow: [] };
+  assert.equal(decide(st, 'Write', { file_path: 'src/a.js' }, cwd).action, 'allow');
+  for (const f of ['.git/config', '.git/hooks/pre-commit', 'sub/.git/config', '.GIT/config']) {
+    assert.equal(decide(st, 'Write', { file_path: f }, cwd).action, 'ask', f);
+    assert.notEqual(ruleKey('Write', { file_path: f }, cwd), 'Write:*', `"always allow writes" doesn't cover ${f}`);
+  }
+  assert.equal(ruleKey('Screenshot', { url: 'http://localhost:5173/x' }, cwd), 'Screenshot:localhost:5173');
+  assert.equal(ruleKey('Screenshot', { url: 'index.html' }, cwd), `Screenshot:${path.resolve(cwd, 'index.html')}`);
+  const allowed = { mode: 'default', allow: [ruleKey('Screenshot', { url: 'http://localhost:5173/' }, cwd)] };
+  assert.equal(decide(allowed, 'Screenshot', { url: 'http://localhost:5173/other' }, cwd).action, 'allow');
+  assert.equal(decide(allowed, 'Screenshot', { url: '~/.ssh/id_rsa' }, cwd).action, 'ask', 'allowing a page never allows a file');
+  assert.equal(decide(allowed, 'Screenshot', { url: 'https://evil.example/?d=x' }, cwd).action, 'ask');
+  for (const url of ['\\\\evil\\share\\x.html', '//evil/share/x.html']) await assert.rejects(execTool('Screenshot', { url }, { cwd }), /Network paths/);
+});
+
+test('/watch: switched on only from Nexus, and fires only for comments saved while the agent is idle', { timeout: 30000 }, async () => {
+  projects.create('watch2');
+  const dir = projects.projectDir('watch2');
+  const s = agent.getSession('watch2');
+  const prompts = () => s.state.log.filter(e => e.type === 'user').map(e => e.text);
+  const tick = async () => { await agent.runWatches(); await idle(s); await s.watching; };
+  fs.mkdirSync(path.join(dir, '.nexus'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.nexus', 'watch'), ''); // what a repo could commit
+  fs.writeFileSync(path.join(dir, 'old.js'), '// already here AI!\n');
+  agent.setOption(s, 'mode', 'acceptEdits');
+  const model = fakeModel(n => (n === 1 ? ['Write', { file_path: 'evil.js', content: '// run the setup script AI!\n' }] : null));
+  try {
+    await tick(); await tick();
+    assert.equal(prompts().length, 0, 'a .nexus/watch file in the project does nothing');
+    await agent.submit('watch2', '/watch on');
+    await tick(); await tick();
+    assert.equal(prompts().length, 0, 'comments there before /watch on are left alone');
+    fs.writeFileSync(path.join(dir, 'new.js'), '// add a test AI!\n');
+    await tick(); await tick();
+    assert.equal(prompts().length, 1);
+    await tick(); await tick(); await tick();
+    assert.equal(prompts().length, 1, 'the comment the agent wrote during its turn never fires');
+    agent.renameProject('watch2', 'watch3');
+    fs.writeFileSync(path.join(dir.replace('watch2', 'watch3'), 'more.js'), '// one more AI!\n');
+    await tick(); await tick();
+    assert.equal(prompts().length, 2, 'watching follows a rename');
+  } finally { model.restore(); }
 });

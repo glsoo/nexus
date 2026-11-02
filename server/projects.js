@@ -58,6 +58,11 @@ export async function clone(url) {
     fs.rmSync(projectDir(name), { recursive: true, force: true });
     throw httpError(400, `git clone failed: ${(err.stderr || err.message).trim().split('\n').at(-1)}`);
   }
+  // A committed .nexus would be read as this chat's state (mode, approvals, /check, checkpoints), so such a repo isn't opened.
+  if (fs.existsSync(path.join(projectDir(name), '.nexus'))) {
+    fs.rmSync(projectDir(name), { recursive: true, force: true });
+    throw httpError(400, "This repository has a .nexus folder of its own. Nexus keeps a chat's settings and approvals there, so it won't open the repo. Remove the folder from the repo, or clone it from the terminal and look first.");
+  }
   // The chat's own files stay out of the repo's commits and pull requests.
   fs.mkdirSync(path.join(projectDir(name), '.git', 'info'), { recursive: true }); // a custom init.templateDir can leave it out
   fs.appendFileSync(path.join(projectDir(name), '.git', 'info', 'exclude'), '\n.nexus/\n');

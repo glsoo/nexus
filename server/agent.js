@@ -467,11 +467,15 @@ export function runSchedules(now = new Date()) {
 export const startSchedules = () => setInterval(() => Promise.resolve().then(() => runSchedules()).catch(err => console.error('schedules:', err.message)), 20_000).unref();
 
 // /watch: an AI! comment saved in any editor becomes a prompt, once it has stayed the same for one poll.
-// The flag is a file in .nexus, so it follows renames and costs a stat per poll.
+// Which chats watch lives in ~/.nexus, not the project, so a repo can't switch it on.
+// Comments already there when it's turned on, and ones that appear during a turn (the agent's own writes), don't fire.
 // ponytail: polls with rg every 3 s instead of fs.watch, which can run out of inotify watches on big Linux trees.
-const watchFlag = name => path.join(projects.projectDir(name), '.nexus', 'watch');
+const watchFile = () => path.join(NEXUS_HOME, 'watch.json');
+const watched = () => { const list = readJson(watchFile(), []); return Array.isArray(list) ? list : []; };
+const setWatched = (name, on) => writeAtomic(watchFile(), JSON.stringify([...watched().filter(n => n !== name), ...(on ? [name] : [])]));
+const aiKeys = async s => new Map((await findAIComments(cwdOf(s))).map(x => [`${x.file}\0${x.text}`, x]));
 async function watchAI(s) {
-  const hits = new Map((await findAIComments(cwdOf(s))).map(x => [`${x.file}\0${x.text}`, x]));
+  const hits = await aiKeys(s);
   const last = s.aiLast;
   s.aiLast = new Set(hits.keys());
   s.aiDone = new Set([...(s.aiDone || [])].filter(k => hits.has(k)));
@@ -481,11 +485,18 @@ async function watchAI(s) {
   if (sessions.get(s.name) !== s) return; // deleted while rg ran
   await submit(s.name, `I left instructions as AI! comments in my editor:\n${ready.map(([, x]) => `- ${x.file}:${x.line}: ${x.text}`).join('\n')}\nDo what they ask, then remove the AI! comments you handled.`);
 }
+// Runs as a turn ends, queued behind any poll, so what the agent wrote is marked done before the next poll sees it.
+function seedAI(s) {
+  if (!watched().includes(s.name)) return;
+  const p = s.watching = Promise.resolve(s.watching).then(() => aiKeys(s)).then(hits => { for (const k of hits.keys()) if (!s.aiLast?.has(k)) (s.aiDone ||= new Set()).add(k); })
+    .catch(() => {}).finally(() => { if (s.watching === p) s.watching = null; });
+}
 export function runWatches() {
-  return Promise.all(projects.list().filter(p => fs.existsSync(watchFlag(p.name))).map(({ name }) => {
+  return Promise.all(watched().filter(projects.exists).map(name => {
     const s = getSession(name);
     if (s.running || s.queue.length || s.watching) return null;
-    return (s.watching = watchAI(s).catch(err => console.error(`/watch ${name}:`, err.message)).finally(() => { s.watching = null; }));
+    const p = s.watching = watchAI(s).catch(err => console.error(`/watch ${name}:`, err.message)).finally(() => { if (s.watching === p) s.watching = null; });
+    return p;
   }));
 }
 export const startWatches = () => setInterval(() => Promise.resolve().then(runWatches).catch(err => console.error('/watch:', err.message)), 3000).unref();
@@ -493,7 +504,7 @@ export const startWatches = () => setInterval(() => Promise.resolve().then(runWa
 // ---- worktrees ----
 // An isolated agent works on its own branch in .nexus/worktrees, so agents editing at the same time never collide.
 const readText = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
-const git = (cwd, ...args) => promisify(execFile)('git', args, { cwd, env: childEnv(), timeout: 120000, windowsHide: true }).then(r => r.stdout.trim());
+const git = (cwd, ...args) => promisify(execFile)('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], { cwd, env: childEnv(), timeout: 120000, windowsHide: true }).then(r => r.stdout.trim());
 
 async function addWorktree(cwd, id) {
   const dir = path.join(cwd, '.nexus', 'worktrees', id);
@@ -627,6 +638,7 @@ async function startTurn(s) {
     projects.repairItems(s.state.items);
     s.running = false;
     s.controller = null;
+    seedAI(s); // AI! comments that appeared during the turn are the agent's, not the user's
     for (const e of s.state.log) if (e.status === 'running') { e.status = 'interrupted'; send(s, { t: 'entry', entry: e }); }
     persist(s);
     status(s);
@@ -793,10 +805,10 @@ async function slash(s, text) {
       return note(s, s.state.budget ? `Budget: the agent stops once this chat has cost $${s.state.budget}. Cost so far: ${spent(s)}.` : `No budget. Cost so far: ${spent(s)}. Set one with /budget <dollars>.`);
     }
     case 'watch':
-      if (arg === 'on') { fs.mkdirSync(path.dirname(watchFlag(s.name)), { recursive: true }); fs.writeFileSync(watchFlag(s.name), ''); s.aiLast = s.aiDone = null; }
-      else if (arg === 'off') fs.rmSync(watchFlag(s.name), { force: true });
+      if (arg === 'on') { const hits = await aiKeys(s).catch(() => new Map()); s.aiLast = new Set(hits.keys()); s.aiDone = new Set(hits.keys()); setWatched(s.name, true); }
+      else if (arg === 'off') setWatched(s.name, false);
       else if (arg) return note(s, 'Usage: /watch [on|off]', 'error');
-      return note(s, fs.existsSync(watchFlag(s.name))
+      return note(s, watched().includes(s.name)
         ? 'Watching: write a comment ending in `AI!` in any editor, like `// handle empty input AI!`, save, and Nexus does it. `/watch off` stops.'
         : 'Not watching. `/watch on` turns a saved `AI!` comment into a prompt.');
     case 'check':
@@ -898,6 +910,7 @@ export function renameProject(from, to) {
   for (const sh of shells.values()) if (sh.project === from) sh.project = to;
   const list = schedules();
   if (list.some(x => x.project === from)) saveSchedules(list.map(x => (x.project === from ? { ...x, project: to } : x)));
+  if (watched().includes(from)) { setWatched(from, false); setWatched(to, true); }
   hub.emit('renamed', from, to);
 }
 
@@ -952,6 +965,7 @@ export function trashProject(name) {
   // A new chat can reuse the name, and must not inherit these.
   const list = schedules();
   if (list.some(x => x.project === name)) saveSchedules(list.filter(x => x.project !== name));
+  if (watched().includes(name)) setWatched(name, false);
   for (const [id, a] of agents) if (a.project === name) agents.delete(id);
   for (const [id, sh] of shells) if (sh.project === name) shells.delete(id);
 }
