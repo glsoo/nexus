@@ -648,3 +648,15 @@ test('search finds messages in any chat, newest first, and chats by name', () =>
   assert.deepEqual(agent.search('   '), []);
   assert.ok(!agent.search('nothing-says-this').length);
 });
+
+test('a repo set up for another tool keeps its rules, unless AGENTS.md has them', async () => {
+  const { instructions } = await import('../server/extensions.js');
+  const dir = fs.mkdtempSync(path.join(tmp, 'rules-'));
+  fs.writeFileSync(path.join(dir, '.cursorrules'), 'use tabs');
+  fs.writeFileSync(path.join(dir, 'CLAUDE.md'), 'run make test');
+  assert.match(instructions(dir), /run make test/);
+  assert.doesNotMatch(instructions(dir), /use tabs/, 'only the first borrowed file');
+  fs.writeFileSync(path.join(dir, 'AGENTS.md'), 'shared rules');
+  assert.match(instructions(dir), /shared rules/);
+  assert.doesNotMatch(instructions(dir), /run make test/);
+});
