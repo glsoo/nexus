@@ -4,13 +4,15 @@
 
 <p align="center">
   <b>Nexus is an AI coding agent you run on your own machine and use from any browser, including your phone.</b><br>
-  It reads your code, edits files, runs commands and tests, and asks before anything risky.
+  It reads your code, edits files, runs commands and tests, and asks before anything risky.<br>
+  <sub>If Nexus is useful to you, a ⭐ on GitHub helps other people find it.</sub>
 </p>
 
 <p align="center">
+  <a href="https://github.com/glsoo/nexus/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/glsoo/nexus/actions/workflows/test.yml/badge.svg"></a>
   <img alt="Node.js 24+" src="https://img.shields.io/badge/node-24%2B-7e22ce?style=flat-square&logo=nodedotjs&logoColor=white">
   <img alt="Any model" src="https://img.shields.io/badge/models-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini%20%C2%B7%20local-7e22ce?style=flat-square">
-  <img alt="Linux and Windows" src="https://img.shields.io/badge/runs%20on-Linux%20%7C%20Windows-111111?style=flat-square">
+  <img alt="Linux, macOS and Windows" src="https://img.shields.io/badge/runs%20on-Linux%20%7C%20macOS%20%7C%20Windows-111111?style=flat-square">
   <img alt="No build step" src="https://img.shields.io/badge/build%20step-none-111111?style=flat-square">
 </p>
 
@@ -35,6 +37,7 @@
 - **Any model, with the cost in plain sight.** Claude, GPT, Gemini, Groq, DeepSeek, Mistral, xAI, hundreds more through OpenRouter, or a free local model in Ollama or LM Studio. Each chat shows its cost in dollars, estimated from list prices.
 - **Several agents at once without collisions.** Agents can work in their own git worktrees and hand back a branch each, so you merge the one you like.
 - **Any screen.** The same agent on your desktop, a laptop or an installed phone app, with voice input.
+- **Bring your setup.** Your `AGENTS.md`, `CLAUDE.md` or `.cursorrules`, the skills and commands you made for Claude Code, Codex or VS Code, and your MCP servers all work as they are. Start from any GitHub repo with one paste.
 
 ## ✨ What's inside
 
@@ -234,6 +237,10 @@ systemctl --user daemon-reload
 systemctl --user enable --now nexus
 journalctl --user -u nexus -f
 ```
+
+## 🤝 Contributing
+
+Issues and pull requests are welcome. `npm test` runs the whole suite in a few seconds, and GitHub Actions runs it on Linux, macOS and Windows for every push.
 
 ## 🙏 Credits
 
