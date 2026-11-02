@@ -40,6 +40,9 @@ export function create(name) {
   return name;
 }
 
+// The parts of .nexus meant to be committed and shared with a team.
+export const SHARED = ['agents', 'skills', 'commands'];
+
 // Clones a repository into a new project named after it (repo, repo-2, ...).
 export async function clone(url) {
   url = String(url || '').trim();
@@ -58,10 +61,13 @@ export async function clone(url) {
     fs.rmSync(projectDir(name), { recursive: true, force: true });
     throw httpError(400, `git clone failed: ${(err.stderr || err.message).trim().split('\n').at(-1)}`);
   }
-  // A committed .nexus would be read as this chat's state (mode, approvals, /check, checkpoints), so such a repo isn't opened.
-  if (fs.existsSync(path.join(projectDir(name), '.nexus'))) {
+  // Shared agents, skills and commands are fine. Anything else in a committed .nexus would be read as this chat's own state
+  // (mode, approvals, /check, checkpoints), so such a repo isn't opened.
+  const nexus = path.join(projectDir(name), '.nexus');
+  const state = fs.existsSync(nexus) ? fs.readdirSync(nexus).filter(f => !SHARED.includes(f)) : [];
+  if (state.length) {
     fs.rmSync(projectDir(name), { recursive: true, force: true });
-    throw httpError(400, "This repository has a .nexus folder of its own. Nexus keeps a chat's settings and approvals there, so it won't open the repo. Remove the folder from the repo, or clone it from the terminal and look first.");
+    throw httpError(400, `This repository commits Nexus chat data (.nexus/${state[0]}), where Nexus keeps a chat's settings and approvals, so it won't open it. Shared .nexus/agents, skills and commands are fine; remove the rest from the repo.`);
   }
   // The chat's own files stay out of the repo's commits and pull requests.
   fs.mkdirSync(path.join(projectDir(name), '.git', 'info'), { recursive: true }); // a custom init.templateDir can leave it out

@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,8 +33,22 @@ export function getSession(name) {
   if (!s) {
     s = { name, state: projects.load(name), queue: [], pending: new Map(), running: false, controller: null };
     sessions.set(name, s);
+    distrustCommitted(s);
   }
   return s;
+}
+
+// Chat state the project's own git tracks came with the code, not from this computer, so the approvals in it don't count.
+function distrustCommitted(s) {
+  let tracked;
+  try {
+    tracked = execFileSync('git', ['ls-files', '--', '.nexus'], { cwd: projects.projectDir(s.name), env: childEnv(), windowsHide: true, timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+  } catch { return; } // not a git repository
+  if (!tracked.split('\n').some(f => f && !projects.SHARED.some(d => f.startsWith(`.nexus/${d}/`)))) return;
+  const st = s.state;
+  if (st.mode === 'default' && !st.autopilot && !st.allow?.length && !st.check) return;
+  Object.assign(st, { mode: 'default', autopilot: false, allow: [], check: '' });
+  st.log.push({ id: newId(), type: 'system', text: "This project's git repository tracks Nexus chat data in .nexus, so the mode, approvals, autopilot and /check saved there were reset. Stop tracking .nexus (keep only agents, skills and commands) to keep your settings." });
 }
 const cwdOf = s => projects.projectDir(s.name);
 export const isBusy = name => {
