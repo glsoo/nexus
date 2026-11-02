@@ -806,8 +806,7 @@ async function agentPicker() {
   const pick = def => {
     setOption('agent', def?.name || '');
     if (def?.model) setOption('model', def.model);
-    toast(def ? `This chat now works as ${def.name}.` : 'Back to Nexus, the default agent.');
-    shut();
+    shut(); // the chat log shows the switch
   };
   const row = def => {
     const current = (def?.name || '') === (S.state.agent || '');

@@ -75,8 +75,12 @@ test('a chat sends its injection with each prompt, works as its agent, and keeps
   assert.match(req.instructions, /# Your role: reviewer[\s\S]*Only review, never edit\./);
   assert.match(req.instructions, /## This chat\nAnswer in French\./);
   assert.deepEqual(req.tools.map(t => t.name || t.type).sort(), ['AskUserQuestion', 'ExitPlanMode', 'Grep', 'Read', 'TodoWrite']);
-  const user = req.input.find(i => i.role === 'user');
-  assert.match(user.content, /^look at main\.js\n\n---\nStanding instructions from the user, added to every message:\nCite file paths\.$/);
+  const at = req.input.findIndex(i => i.role === 'user' && i.content.startsWith('look at main.js'));
+  assert.match(req.input[at].content, /^look at main\.js\n\n---\nStanding instructions from the user, added to every message:\nCite file paths\.$/);
+  // The switch is said in the conversation right before the next message, since models lean on recent history.
+  assert.match(req.input[at - 1].content, /switched this chat to the "reviewer" agent/);
+  assert.ok(s.state.log.some(e => e.type === 'system' && /Switched to the \*\*reviewer\*\* agent/.test(e.text)));
+  assert.equal(s.state.agentSwitch, undefined, 'announced once');
   const entry = s.state.log.find(e => e.type === 'user');
   assert.equal(entry.text, 'look at main.js');
   assert.equal(entry.injected, true);

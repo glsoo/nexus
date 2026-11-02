@@ -424,6 +424,13 @@ async function drainQueue(s) {
       Object.assign(m.entry, { queued: false, itemsLen: s.state.items.length, gen: s.state.gen, injected: Boolean(inject) || undefined });
       m.entry.cp = await checkpoint.snapshot(cwdOf(s), m.entry.text.slice(0, 72) || 'prompt');
       send(s, { t: 'entry', entry: m.entry });
+      if (s.state.agentSwitch !== undefined) {
+        const to = s.state.agentSwitch;
+        s.state.items.push({ role: 'user', content: to
+          ? `[The user switched this chat to the "${to}" agent. From this message on, work as that agent's instructions in the system prompt describe, and answer as that agent when asked about your role.]`
+          : '[The user switched this chat back to the default Nexus agent. From this message on, work as the default system prompt describes.]' });
+        delete s.state.agentSwitch;
+      }
     } else addEntry(s, { type: 'system', text: m.label });
     s.state.items.push({ role: 'user', content: userContent(text, m.images) });
   }
@@ -510,6 +517,11 @@ export function setOption(s, key, value) {
   else if (key === 'model' && !/^[\w.:-]+$/.test(value)) throw new Error('Invalid model id.');
   else if (key === 'agent' && value && !agentDefs(cwdOf(s)).some(d => d.name === value && !d.builtin)) throw new Error(`There is no agent type called ${value}.`);
   else if (!['mode', 'effort', 'model', 'agent'].includes(key)) throw new Error(`Unknown option ${key}.`);
+  // The system prompt changes at once, but models lean on recent history, so the switch is also said in the conversation.
+  if (key === 'agent' && (value || '') !== (s.state.agent || '')) {
+    s.state.agentSwitch = value || '';
+    addEntry(s, { type: 'system', text: value ? `Switched to the **${value}** agent.` : 'Switched back to **Nexus**, the default agent.' });
+  }
   s.state[key] = value;
   persist(s);
   status(s);
@@ -545,6 +557,7 @@ function clear(s) {
   if (s.state.log.length) writeAtomic(path.join(cwdOf(s), '.nexus', 'history', `${Date.now()}.json`), JSON.stringify(s.state.log));
   // A fresh conversation drops this chat's own prompts; the project's and global ones stay.
   delete s.state.prompts;
+  delete s.state.agentSwitch; // a fresh conversation starts with the agent's prompt, so there is no switch to announce
   Object.assign(s.state, { items: [], log: [], todos: [], gen: s.state.gen + 1 });
   Object.assign(s.state.usage, { lastInput: 0, lastCached: 0 });
   persist(s);
