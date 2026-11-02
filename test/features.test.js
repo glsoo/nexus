@@ -586,3 +586,19 @@ test('provider presets turn on with their API key, stay out of tool shells, and 
     delete process.env.DEEPSEEK_API_KEY;
   }
 });
+
+test('Screenshot shows the agent a page as an image at the size it asked for', { timeout: 60000 }, async t => {
+  const { decide, execTool } = await import('../server/tools.js');
+  assert.equal(decide({ mode: 'plan', allow: [] }, 'Screenshot', { url: 'x.html' }, tmp).action, 'ask', 'looking is allowed while planning');
+  const dir = path.join(tmp, 'shot');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'page.html'), '<body style="background:#c00"><h1>Hi</h1></body>');
+  let out;
+  try { out = await execTool('Screenshot', { url: 'page.html', width: 390, height: 300 }, { cwd: dir }); } catch (err) {
+    if (/needs Chrome/.test(err.message)) return t.skip('no browser here');
+    throw err;
+  }
+  const png = Buffer.from(out[0].image_url.split(',')[1], 'base64');
+  assert.equal(png.toString('latin1', 1, 4), 'PNG');
+  assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [390, 300]);
+});

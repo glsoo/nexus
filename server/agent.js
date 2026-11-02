@@ -19,7 +19,7 @@ const sessions = new Map();
 export const agents = new Map();
 const NAME_TIMEOUT = 8000;
 const REPO = fs.realpathSync(new URL('..', import.meta.url));
-const PARALLEL = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'Task', 'BashOutput', 'Skill']);
+const PARALLEL = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'Screenshot', 'Task', 'BashOutput', 'Skill']);
 const SUB_EXCLUDED = new Set(['Task', 'TodoWrite', 'AskUserQuestion', 'ExitPlanMode']);
 // 0 means off. Leaves room under the model's limit, because the summary request has to fit too.
 const compactAt = s => {
@@ -682,7 +682,7 @@ tools: <comma-separated tool names; leave this line out to allow every tool>
 ---
 <its instructions: the role, how it works step by step, what it must check, and what it reports back>
 
-Tools you can list: Bash, BashOutput, KillShell, Read, Write, Edit, NotebookEdit, Glob, Grep, WebFetch, web_search, TodoWrite, Task, Skill, and any mcp__ tools that are connected. Give it only what it needs: a read-only reviewer gets Read, Glob and Grep.
+Tools you can list: Bash, BashOutput, KillShell, Read, Write, Edit, NotebookEdit, Glob, Grep, WebFetch, Screenshot, web_search, TodoWrite, Task, Skill, and any mcp__ tools that are connected. Give it only what it needs: a read-only reviewer gets Read, Glob and Grep.
 Look at this project first if that helps tailor the instructions. Don't overwrite an existing agent type unless asked. Finish by saying its name, and that the Agent button next to the model switches this chat to it.`;
 
 function clear(s) {
