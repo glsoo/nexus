@@ -25,6 +25,10 @@ const ICONS = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', back: '<path d="M15 18l-6-6 6-6"/>',
+  close: '<path d="M6 6l12 12M6 18L18 6"/>', chat: '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9H13a8.5 8.5 0 0 1 8 8v.5z"/>',
+  files: '<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  changes: '<path d="M8 3v12a3 3 0 0 0 3 3h5M8 9h8"/><circle cx="8" cy="3" r="2"/><circle cx="18" cy="9" r="2"/><circle cx="18" cy="18" r="2"/>',
+  terminal: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9l3 3-3 3M13 15h4"/>',
 };
 const icon = name => { const t = document.createElement('template'); t.innerHTML = `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return t.content.firstChild; };
 
@@ -126,17 +130,25 @@ function shell() {
   $list = h('nav', { class: 'plist', 'aria-label': 'Projects' });
   $main = h('main', { class: 'main' });
   $scrim = h('div', { class: 'scrim', onclick: () => drawer(false) });
-  $side = h('aside', { class: 'side' },
-    h('div', { class: 'side-head' }, h('img', { src: '/icon.svg?v=purple', alt: '' }), 'Nexus'),
+  $side = h('aside', { class: 'side', id: 'workspace-sidebar', 'aria-label': 'Workspace', onkeydown: e => { if (e.key === 'Escape') drawer(false); } },
+    h('div', { class: 'side-head' }, h('img', { src: '/icon.svg?v=purple', alt: '' }), 'Nexus',
+      h('button', { class: 'icon-btn side-close', type: 'button', 'aria-label': 'Close menu', onclick: () => drawer(false) }, icon('close'))),
     h('button', { class: 'btn new', onclick: guard(newProject) }, icon('plus'), 'New project'),
-    $list,
+    h('div', { class: 'side-label' }, 'Projects'), $list,
     h('div', { class: 'side-foot' },
       h('button', { class: 'navbtn', id: 'nav-agents', onclick: () => go(null, 'agents') }, icon('bot'), 'Agents'),
       h('button', { class: 'navbtn', id: 'nav-settings', onclick: () => go(null, 'settings') }, icon('gear'), 'Settings'),
       h('button', { class: 'navbtn', onclick: guard(async () => { await api('POST', '/api/logout'); showLogin(); }) }, icon('out'), 'Sign out')));
   $app.replaceChildren(h('div', { class: 'shell' }, $scrim, $side, $main));
 }
-const drawer = open => { $side.classList.toggle('open', open); $scrim.classList.toggle('open', open); };
+const drawer = open => {
+  const wasOpen = $side.classList.contains('open');
+  $side.classList.toggle('open', open); $scrim.classList.toggle('open', open);
+  const trigger = $main.querySelector('.hamb');
+  trigger?.setAttribute('aria-expanded', String(open));
+  if (open) $side.querySelector('.side-close').focus();
+  else if (wasOpen) trigger?.focus();
+};
 
 // The folder keeps its dashes; only what people read changes. "say-hello" shows as "Say Hello".
 const pretty = name => name.replace(/[-_]+/g, ' ').replace(/\.+$/, '').replace(/\b[a-z]/g, c => c.toUpperCase());
@@ -225,12 +237,21 @@ async function loadMeta() {
   syncComposer();
 }
 
+function navigateTabs(e, tabs, at) {
+  const next = { ArrowRight: (at + 1) % tabs.length, ArrowLeft: (at + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1 }[e.key];
+  if (next === undefined) return;
+  e.preventDefault();
+  const id = tabs[next][0];
+  go(S.project, null, id);
+  document.getElementById(`tab-${id}`).focus();
+}
+
 let prevTab = 0;
 function render() {
   document.getElementById('nav-agents').classList.toggle('on', S.page === 'agents');
   document.getElementById('nav-settings').classList.toggle('on', S.page === 'settings');
   syncTitle();
-  const hamb = h('button', { class: 'icon-btn hamb', 'aria-label': 'Open menu', onclick: () => drawer(true) }, icon('menu'));
+  const hamb = h('button', { class: 'icon-btn hamb', 'aria-label': 'Open menu', 'aria-controls': 'workspace-sidebar', 'aria-expanded': String($side.classList.contains('open')), onclick: () => drawer(true) }, icon('menu'));
   if (S.page === 'agents') return agentsPage(hamb);
   if (S.page === 'settings') return settingsPage(hamb);
   if (!S.project) {
@@ -238,13 +259,14 @@ function render() {
       h('div', { class: 'empty' }, h('h2', {}, 'Start a project'), h('p', {}, 'Each conversation gets its own folder in ~/projects.'),
         h('div', {}, h('button', { class: 'btn primary', onclick: guard(newProject) }, icon('plus'), 'New project'))));
   }
-  const view = h('div', { class: 'view' });
   const tabs = [['chat', 'Chat'], ['files', 'Files'], ['changes', 'Changes'], ['terminal', 'Terminal']];
   const at = tabs.findIndex(([id]) => id === S.tab);
-  const pill = h('span', { class: 'pill', style: `--i:${at}` });
+  const view = h('div', { class: 'view', id: 'project-view', role: 'tabpanel', 'aria-labelledby': `tab-${S.tab}` });
+  const pill = h('span', { class: 'pill', style: `--i:${at}`, 'aria-hidden': 'true' });
   $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', { title: pretty(S.project) }, pretty(S.project)),
     h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(S.project)}`, onclick: e => projectMenu(e.currentTarget, S.project) }, icon('dots')),
-    h('div', { class: 'tabs', role: 'tablist' }, pill, tabs.map(([id, label]) => h('button', { class: `tab ${S.tab === id ? 'on' : ''}`, role: 'tab', 'aria-selected': String(S.tab === id), onclick: () => go(S.project, null, id) }, label)))),
+    h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Project views', onkeydown: e => navigateTabs(e, tabs, at) }, pill,
+      tabs.map(([id, label]) => h('button', { class: `tab ${S.tab === id ? 'on' : ''}`, id: `tab-${id}`, role: 'tab', 'aria-selected': String(S.tab === id), 'aria-controls': 'project-view', tabIndex: S.tab === id ? 0 : -1, onclick: () => go(S.project, null, id) }, icon(id), label)))),
   view);
   ({ chat: chatView, files: filesView, changes: changesView, terminal: termView })[S.tab](view);
   // The header is rebuilt on each render, so the pill slides from the last index.
@@ -379,8 +401,10 @@ function chatView(view) {
   $log.addEventListener('wheel', stopFollow, { passive: true });
   $todos = h('div', { class: 'todos', hidden: true });
   if (S.state) {
-    if (!S.state.log.length) $log.append(h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'),
-      h('p', { class: 'mono' }, `~/projects/${S.project}`), h('p', {}, 'Type a request, or / for commands.')));
+    if (!S.state.log.length) $log.append(h('div', { class: 'empty', id: 'hello' },
+      h('div', { class: 'welcome-mark', 'aria-hidden': 'true' }, h('img', { src: '/icon.svg?v=purple', alt: '' })),
+      h('h2', {}, 'What should we build?'), h('p', {}, 'Code, design, and explore in one workspace.'),
+      h('p', { class: 'mono' }, `~/projects/${S.project}`)));
     for (const e of S.state.log) upsertEntry(e, false);
   }
   view.append($log, $todos, composer());
@@ -1199,7 +1223,12 @@ function termView(view) {
   if (termState?.project !== S.project || termState?.ws.readyState > 1) teardownTerm();
   if (termState) {
     box.replaceWith(termState.el);
-    requestAnimationFrame(() => { termState.fit(); termState.term.focus(); });
+    const current = termState;
+    requestAnimationFrame(() => {
+      if (!current.el.isConnected) return;
+      current.fit();
+      if (!document.activeElement?.closest('.tabs')) current.term.focus();
+    });
     return;
   }
   const term = new Terminal({ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, cursorBlink: true, scrollback: 10000, theme: { background: '#000000' } });
