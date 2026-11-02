@@ -1,0 +1,145 @@
+import { postWithRetry, readSettings, sseEvents } from './util.js';
+
+// Any OpenAI-compatible Chat Completions server: OpenRouter, Ollama, LM Studio, or one added under "providers" in settings.json.
+// Model ids are "<provider>:<model>", so "ollama:qwen3-coder:30b" is the model "qwen3-coder:30b" on Ollama.
+const PRESETS = {
+  openrouter: { name: 'OpenRouter', baseURL: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY' },
+  ollama: { name: 'Ollama', baseURL: 'http://127.0.0.1:11434/v1', local: true },
+  lmstudio: { name: 'LM Studio', baseURL: 'http://127.0.0.1:1234/v1', local: true },
+};
+
+export function providers() {
+  const out = {};
+  for (const [id, p] of Object.entries(PRESETS)) out[id] = { ...p, apiKey: process.env[p.keyEnv] };
+  const custom = readSettings().providers;
+  for (const [id, c] of Object.entries(custom && typeof custom === 'object' ? custom : {})) {
+    if (!/^[a-z][a-z0-9-]*$/.test(id) || !c || typeof c !== 'object') continue;
+    out[id] = { ...out[id], ...c, name: String(c.name || out[id]?.name || id) };
+  }
+  return out;
+}
+
+export function providerOf(model) {
+  const i = String(model).indexOf(':');
+  return i > 0 && Object.hasOwn(providers(), model.slice(0, i)) ? model.slice(0, i) : null;
+}
+
+const headers = (id, p) => ({
+  'content-type': 'application/json',
+  ...(p.apiKey ? { authorization: `Bearer ${p.apiKey}` } : {}),
+  // OpenRouter lists the apps its users run, and these headers are how Nexus shows up there.
+  ...(id === 'openrouter' ? { 'http-referer': 'https://github.com/glsoo/nexus', 'x-title': 'Nexus' } : {}),
+});
+
+// ---- models ----
+const lists = new Map();
+async function listModels(id, p) {
+  const hit = lists.get(id);
+  if (hit && Date.now() - hit.at < (p.local ? 15_000 : 3600_000)) return hit.list;
+  const res = await fetch(`${p.baseURL}/models`, { headers: headers(id, p), signal: AbortSignal.timeout(p.local ? 1500 : 10_000) });
+  if (!res.ok) throw new Error(`${p.name} returned ${res.status} when listing models.`);
+  const { data = [] } = await res.json();
+  // An agent needs to chat and call tools, so models known not to (embeddings, speech, moderation) are left out.
+  const list = data.filter(m => (!m.supported_parameters || m.supported_parameters.includes('tools')) && !/embed|moderation|whisper|tts|transcri|dall-e/i.test(m.id)).map(m => ({
+    id: `${id}:${m.id}`, name: m.name || m.id, provider: id, providerName: p.local ? `${p.name} · this computer` : p.name,
+    context: m.context_length || undefined, efforts: [],
+    ...(m.pricing ? { price: [Number(m.pricing.prompt) * 1e6, Number(m.pricing.completion) * 1e6] } : {}),
+  }));
+  lists.set(id, { at: Date.now(), list });
+  return list;
+}
+
+// Servers that aren't running or have no key are skipped, so they never hide the other providers.
+export async function compatModels() {
+  const all = Object.entries(providers()).filter(([, p]) => p.baseURL && (!p.keyEnv || p.apiKey));
+  return (await Promise.allSettled(all.map(([id, p]) => listModels(id, p)))).flatMap(r => r.value || []);
+}
+
+export const compatContext = model => lists.get(providerOf(model))?.list.find(m => m.id === model)?.context;
+
+// ---- requests ----
+const part = c => (c.type === 'input_image' ? { type: 'image_url', image_url: { url: c.image_url } } : { type: 'text', text: c.text });
+
+export function toMessages(instructions, items) {
+  const messages = [{ role: 'system', content: instructions }];
+  let images = []; // a tool message can only hold text, so screenshots follow the tool results as a user message
+  const flush = () => { if (images.length) messages.push({ role: 'user', content: images }); images = []; };
+  for (const item of items) {
+    if (item.type !== 'function_call_output') flush();
+    const last = messages.at(-1);
+    if (item.type === 'function_call') {
+      const call = { id: item.call_id, type: 'function', function: { name: item.name, arguments: item.arguments || '{}' } };
+      if (last.role === 'assistant') (last.tool_calls ||= []).push(call);
+      else messages.push({ role: 'assistant', content: null, tool_calls: [call] });
+    } else if (item.type === 'function_call_output') {
+      const text = typeof item.output === 'string';
+      messages.push({ role: 'tool', tool_call_id: item.call_id, content: text ? item.output : 'The image is attached in the next message.' });
+      if (!text) images.push(...item.output.map(part));
+    } else if (item.type === 'message' && item.role === 'assistant') {
+      messages.push({ role: 'assistant', content: item.content.map(c => c.text || '').join('') });
+    } else if (item.role === 'user') {
+      messages.push({ role: 'user', content: typeof item.content === 'string' ? item.content : item.content.map(part) });
+    } // reasoning, web search and raw Anthropic turns don't carry over
+  }
+  flush();
+  return messages;
+}
+
+export async function callCompat({ model, instructions, input, tools, toolChoice }, sink, signal) {
+  const id = providerOf(model), p = providers()[id];
+  const fns = tools.filter(t => t.type === 'function').map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+  const body = {
+    model: model.slice(id.length + 1), messages: toMessages(instructions, input), stream: true, stream_options: { include_usage: true },
+    ...(fns.length ? { tools: fns, ...(toolChoice ? { tool_choice: toolChoice } : {}) } : {}),
+  };
+  let res;
+  try {
+    res = await postWithRetry(p.name, `${p.baseURL}/chat/completions`, headers(id, p), body, signal);
+  } catch (err) {
+    if (err.name === 'TypeError') throw new Error(`Couldn't reach ${p.name} at ${p.baseURL}. Is it running?`);
+    if (/context.{0,20}(length|window)|too long|maximum context/i.test(err.message)) err.code ||= 'context_length_exceeded';
+    throw err;
+  }
+  const calls = [], open = {};
+  let text = '', usage = {}, finish;
+  const stream = (key, type, delta) => {
+    open[key] ||= sink.add({ type, text: '', status: 'running' });
+    open[key].text += delta;
+    sink.delta(open[key], 'text', delta);
+  };
+  try {
+    for await (const ev of sseEvents(res.body)) {
+      if (ev.error) throw new Error(`${p.name}: ${ev.error.message || 'request failed'}`);
+      if (ev.usage) usage = ev.usage;
+      const choice = ev.choices?.[0];
+      if (!choice) continue;
+      const d = choice.delta || {};
+      const thought = d.reasoning ?? d.reasoning_content;
+      if (thought) stream('r', 'reasoning', thought);
+      if (d.content) { text += d.content; stream('m', 'assistant', d.content); }
+      for (const tc of d.tool_calls || []) {
+        const c = calls[tc.index ?? calls.length] ||= { id: '', name: '', args: '' };
+        if (tc.id) c.id = tc.id;
+        if (tc.function?.name) c.name = tc.function.name;
+        const a = tc.function?.arguments;
+        if (a) c.args += typeof a === 'string' ? a : JSON.stringify(a);
+      }
+      if (choice.finish_reason) finish = choice.finish_reason;
+    }
+  } finally {
+    for (const entry of Object.values(open)) { entry.status = 'done'; sink.update(entry); }
+  }
+  const stamp = Date.now().toString(36);
+  return {
+    output: [
+      ...(text ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] : []),
+      ...calls.filter(Boolean).map((c, i) => ({ type: 'function_call', call_id: c.id || `call_${stamp}_${i}`, name: c.name, arguments: c.args || '{}' })),
+    ],
+    usage: {
+      input_tokens: usage.prompt_tokens || 0, output_tokens: usage.completion_tokens || 0, total_tokens: usage.total_tokens || 0,
+      input_tokens_details: { cached_tokens: usage.prompt_tokens_details?.cached_tokens || 0 },
+      output_tokens_details: { reasoning_tokens: usage.completion_tokens_details?.reasoning_tokens || 0 },
+    },
+    incomplete: finish === 'length' ? 'max_output_tokens' : undefined,
+  };
+}

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { askAnthropic, callAnthropic, anthropicContext, isAnthropic } from './anthropic.js';
 import * as checkpoint from './checkpoint.js';
+import { callCompat, compatContext, providerOf } from './compat.js';
 import { agentDefs, commands, instructions, runHooks, skills } from './extensions.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
@@ -21,7 +22,7 @@ const SUB_EXCLUDED = new Set(['Task', 'TodoWrite', 'AskUserQuestion', 'ExitPlanM
 // 0 means off. Leaves room under the model's limit, because the summary request has to fit too.
 const compactAt = s => {
   const limit = s.state.autoCompact ?? (readSettings().autoCompactTokens || 300000);
-  const context = anthropicContext(s.state.model);
+  const context = anthropicContext(s.state.model) || compatContext(s.state.model);
   return context ? Math.min(limit, Math.floor(context * 0.85)) : limit;
 };
 
@@ -80,6 +81,7 @@ export function requestBody({ model, effort, instructions: sys, input, tools, to
 const fetchStream = (body, signal) => postWithRetry('OpenAI', 'https://api.openai.com/v1/responses', { authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'content-type': 'application/json' }, body, signal);
 
 async function callModel(params, sink, signal) {
+  if (providerOf(params.model)) return callCompat(params, sink, signal);
   if (isAnthropic(params.model)) return callAnthropic(params, sink, signal);
   const res = await fetchStream(requestBody(params), signal);
   const open = new Map();
@@ -292,7 +294,7 @@ async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLa
         await compact();
         continue;
       }
-      if (/^(OpenAI|Anthropic) 400: .*\bimage\b/i.test(err.message) && projects.dropImages(items())) {
+      if (/^[\w .-]+ 400: .*\bimage\b/i.test(err.message) && projects.dropImages(items())) {
         sink.add({ type: 'system', text: 'The API rejected an image, so it was removed from the conversation.' });
         continue;
       }
@@ -530,7 +532,7 @@ const MODES = ['default', 'acceptEdits', 'plan', 'bypass'];
 export function setOption(s, key, value) {
   if (key === 'mode' && !MODES.includes(value)) throw new Error(`Unknown mode ${value}.`);
   else if (key === 'effort' && !['low', 'medium', 'high', 'xhigh', 'max'].includes(value)) throw new Error(`Unknown effort ${value}.`);
-  else if (key === 'model' && !/^[\w.:-]+$/.test(value)) throw new Error('Invalid model id.');
+  else if (key === 'model' && !/^[\w.:/-]+$/.test(value)) throw new Error('Invalid model id.');
   else if (key === 'agent' && value && !agentDefs(cwdOf(s)).some(d => d.name === value && !d.builtin)) throw new Error(`There is no agent type called ${value}.`);
   else if (key === 'autopilot' && typeof value !== 'boolean') throw new Error('Autopilot is true or false.');
   else if (!['mode', 'effort', 'model', 'agent', 'autopilot'].includes(key)) throw new Error(`Unknown option ${key}.`);
@@ -644,7 +646,10 @@ const NAME_PROMPT = 'Name the coding chat that starts with the message you are g
 async function modelName(model, text) {
   const signal = AbortSignal.timeout(NAME_TIMEOUT);
   let reply;
-  if (isAnthropic(model)) reply = await askAnthropic(model, NAME_PROMPT, text.slice(0, 2000), signal);
+  if (providerOf(model)) {
+    const { output } = await callCompat({ model, instructions: NAME_PROMPT, input: [{ role: 'user', content: text.slice(0, 2000) }], tools: [] }, { add: e => e, update() {}, delta() {} }, signal);
+    reply = output.find(i => i.type === 'message')?.content[0].text;
+  } else if (isAnthropic(model)) reply = await askAnthropic(model, NAME_PROMPT, text.slice(0, 2000), signal);
   else {
     const res = await fetchStream({
       model, store: false, input: text.slice(0, 2000), instructions: NAME_PROMPT,

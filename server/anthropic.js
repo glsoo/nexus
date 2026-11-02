@@ -17,7 +17,7 @@ export async function anthropicModels() {
   const res = await fetch('https://api.anthropic.com/v1/models?limit=100', { headers: headers() });
   if (!res.ok) throw new Error(`Anthropic returned ${res.status} when listing models.`);
   const list = (await res.json()).data.map(m => ({
-    id: m.id, name: m.display_name, provider: 'anthropic', context: m.max_input_tokens, maxOutput: m.max_tokens,
+    id: m.id, name: m.display_name, provider: 'anthropic', providerName: 'Anthropic', context: m.max_input_tokens, maxOutput: m.max_tokens,
     efforts: LEVELS.filter(l => m.capabilities?.effort?.[l]?.supported),
     thinking: m.capabilities?.thinking?.types?.adaptive?.supported ? 'adaptive' : m.capabilities?.thinking?.types?.enabled?.supported ? 'enabled' : null,
     webSearch: Boolean(m.capabilities?.server_tools?.web_search),

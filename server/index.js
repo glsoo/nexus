@@ -8,6 +8,7 @@ import pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
 import * as agent from './agent.js';
 import { anthropicModels } from './anthropic.js';
+import { compatModels } from './compat.js';
 import * as auth from './auth.js';
 import { agentDefs, commands, deleteAgentDef, saveAgentDef, skills } from './extensions.js';
 import * as market from './market.js';
@@ -254,14 +255,14 @@ async function openaiModels() {
     const list = (await res.json()).data.map(m => m.id)
       .filter(id => /^(gpt-[4-9]|o\d)/.test(id) && !/audio|realtime|image|tts|transcribe|search|embed|moderation|-\d{4}-\d\d-\d\d$/.test(id))
       .sort((a, b) => a.startsWith('o') - b.startsWith('o') || b.localeCompare(a, undefined, { numeric: true }))
-      .map(id => ({ id, name: id.replace(/^gpt/, 'GPT').replace(/-([a-z])/g, (_, c) => ` ${c.toUpperCase()}`), provider: 'openai', efforts: agent.supportsReasoning(id) ? ['low', 'medium', 'high', 'xhigh'] : [] }));
+      .map(id => ({ id, name: id.replace(/^gpt/, 'GPT').replace(/-([a-z])/g, (_, c) => ` ${c.toUpperCase()}`), provider: 'openai', providerName: 'OpenAI', efforts: agent.supportsReasoning(id) ? ['low', 'medium', 'high', 'xhigh'] : [] }));
     modelCache = { at: Date.now(), list };
   }
   return modelCache.list;
 }
-// One provider being down must not hide the other's models.
+// One provider being down must not hide the others' models.
 route('GET', '/api/models', async () => {
-  const results = await Promise.allSettled([anthropicModels(), openaiModels()]);
+  const results = await Promise.allSettled([anthropicModels(), openaiModels(), compatModels()]);
   const list = results.flatMap(r => r.value || []);
   if (!list.length) throw results.find(r => r.reason)?.reason || fail(502, 'No models available.');
   return list;

@@ -168,6 +168,80 @@ test('an autopilot turn stops after 150 model requests', async () => {
   assert.equal(s.running, false);
 });
 
+test('any OpenAI-compatible server: its models are listed and a chat runs tools through it', async () => {
+  const compat = await import('../server/compat.js');
+  const bodies = [];
+  const sse = (res, events) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(`${events.map(e => `data: ${JSON.stringify(e)}\n\n`).join('')}data: [DONE]\n\n`); };
+  const server = http.createServer(async (req, res) => {
+    if (req.url === '/v1/models') {
+      return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [
+        { id: 'coder' }, { id: 'tiny', context_length: 32000, supported_parameters: ['tools'], pricing: { prompt: '0', completion: '0' } }, { id: 'chatty', supported_parameters: ['temperature'] },
+      ] }));
+    }
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    bodies.push(JSON.parse(raw));
+    if (bodies.length === 1) {
+      return sse(res, [
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'Read', arguments: '{"file_' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'path":"note.txt"}' } }] }, finish_reason: 'tool_calls' }] },
+        { choices: [], usage: { prompt_tokens: 100, completion_tokens: 7, total_tokens: 107 } },
+      ]);
+    }
+    sse(res, [{ choices: [{ delta: { reasoning_content: 'Looking.' } }] }, { choices: [{ delta: { content: 'It says ' } }] }, { choices: [{ delta: { content: 'hello.' }, finish_reason: 'stop' }], usage: { prompt_tokens: 150, completion_tokens: 3 } }]);
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ providers: { local: { name: 'Local', baseURL: `http://127.0.0.1:${server.address().port}/v1` }, down: { baseURL: 'http://127.0.0.1:9/v1' } } }));
+  try {
+    const models = (await compat.compatModels()).filter(m => m.provider === 'local');
+    assert.deepEqual(models.map(m => m.id), ['local:coder', 'local:tiny'], 'models known to lack tool calls are left out');
+    assert.deepEqual([models[1].context, models[1].price, models[1].providerName], [32000, [0, 0], 'Local']);
+    assert.equal(compat.providerOf('local:org/model:free'), 'local');
+    assert.equal(compat.providerOf('claude-haiku-5-5'), null);
+    assert.equal(compat.providerOf('unknown:thing'), null);
+
+    projects.create('compat');
+    const s = agent.getSession('compat');
+    fs.writeFileSync(path.join(projects.projectDir('compat'), 'note.txt'), 'hello');
+    agent.setOption(s, 'model', 'local:coder');
+    await agent.submit('compat', 'what does note.txt say?');
+    await idle(s);
+
+    assert.equal(bodies.length, 2);
+    const [first, second] = bodies;
+    assert.equal(first.model, 'coder');
+    assert.equal(first.stream, true);
+    assert.equal(first.messages[0].role, 'system');
+    assert.match(first.messages.at(-1).content, /what does note\.txt say\?/);
+    assert.ok(first.tools.some(t => t.type === 'function' && t.function.name === 'Read' && t.function.parameters.properties.file_path));
+    assert.ok(!first.tools.some(t => t.type !== 'function'), 'hosted tools like web search are left out');
+    const [call, result] = second.messages.slice(-2);
+    assert.deepEqual(call.tool_calls, [{ id: 'c1', type: 'function', function: { name: 'Read', arguments: '{"file_path":"note.txt"}' } }]);
+    assert.equal(result.role, 'tool');
+    assert.equal(result.tool_call_id, 'c1');
+    assert.match(result.content, /hello/);
+    const log = s.state.log.filter(e => e.type !== 'user');
+    assert.deepEqual(log.map(e => [e.type, e.name || e.text]), [['tool', 'Read'], ['reasoning', 'Looking.'], ['assistant', 'It says hello.']]);
+    assert.equal(s.state.usage.input, 250);
+
+    // A screenshot from a tool can't go in a tool message, so it follows the tool results.
+    const msgs = compat.toMessages('sys', [
+      { type: 'function_call', call_id: 'a', name: 'Read', arguments: '{}' }, { type: 'function_call', call_id: 'b', name: 'Read', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'a', output: [{ type: 'input_image', image_url: 'data:image/png;base64,AA' }] }, { type: 'function_call_output', call_id: 'b', output: 'ok' },
+      { type: 'reasoning', summary: [] }, { role: 'user', content: 'next' },
+    ]);
+    assert.deepEqual(msgs.map(m => m.role), ['system', 'assistant', 'tool', 'tool', 'user', 'user']);
+    assert.deepEqual(msgs[4].content, [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } }]);
+
+    await assert.rejects(compat.callCompat({ model: 'down:x', instructions: '', input: [], tools: [] }, {}, AbortSignal.timeout(20000)), /Couldn't reach down at http:\/\/127\.0\.0\.1:9\/v1/);
+    assert.doesNotThrow(() => agent.setOption(s, 'model', 'openrouter:meta-llama/llama-3.3-70b-instruct:free'));
+  } finally {
+    server.close();
+    fs.writeFileSync(settingsFile, '{}');
+  }
+});
+
 test('/create-agent asks for a description, then hands the model the format and where to write it', async () => {
   projects.create('maker');
   const s = agent.getSession('maker');

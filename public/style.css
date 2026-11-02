@@ -215,6 +215,7 @@ dialog.tokens { width: min(420px, calc(100vw - 32px)); padding: 0; }
 .mfacts { font: 12px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
 .mtag { font-size: 11px; font-weight: 500; color: var(--accent); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; }
 .mtag.old { color: var(--warn); }
+.mtag.free { color: #34d399; }
 .mnone { padding: 24px 8px; text-align: center; }
 .mfoot { display: flex; align-items: center; gap: 12px; padding: 10px 16px calc(12px + var(--sab)); border-top: 1px solid var(--line); }
 /* Effort: the bar charges up and glows in each level's color, faster and brighter the higher it goes. Motion is transform and opacity only. */

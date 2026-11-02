@@ -672,7 +672,9 @@ function composer() {
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-const PROVIDERS = [['anthropic', 'Anthropic'], ['openai', 'OpenAI']];
+// Price per million tokens, input and output; OpenRouter marks routers with a negative price.
+const isFree = m => m.price?.length === 2 && m.price.every(p => p === 0);
+const priceText = m => (m.price?.every(p => p >= 0) && !isFree(m) ? `$${+m.price[0].toFixed(2)} in · $${+m.price[1].toFixed(2)} out per M` : '');
 const tokens = n => (n >= 1e6 ? `${n / 1e6}M` : `${n / 1e3}K`);
 function setOption(key, value) {
   S.state[key] = value;
@@ -693,10 +695,10 @@ function modelPicker() {
   };
   const row = m => {
     const current = m.id === S.state.model;
-    const facts = [m.id, m.context && `${tokens(m.context)} context`, m.maxOutput && `${tokens(m.maxOutput)} output`].filter(Boolean).join(' · ');
+    const facts = [m.id, m.context && `${tokens(m.context)} context`, m.maxOutput && `${tokens(m.maxOutput)} output`, priceText(m)].filter(Boolean).join(' · ');
     return h('button', { class: `mrow${current ? ' current' : ''}`, type: 'button', autofocus: current && touch.matches, 'aria-current': current ? 'true' : null, onclick: () => pick(m) },
       h('span', { class: 'mtext' },
-        h('span', { class: 'mname' }, m.name, m.id === S.me?.defaultModel && h('span', { class: 'mtag' }, 'Default'), m.deprecated && h('span', { class: 'mtag old' }, 'Deprecated')),
+        h('span', { class: 'mname' }, m.name, m.id === S.me?.defaultModel && h('span', { class: 'mtag' }, 'Default'), m.deprecated && h('span', { class: 'mtag old' }, 'Deprecated'), isFree(m) && h('span', { class: 'mtag free' }, 'Free')),
         h('span', { class: 'mfacts' }, facts)),
       current && icon('check'));
   };
@@ -717,8 +719,9 @@ function modelPicker() {
   const render = () => {
     const terms = search.value.toLowerCase().split(/\s+/).filter(Boolean);
     const known = S.models.some(m => m.id === S.state.model) ? S.models : [{ id: S.state.model, name: S.state.model, provider: 'other', efforts: EFFORTS.slice(0, 4) }, ...S.models];
-    const found = known.filter(m => terms.every(t => `${m.name} ${m.id} ${m.provider}`.toLowerCase().includes(t)));
-    list.replaceChildren(...[...PROVIDERS, ['other', 'Current']].flatMap(([id, label]) => {
+    const found = known.filter(m => terms.every(t => `${m.name} ${m.id} ${m.providerName || ''} ${isFree(m) ? 'free' : ''}`.toLowerCase().includes(t)));
+    const groups = new Map([...S.models.map(m => [m.provider, m.providerName || m.provider]), ['other', 'Current']]);
+    list.replaceChildren(...[...groups].flatMap(([id, label]) => {
       const rows = found.filter(m => m.provider === id);
       return rows.length ? [h('h3', {}, label), ...rows.map(row)] : [];
     }));
@@ -1428,13 +1431,14 @@ async function settingsPage(hamb) {
     notifyCard(),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit and Stop; a hook exiting with 2 blocks the action. MCP servers reconnect within seconds of saving.'),
+    h('p', { class: 'small muted' }, 'Models: Ollama and LM Studio appear in the model picker while they run on this computer. Add OpenRouter (hundreds of models, some free) or any OpenAI-compatible server under "providers", as in the example.'),
     area, err,
     h('div', { style: 'margin-top:8px' }, h('button', { class: 'btn primary', onclick: async () => {
       err.textContent = '';
       try { await api('PUT', '/api/settings', { text: area.value }); toast('Saved.'); } catch (e) { err.textContent = e.message; }
     } }, 'Save')),
     h('h2', {}, 'Example'),
-    h('pre', { class: 'out' }, JSON.stringify({ autoCompactTokens: 300000, hooks: { PreToolUse: [{ matcher: 'Bash', command: 'jq -r .input.command >> ~/.nexus/bash.log' }] }, mcpServers: { memory: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] } } }, null, 2)),
+    h('pre', { class: 'out' }, JSON.stringify({ autoCompactTokens: 300000, providers: { openrouter: { apiKey: 'sk-or-…' }, groq: { name: 'Groq', baseURL: 'https://api.groq.com/openai/v1', apiKey: 'gsk_…' } }, hooks: { PreToolUse: [{ matcher: 'Bash', command: 'jq -r .input.command >> ~/.nexus/bash.log' }] }, mcpServers: { memory: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] } } }, null, 2)),
   ].flat());
 }
 
