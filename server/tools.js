@@ -144,7 +144,9 @@ function notebook({ file_path, cell_index, new_source = '', cell_type = 'code', 
 function rg(args, cwd, signal) {
   return new Promise((done, fail) => {
     execFile('rg', args, { cwd, signal, env: childEnv(), maxBuffer: 32 * 1024 * 1024, timeout: 60000 }, (err, stdout, stderr) => {
-      if (err && err.code !== 1) fail(new Error(stderr || err.message)); else done(stdout);
+      // A missing working directory also surfaces as "spawn rg ENOENT", which reads like ripgrep isn't installed.
+      if (err?.code === 'ENOENT') fail(new Error(fs.existsSync(cwd) ? 'ripgrep (rg) is not installed or not on PATH.' : `No such directory: ${cwd}`));
+      else if (err && err.code !== 1) fail(new Error(stderr || err.message)); else done(stdout);
     });
   });
 }

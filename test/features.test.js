@@ -128,6 +128,14 @@ test('MCP server configs from the page are cleaned before they reach settings.js
   fs.writeFileSync(settingsFile, '{}');
 });
 
+test('Glob in a folder that does not exist says so, instead of blaming ripgrep', async () => {
+  const { execTool } = await import('../server/tools.js');
+  const cwd = path.join(tmp, 'globbing');
+  fs.mkdirSync(cwd, { recursive: true });
+  await assert.rejects(execTool('Glob', { pattern: '*.md', path: '.nexus/agents' }, { cwd }), /No such directory: .*agents/);
+  assert.equal(await execTool('Glob', { pattern: '*.md' }, { cwd }), 'No files found.');
+});
+
 test('Windows runs npx through node, so no shell ever parses MCP arguments', () => {
   const nodeDir = path.join(tmp, 'nodejs');
   const cli = path.join(nodeDir, 'node_modules/npm/bin/npx-cli.js');
