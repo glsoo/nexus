@@ -95,9 +95,14 @@ export const compatContext = model => lists.get(providerOf(model))?.list.find(m 
 // ---- requests ----
 const part = c => (c.type === 'input_image' ? { type: 'image_url', image_url: { url: c.image_url } } : { type: 'text', text: c.text });
 
+// Signatures can arrive in a later delta with no text or function arguments.
+const mergeExtra = (before, delta) => ({ ...before, ...delta,
+  ...(delta.google ? { google: { ...before?.google, ...delta.google } } : {}),
+});
+
 // Mistral only accepts 9-character alphanumeric tool call ids, so a chat that started elsewhere maps its ids onto that shape.
 const mistralId = id => /^[a-zA-Z0-9]{9}$/.test(id) ? id : createHash('sha256').update(String(id)).digest('hex').slice(0, 9);
-export function toMessages(instructions, items, provider) {
+export function toMessages(instructions, items, provider, model) {
   const cid = provider === 'mistral' ? mistralId : x => x;
   const messages = [{ role: 'system', content: instructions }];
   let images = []; // a tool message can only hold text, so screenshots follow the tool results as a user message
@@ -105,8 +110,15 @@ export function toMessages(instructions, items, provider) {
   for (const item of items) {
     if (item.type !== 'function_call_output') flush();
     const last = messages.at(-1);
+    const extra = item.compat?.model === model ? item.compat?.extra_content : undefined;
     if (item.type === 'function_call') {
-      const call = { id: cid(item.call_id), type: 'function', function: { name: item.name, arguments: item.arguments || '{}' } };
+      const call = { id: cid(item.call_id), type: 'function', function: { name: item.name, arguments: item.arguments || '{}' }, ...(extra ? { extra_content: extra } : {}) };
+      // Old chats lost their signatures; imported calls never had one for this model.
+      // Google's migration fallback is only for the first call in such a group,
+      // never a replacement for a real signature or a newly received unsigned call.
+      if (provider === 'gemini' && (!item.compat || item.compat.model !== model) && (last.role !== 'assistant' || !last.tool_calls?.length)) {
+        call.extra_content = { google: { thought_signature: 'skip_thought_signature_validator' } };
+      }
       if (last.role === 'assistant') (last.tool_calls ||= []).push(call);
       else messages.push({ role: 'assistant', content: null, tool_calls: [call] });
     } else if (item.type === 'function_call_output') {
@@ -114,7 +126,7 @@ export function toMessages(instructions, items, provider) {
       messages.push({ role: 'tool', tool_call_id: cid(item.call_id), content: text ? item.output : 'The image is attached in the next message.' });
       if (!text) images.push(...item.output.map(part));
     } else if (item.type === 'message' && item.role === 'assistant') {
-      messages.push({ role: 'assistant', content: item.content.map(c => c.text || '').join('') });
+      messages.push({ role: 'assistant', content: item.content.map(c => c.text || '').join(''), ...(extra ? { extra_content: extra } : {}) });
     } else if (item.role === 'user') {
       messages.push({ role: 'user', content: typeof item.content === 'string' ? item.content : item.content.map(part) });
     } // reasoning, web search and raw Anthropic turns don't carry over
@@ -144,7 +156,7 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
   const id = providerOf(model), p = providers()[id];
   const fns = tools.filter(t => t.type === 'function').map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: id === 'gemini' ? geminiSchema(t.parameters) : t.parameters } }));
   const body = {
-    model: model.slice(id.length + 1), messages: toMessages(instructions, input, id), stream: true, stream_options: { include_usage: true },
+    model: model.slice(id.length + 1), messages: toMessages(instructions, input, id, model), stream: true, stream_options: { include_usage: true },
     ...(fns.length ? { tools: fns, ...(toolChoice ? { tool_choice: toolChoice } : {}) } : {}),
   };
   let res;
@@ -156,7 +168,7 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
     throw err;
   }
   const calls = [], open = {};
-  let text = '', usage = {}, finish;
+  let text = '', messageExtra, usage = {}, finish;
   const stream = (key, type, delta) => {
     open[key] ||= sink.add({ type, text: '', status: 'running' });
     open[key].text += delta;
@@ -169,6 +181,7 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
       const choice = ev.choices?.[0];
       if (!choice) continue;
       const d = choice.delta || {};
+      if (d.extra_content) messageExtra = mergeExtra(messageExtra, d.extra_content);
       const thought = d.reasoning ?? d.reasoning_content;
       if (thought) stream('r', 'reasoning', thought);
       if (d.content) { text += d.content; stream('m', 'assistant', d.content); }
@@ -176,19 +189,24 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
         const c = calls[tc.index ?? calls.length] ||= { id: '', name: '', args: '' };
         if (tc.id) c.id = tc.id;
         if (tc.function?.name) c.name = tc.function.name;
+        if (tc.extra_content) c.extra_content = mergeExtra(c.extra_content, tc.extra_content);
         const a = tc.function?.arguments;
         if (a) c.args += typeof a === 'string' ? a : JSON.stringify(a);
       }
       if (choice.finish_reason) finish = choice.finish_reason;
     }
+    if (!finish) throw new Error('The model stream ended unexpectedly.');
   } finally {
     for (const entry of Object.values(open)) { entry.status = 'done'; sink.update(entry); }
   }
   const stamp = Date.now().toString(36);
+  // Internal metadata is persisted with history, not shown in the transcript or
+  // sent to a different model. Gemini calls are marked even when unsigned.
+  const metadata = extra_content => extra_content || id === 'gemini' ? { compat: { model, ...(extra_content ? { extra_content } : {}) } } : {};
   return {
     output: [
-      ...(text ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] : []),
-      ...calls.filter(Boolean).map((c, i) => ({ type: 'function_call', call_id: c.id || `call_${stamp}_${i}`, name: c.name, arguments: c.args || '{}' })),
+      ...(text || messageExtra ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }], ...(messageExtra ? metadata(messageExtra) : {}) }] : []),
+      ...calls.filter(Boolean).map((c, i) => ({ type: 'function_call', call_id: c.id || `call_${stamp}_${i}`, name: c.name, arguments: c.args || '{}', ...metadata(c.extra_content) })),
     ],
     usage: {
       input_tokens: usage.prompt_tokens || 0, output_tokens: usage.completion_tokens || 0, total_tokens: usage.total_tokens || 0,

@@ -87,7 +87,7 @@ export const supportsReasoning = m => /^(gpt-[5-9]|o\d)/.test(m);
 export function requestBody({ model, effort, instructions: sys, input, tools, toolChoice, cacheKey }) {
   return {
     model, instructions: sys, store: false, stream: true, tools,
-    input: input.filter(i => i.type !== 'anthropic_turn').map(({ anthropic, ...i }) => i),
+    input: input.filter(i => i.type !== 'anthropic_turn').map(({ anthropic, compat, ...i }) => i),
     ...(toolChoice ? { tool_choice: toolChoice } : {}),
     ...(cacheKey ? { prompt_cache_key: cacheKey } : {}),
     ...(supportsReasoning(model) ? { reasoning: { effort: effort === 'max' ? 'xhigh' : effort, summary: 'auto' }, include: ['reasoning.encrypted_content'] } : {}),
