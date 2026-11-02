@@ -494,6 +494,7 @@ fs.watchFile(settingsPath(), { interval: 2000 }, () => mcp.reload());
 agent.reportFailedDeploy();
 agent.resumeAfterRestart();
 agent.startSchedules();
+agent.startWatches();
 let stopping = false;
 async function shutdown() {
   if (stopping) return;

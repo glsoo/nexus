@@ -697,3 +697,30 @@ test('cloning a repo makes a project named after it and keeps .nexus out of its 
   await assert.rejects(projects.clone(`${pathToFileURL(path.join(tmp, 'missing')).href}`), /git clone failed/);
   assert.ok(!fs.existsSync(projects.projectDir('missing')), 'a failed clone leaves nothing behind');
 });
+
+test('/watch turns an AI! comment saved in any editor into a prompt, once', { timeout: 30000 }, async () => {
+  projects.create('watched');
+  const s = agent.getSession('watched');
+  const dir = projects.projectDir('watched');
+  const file = path.join(dir, 'app.js');
+  fs.writeFileSync(file, 'const msg = "AI! is not a comment";\n');
+  const model = fakeModel();
+  try {
+    await agent.submit('watched', '/watch on');
+    const prompts = () => s.state.log.filter(e => e.type === 'user').map(e => e.text);
+    const tick = async () => { await agent.runWatches(); await idle(s); };
+    fs.writeFileSync(file, 'function add(a, b) {\n  // also handle strings AI!\n}\n');
+    await tick();
+    assert.equal(prompts().length, 0, 'waits until the comment stays the same for one poll');
+    await tick(); await tick();
+    assert.equal(prompts().length, 1, 'fires once, not on every poll');
+    assert.match(prompts()[0], /app\.js:2: \/\/ also handle strings AI!/);
+    fs.writeFileSync(file, '# AI! now in python style\n');
+    await tick(); await tick();
+    assert.equal(prompts().length, 2, 'an edited comment fires again');
+    await agent.submit('watched', '/watch off');
+    fs.writeFileSync(file, '// another AI!\n');
+    await tick(); await tick();
+    assert.equal(prompts().length, 2);
+  } finally { model.restore(); }
+});

@@ -155,6 +155,13 @@ function rg(args, cwd, signal) {
   });
 }
 
+// For /watch: comments that start or end with AI!, like `// handle empty input AI!`.
+const AI_MARK = String.raw`(//|#|--|/\*|<!--|;)\s*AI!|\bAI!\s*(\*/|-->)?\s*$`;
+export async function findAIComments(cwd) {
+  return (await rg(['-n', '--no-heading', '--color', 'never', '--no-messages', '-M', '400', '-g', '!.nexus', '-g', '!node_modules', '-e', AI_MARK, '.'], cwd))
+    .split('\n').map(l => /^(.+?):(\d+):(.*)$/.exec(l)).filter(Boolean).map(([, file, line, text]) => ({ file: file.replaceAll('\\', '/').replace(/^\.\//, ''), line: Number(line), text: text.trim() }));
+}
+
 // For @-mentions: project files whose name starts with q, then whose name or path contains it, shortest first.
 export async function findFiles(cwd, q) {
   const t = q.toLowerCase();

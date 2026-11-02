@@ -10,7 +10,7 @@ import { agentDefs, commands, instructions, runHooks, skills } from './extension
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
-import { decide, execTool, hasTool, killGroup, ruleKey, shells, TOOL_DEFS } from './tools.js';
+import { decide, execTool, findAIComments, hasTool, killGroup, ruleKey, shells, TOOL_DEFS } from './tools.js';
 import { childEnv, clip, NEXUS_HOME, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
 
 export const hub = new EventEmitter();
@@ -460,6 +460,29 @@ export function runSchedules(now = new Date()) {
 }
 export const startSchedules = () => setInterval(runSchedules, 20_000).unref();
 
+// /watch: an AI! comment saved in any editor becomes a prompt, once it has stayed the same for one poll.
+// The flag is a file in .nexus, so it follows renames and costs a stat per poll.
+// ponytail: polls with rg every 3 s instead of fs.watch, which can run out of inotify watches on big Linux trees.
+const watchFlag = name => path.join(projects.projectDir(name), '.nexus', 'watch');
+async function watchAI(s) {
+  const hits = new Map((await findAIComments(cwdOf(s))).map(x => [`${x.file}\0${x.text}`, x]));
+  const last = s.aiLast;
+  s.aiLast = new Set(hits.keys());
+  s.aiDone = new Set([...(s.aiDone || [])].filter(k => hits.has(k)));
+  const ready = [...hits].filter(([k]) => last?.has(k) && !s.aiDone.has(k));
+  if (!ready.length) return;
+  for (const [k] of ready) s.aiDone.add(k);
+  await submit(s.name, `I left instructions as AI! comments in my editor:\n${ready.map(([, x]) => `- ${x.file}:${x.line}: ${x.text}`).join('\n')}\nDo what they ask, then remove the AI! comments you handled.`);
+}
+export function runWatches() {
+  return Promise.all(projects.list().filter(p => fs.existsSync(watchFlag(p.name))).map(({ name }) => {
+    const s = getSession(name);
+    if (s.running || s.queue.length || s.watching) return null;
+    return (s.watching = watchAI(s).catch(err => console.error(`/watch ${name}:`, err.message)).finally(() => { s.watching = null; }));
+  }));
+}
+export const startWatches = () => setInterval(runWatches, 3000).unref();
+
 // ---- worktrees ----
 // An isolated agent works on its own branch in .nexus/worktrees, so agents editing at the same time never collide.
 const readText = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
@@ -644,7 +667,7 @@ export function interrupt(name) { sessions.get(name)?.controller?.abort(); }
 export function answer(name, id, value) { sessions.get(name)?.pending.get(id)?.(value); }
 
 const HELP = `**Commands**
-\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review [PR number|URL]\` review this branch or a pull request · \`/pr [notes]\` commit, push and open a pull request · \`/issue <number>\` fix a GitHub issue · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/check <command>|off\` run tests after each change and fix failures · \`/todos\` · \`/help\`
+\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review [PR number|URL]\` review this branch or a pull request · \`/pr [notes]\` commit, push and open a pull request · \`/issue <number>\` fix a GitHub issue · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/check <command>|off\` run tests after each change and fix failures · \`/watch [on|off]\` act on \`AI!\` comments saved in any editor · \`/todos\` · \`/help\`
 
 Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover a prompt to rewind to it.
 
@@ -761,6 +784,13 @@ async function slash(s, text) {
       if (arg) setOption(s, 'budget', n);
       return note(s, s.state.budget ? `Budget: the agent stops once this chat has cost $${s.state.budget}. Cost so far: ${spent(s)}.` : `No budget. Cost so far: ${spent(s)}. Set one with /budget <dollars>.`);
     }
+    case 'watch':
+      if (arg === 'on') { fs.mkdirSync(path.dirname(watchFlag(s.name)), { recursive: true }); fs.writeFileSync(watchFlag(s.name), ''); s.aiLast = s.aiDone = null; }
+      else if (arg === 'off') fs.rmSync(watchFlag(s.name), { force: true });
+      else if (arg) return note(s, 'Usage: /watch [on|off]', 'error');
+      return note(s, fs.existsSync(watchFlag(s.name))
+        ? 'Watching: write a comment ending in `AI!` in any editor, like `// handle empty input AI!`, save, and Nexus does it. `/watch off` stops.'
+        : 'Not watching. `/watch on` turns a saved `AI!` comment into a prompt.');
     case 'check':
       if (arg) { s.state.check = arg === 'off' ? '' : arg; persist(s); }
       return note(s, s.state.check ? `After each turn that changes files, Nexus runs \`${s.state.check}\` and fixes what fails (up to ${CHECK_FIXES} times). \`/check off\` stops it.` : 'No check. `/check <command>`, for example `/check npm test`, runs it after each turn that changes files and has Nexus fix failures.');
