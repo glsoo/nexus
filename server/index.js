@@ -10,14 +10,14 @@ import * as agent from './agent.js';
 import { anthropicModels } from './anthropic.js';
 import { compatModels } from './compat.js';
 import * as auth from './auth.js';
-import { agentDefs, commands, deleteAgentDef, saveAgentDef, skills } from './extensions.js';
+import { agentDefs, commands, deleteAgentDef, removeSkill, saveAgentDef, skills, skillScope } from './extensions.js';
 import * as market from './market.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { findFiles } from './tools.js';
 import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
 import * as push from './push.js';
-import { childEnv, isInside, presentSocket, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
+import { childEnv, isInside, NEXUS_HOME, presentSocket, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -151,7 +151,7 @@ route('GET', '/api/projects/:name/meta', ({ p }) => {
   const cwd = projects.projectDir(need(p.name));
   return {
     commands: commands(cwd).map(({ name, description }) => ({ name, description })),
-    skills: skills(cwd).map(({ name, description, argumentHint }) => ({ name, description, argumentHint })),
+    skills: skills(cwd).map(({ name, description, argumentHint, dir }) => ({ name, description, argumentHint, scope: skillScope(cwd, dir) })),
     agents: agentDefs(cwd).map(({ prompt, file, ...a }) => ({ ...a, prompt })),
   };
 });
@@ -181,10 +181,17 @@ route('PUT', '/api/prompts', async ({ req }) => {
 });
 
 route('GET', '/api/market', async ({ q }) => {
-  const kind = q.get('kind') === 'mcp' ? 'mcp' : 'agents';
+  const kind = ['mcp', 'skills'].includes(q.get('kind')) ? q.get('kind') : 'agents';
   return { items: await market.search(kind, q.get('source') || 'nexus', q.get('q')), sources: market.SOURCES[kind], links: market.LINKS[kind] };
 });
-route('GET', '/api/market/item', ({ q }) => market.item(q.get('kind') === 'mcp' ? 'mcp' : 'agents', q.get('source') || 'nexus', q.get('id') || ''));
+route('GET', '/api/market/item', ({ q }) => market.item(['mcp', 'skills'].includes(q.get('kind')) ? q.get('kind') : 'agents', q.get('source') || 'nexus', q.get('id') || ''));
+// Skills go to ~/.nexus/skills for every project, or this project's .nexus/skills.
+route('POST', '/api/projects/:name/skills', async ({ req, p }) => {
+  const { repo, dir = '', scope } = await body(req);
+  const root = scope === 'project' ? path.join(projects.projectDir(need(p.name)), '.nexus') : NEXUS_HOME;
+  return { name: await market.installSkill(String(repo || ''), String(dir), root) };
+});
+route('DELETE', '/api/projects/:name/skills/:skill', ({ p }) => { removeSkill(projects.projectDir(need(p.name)), decodeURIComponent(p.skill)); return {}; });
 route('POST', '/api/mcp-servers', async ({ req }) => {
   const { name, config } = await body(req);
   mcp.addServer(name, config);

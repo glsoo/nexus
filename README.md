@@ -42,6 +42,7 @@
 | --- | --- |
 | 🤖 **A real coding agent** | Reads, searches and edits your code, runs shell commands and tests, spins up subagents for side quests, and keeps a task list. Plan mode researches first and proposes a plan before touching anything. |
 | 🛒 **Agent marketplace** | 120+ hand-picked agents ship with Nexus, from security reviewers and vulnerability patchers to test writers, DevOps and frontend specialists. You can also browse [aiagentslist.com](https://aiagentslist.com/agents) and [Hugging Face](https://huggingface.co/datasets/tiny-agents/tiny-agents). Install any of them in one click. |
+| 🧰 **Skills** | The marketplace's **Skills** tab installs Agent Skills, the `SKILL.md` folders Claude Code, Codex and VS Code use, from [Anthropic's collection](https://github.com/anthropics/skills), [skills.sh](https://skills.sh) or any GitHub link you paste. Skills you already set up for those tools (`.claude/skills`, `.agents/skills`, `.github/skills`) work as they are. Nexus reads a skill when a task fits, and every skill is also a `/command`. |
 | 🔌 **MCP marketplace** | One-click [MCP](https://modelcontextprotocol.io) servers: Hugging Face, GitHub, Playwright, Context7, Brave Search and more, plus hundreds of community servers and Hugging Face Spaces. Both local (stdio) and remote (streamable HTTP) servers work. |
 | ✈️ **Autopilot** | One click and the agent stops asking: it approves its own tool calls, answers its own questions, approves its own plan, and keeps going. A request cap (150 requests per message you send, subagents included; change it in **Settings**) and your budget keep it from running away. |
 | 💵 **Cost and budgets** | The meter shows each chat's cost in dollars, from the provider's list prices. Set a budget in the Tokens panel or with `/budget 5`, and the agent stops when it's reached. **Settings** adds up every chat. |
@@ -148,7 +149,7 @@ flowchart LR
   - **Everywhere** rewrites Nexus's base instructions, and you can reset to default at any time.
 
   Each tab also has an **injected** box: text added to every message you send. Preview shows the exact system prompt the model gets.
-- **Marketplace** (`/marketplace`, the Agents page, or **Add MCP server** in Settings): agents and MCP servers from three sources. Installing an MCP server always shows the exact command or URL first, because it runs third-party code or sends data to a remote service.
+- **Marketplace** (`/marketplace`, the Agents page, or **Add MCP server** in Settings): agents and MCP servers from three sources, and skills from Anthropic, skills.sh or a GitHub link. A skill shows the files it brings before you install it. Installing an MCP server always shows the exact command or URL first, because it runs third-party code or sends data to a remote service.
 - **`/create-agent <what it should do>`**: the AI looks at your project and writes the agent file. You approve the write like any other edit.
 
 | Command | What it does |
@@ -168,7 +169,7 @@ flowchart LR
 | `/init` · `#note` | Write a `NEXUS.md` for the project, or save a note to it |
 | `!cmd` · `@path` | Run a shell command yourself, or mention a file |
 
-Custom commands live in `.nexus/commands/*.md` or `~/.nexus/commands/*.md`, and agent types in `.nexus/agents/` or `~/.nexus/agents/`.
+Custom commands live in `.nexus/commands/*.md` or `~/.nexus/commands/*.md`: the file is the prompt, `$ARGUMENTS` is replaced by what you type after the command, and a `description:` line in the frontmatter shows in the `/` menu. Claude Code's `.claude/commands/` and VS Code's prompt files (`.github/prompts/*.prompt.md`, where `${input:…}` takes the arguments) work too. Agent types live in `.nexus/agents/` or `~/.nexus/agents/`.
 
 ## 🪟 Windows
 

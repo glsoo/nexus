@@ -712,7 +712,7 @@ Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover
 
 **Keys** Enter send · Shift+Enter newline · Shift+Tab cycle mode · Esc interrupt
 
-Custom commands live in \`.nexus/commands/*.md\` or \`~/.nexus/commands/*.md\` (\`$ARGUMENTS\` is substituted), and every skill is also a command.
+Custom commands live in \`.nexus/commands/*.md\` or \`~/.nexus/commands/*.md\` (\`$ARGUMENTS\` is substituted); Claude Code's \`.claude/commands\` and VS Code's \`.github/prompts/*.prompt.md\` work too. Every skill is also a command, and the marketplace's Skills tab installs more.
 
 **Agents and prompts** \`/create-agent <what it does>\` has the AI write a new agent type · the Agent button next to the model switches this chat to one · the Prompts button edits the system prompt and text injected into every message, for this chat, this project or everywhere.`;
 
@@ -867,7 +867,7 @@ Reply with the pull request's URL.`, text);
       return prompt(s, createAgentPrompt(arg, cwd), text);
   }
   const custom = commands(cwd).find(c => c.name === cmd);
-  if (custom) return prompt(s, custom.body.replaceAll('$ARGUMENTS', arg), text);
+  if (custom) return prompt(s, custom.body.replaceAll('$ARGUMENTS', arg).replace(/\$\{input:[^}]*\}/g, arg), text);
   const skill = skills(cwd).find(k => k.name === cmd);
   if (skill) {
     if (skill.argumentHint && (!arg || /^(help|--help|-h)$/.test(arg))) {

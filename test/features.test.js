@@ -986,3 +986,80 @@ test('a push subscription stops when the session that made it ends', async () =>
   const kept = JSON.parse(fs.readFileSync(path.join(process.env.NEXUS_HOME, 'push.json'), 'utf8')).subscriptions.map(x => x.endpoint);
   assert.ok(!kept.includes(at('stolen')) && kept.includes(at('mine')), 'the ended one is removed');
 });
+
+test('skills marketplace: lists from GitHub and skills.sh, installs a folder, removes it', { timeout: 30000 }, async () => {
+  const { parseFrontmatter, skills, removeSkill } = await import('../server/extensions.js');
+  const md = (name, desc) => `---\nname: ${name}\ndescription: >\n  ${desc}\n  on two lines.\n---\nDo the thing.\n`;
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 255]);
+  const trees = {
+    'acme/kit': [{ path: 'README.md', type: 'blob', size: 10 }, { path: 'skills/lint-fix/SKILL.md', type: 'blob', size: 80 }, { path: 'skills/lint-fix/scripts/run.sh', type: 'blob', size: 20 },
+      { path: 'skills/lint-fix/assets/logo.png', type: 'blob', size: png.length }, { path: 'skills/other/SKILL.md', type: 'blob', size: 80 }],
+    'acme/huge': [{ path: 'SKILL.md', type: 'blob', size: 80 }, ...Array.from({ length: 201 }, (_, i) => ({ path: `f${i}.txt`, type: 'blob', size: 1 }))],
+  };
+  const raw = {
+    'acme/kit/skills/lint-fix/SKILL.md': md('lint-fix', 'Fixes lint errors'), 'acme/kit/skills/lint-fix/scripts/run.sh': 'echo hi\n',
+    'acme/kit/skills/lint-fix/assets/logo.png': png, 'acme/kit/skills/other/SKILL.md': md('other-skill', 'Something else'), 'acme/huge/SKILL.md': md('huge', 'Too big'),
+  };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const u = String(url);
+    let m = /api\.github\.com\/repos\/([^/]+\/[^/]+)\/git\/trees\/HEAD/.exec(u);
+    if (m) return trees[m[1]] ? Response.json({ tree: trees[m[1]] }) : new Response('', { status: 404 });
+    m = /raw\.githubusercontent\.com\/([^/]+\/[^/]+)\/HEAD\/(.+)$/.exec(u);
+    if (m) { const body = raw[`${m[1]}/${decodeURIComponent(m[2])}`]; return body === undefined ? new Response('', { status: 404 }) : new Response(body); }
+    if (u.startsWith('https://skills.sh/api/search')) return Response.json({ skills: [{ source: 'acme/kit', skillId: 'other-skill', name: 'other-skill', installs: 1234 }, { source: 'not.github.example', skillId: 'x', name: 'x' }] });
+    return realFetch(url);
+  };
+  try {
+    assert.equal(parseFrontmatter(md('a', 'Folded')).meta.description, 'Folded on two lines.', 'YAML folded descriptions are read whole');
+    const linked = await market.search('skills', 'anthropic', 'https://github.com/acme/kit/tree/main/skills');
+    assert.deepEqual(linked.map(i => [i.id, i.name, i.description]), [['acme/kit:skills/lint-fix', 'lint-fix', 'Fixes lint errors on two lines.'], ['acme/kit:skills/other', 'other-skill', 'Something else on two lines.']]);
+    const found = await market.search('skills', 'skillssh', 'other');
+    assert.deepEqual(found.map(i => [i.id, i.stats]), [['acme/kit/other-skill', '↓ 1.2k']], 'only skills that live on GitHub');
+    await assert.rejects(market.search('skills', 'skillssh', 'o'), /at least two letters/);
+    const item = await market.item('skills', 'skillssh', 'acme/kit/other-skill');
+    assert.deepEqual(item.skill, { repo: 'acme/kit', dir: 'skills/other' }, 'a skills.sh name resolves to its folder by its SKILL.md name');
+    const lint = await market.item('skills', 'anthropic', 'acme/kit:skills/lint-fix');
+    assert.deepEqual(lint.files.sort(), ['SKILL.md', 'assets/logo.png', 'scripts/run.sh']);
+    assert.equal((await market.item('skills', 'anthropic', 'acme/huge:')).installable, false);
+    await assert.rejects(market.installSkill('acme/huge', '', path.join(tmp, 'nope')), /too big to install/);
+    await assert.rejects(market.item('skills', 'anthropic', 'acme/kit:../x'), /Bad skill location/);
+
+    projects.create('skilled');
+    const cwd = projects.projectDir('skilled');
+    const root = path.join(cwd, '.nexus');
+    fs.mkdirSync(path.join(root, 'skills', 'lint-fix'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'skills', 'lint-fix', 'stale.txt'), 'old');
+    assert.equal(await market.installSkill('acme/kit', 'skills/lint-fix', root), 'lint-fix');
+    const dir = path.join(root, 'skills', 'lint-fix');
+    assert.deepEqual(fs.readFileSync(path.join(dir, 'assets', 'logo.png')), png, 'binary files arrive intact');
+    assert.ok(!fs.existsSync(path.join(dir, 'stale.txt')), 'an older copy is replaced whole');
+    const k = skills(cwd).find(x => x.name === 'lint-fix');
+    assert.equal(k.description, 'Fixes lint errors on two lines.');
+    removeSkill(cwd, 'lint-fix');
+    assert.ok(!fs.existsSync(dir));
+    assert.throws(() => removeSkill(cwd, 'design'), /isn't a skill installed in Nexus/, 'skills that ship with Nexus stay');
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test("other tools' commands and skills work: .claude/commands, VS Code prompt files, .agents/skills", async () => {
+  const { commands, skills } = await import('../server/extensions.js');
+  projects.create('borrowed');
+  const cwd = projects.projectDir('borrowed');
+  fs.mkdirSync(path.join(cwd, '.claude', 'commands'), { recursive: true });
+  fs.mkdirSync(path.join(cwd, '.github', 'prompts'), { recursive: true });
+  fs.mkdirSync(path.join(cwd, '.agents', 'skills', 'deploy'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.claude', 'commands', 'fix-types.md'), '---\ndescription: Fix type errors\n---\nFix the type errors in $ARGUMENTS.');
+  fs.writeFileSync(path.join(cwd, '.github', 'prompts', 'explain.prompt.md'), '---\ndescription: Explain code\nmode: ask\n---\nExplain ${input:target:a file} simply.');
+  fs.writeFileSync(path.join(cwd, '.agents', 'skills', 'deploy', 'SKILL.md'), '---\nname: deploy\ndescription: Deploys the app\n---\nRun the deploy.');
+  const names = commands(cwd).map(c => c.name); // ~/.claude/commands is read too, so other names may appear on a real machine
+  assert.ok(names.includes('explain') && names.includes('fix-types'), names.join(', '));
+  assert.ok(skills(cwd).some(k => k.name === 'deploy'));
+  const s = agent.getSession('borrowed');
+  const model = fakeModel();
+  try {
+    await agent.submit('borrowed', '/explain src/app.js');
+    await idle(s);
+  } finally { model.restore(); }
+  assert.match(JSON.stringify(model.sent[0].input.at(-1)), /Explain src\/app\.js simply\./);
+});
