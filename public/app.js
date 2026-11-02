@@ -340,7 +340,8 @@ async function setPush(on) {
   const { key } = await api('GET', '/api/push/key');
   const raw = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
   const bytes = b => Array.from(new Uint8Array(b || [])).join();
-  const keep = old && bytes(old.options.applicationServerKey) === bytes(raw);
+  const had = old?.options?.applicationServerKey; // a browser that can't say keeps its subscription, as before
+  const keep = old && (!had || bytes(had) === bytes(raw));
   if (old && !keep) { await api('POST', '/api/push/unsubscribe', { endpoint: old.endpoint }).catch(() => {}); await old.unsubscribe(); }
   const sub = keep ? old : await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw });
   await api('POST', '/api/push/subscribe', sub.toJSON());
@@ -1617,11 +1618,11 @@ function autopilotCard(area) {
     const next = `${JSON.stringify({ ...JSON.parse(text), autopilotRequests: n }, null, 2)}\n`;
     await api('PUT', '/api/settings', { text: next });
     if (area.value === text.replace(/\r\n?/g, '\n')) area.value = next;
-    toast(n ? `Autopilot now pauses after ${n} requests in one go.` : 'Autopilot has no request limit now. Only a budget stops it.');
+    toast(n ? `Autopilot now pauses after ${n} requests until your next message.` : 'Autopilot has no request limit now. Only a budget stops it.');
   });
   return [h('h2', {}, h('label', { htmlFor: 'apreq' }, 'Autopilot request limit')),
     h('div', { class: 'card' }, h('div', { class: 'rowline' }, input, h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Save')),
-      h('p', { class: 'small muted', id: 'apreq-hint' }, 'How many model requests autopilot makes in one go before it pauses for you. Long tasks may need 500 or more. 0 means no limit, so set a budget with /budget to cap the cost. Applies right away, even to a running chat.'))];
+      h('p', { class: 'small muted', id: 'apreq-hint' }, 'How many model requests autopilot makes, subagents included, before it pauses until your next message. Long tasks may need 500 or more. 0 means no limit, so set a budget with /budget to cap the cost. Applies right away, even to a running chat.'))];
 }
 
 function notifyCard() {

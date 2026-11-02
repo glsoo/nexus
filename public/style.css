@@ -378,6 +378,7 @@ label.check input { width: 18px; height: 18px; accent-color: var(--accent); flex
   .icon-btn { width: 44px; height: 44px; }
   .btn, .btn.small, .tab, .cbar select, .mbtn, .seg button { min-height: 44px; }
   .newrow .btn { min-width: 44px; }
+  .spend .linkbtn { min-height: 44px; }
   .tab { display: grid; place-items: center; }
   .pitem > button.open, .found .snip, .navbtn, .menu button, .slash button, .tree button { min-height: 44px; align-items: center; }
   .tree button { padding-block: 11px; }
