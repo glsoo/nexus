@@ -73,6 +73,16 @@ test('compact controls keep permission status and Send/Queue names accessible', 
   assert.match(summary.ariaLabel, /Plan/);
 });
 
+test('shorter visible controls keep separate full-size touch targets', () => {
+  assert.match(css, /\.cbar\s*\{ --control-inset: 0px;/);
+  assert.match(css, /\.cbar > \.mbtn::before\s*\{[^}]*inset: var\(--control-inset\) 0/);
+  assert.match(css, /\.send-btn::after, \.stop-btn::after\s*\{[^}]*inset: var\(--control-inset\)/);
+  const touch = css.slice(css.indexOf('@media (pointer: coarse)'));
+  assert.match(touch, /\.cbar\s*\{ --control-inset: 6px;/);
+  assert.match(touch, /\.cbar > \.icon-btn, \.composer-options > summary\s*\{ width: 44px; height: 44px;/);
+  assert.match(touch, /\.cbar > \.mbtn\s*\{ height: 44px; min-height: 44px;/);
+});
+
 test('compact composer uses a single tool row and suppresses pseudo-element motion when requested', () => {
   assert.match(css, /\.cbar\s*\{[^}]*flex-wrap: nowrap/);
   assert.match(css, /\.composer-settings\s*\{[^}]*position: absolute/);

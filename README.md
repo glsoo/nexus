@@ -106,6 +106,11 @@ flowchart LR
 | Command | What it does |
 | --- | --- |
 | `/create-agent <task>` | Have the AI write a new agent type |
+| `/design <request>` | Build or improve interfaces, branding and visual assets |
+| `/debug [fix\|explain] <problem>` | Trace a bug and fix it, or investigate without edits |
+| `/test [write\|run] <target>` | Add focused tests or run existing checks |
+| `/review <target>` | Read-only review with prioritized findings and file locations |
+| `/refactor <target and goal>` | Simplify code while preserving behavior |
 | `/agent` · `/prompts` · `/marketplace` | Open the agent picker, the prompts editor, or the marketplace |
 | `/plan` · `/mode <mode>` | Research-only plan mode, or `default`, `acceptEdits`, `plan` or `bypass` |
 | `/model <id>` · `/effort <level>` | Change the model or the reasoning effort |
@@ -113,6 +118,8 @@ flowchart LR
 | `/export` | Download the chat as Markdown |
 | `/init` · `#note` | Write a `NEXUS.md` for the project, or save a note to it |
 | `!cmd` · `@path` | Run a shell command yourself, or mention a file |
+
+Run a skill without arguments, or with `help`, to see its usage and examples. Bundled skills work in every project; user and project skills can override them.
 
 Custom commands live in `.nexus/commands/*.md` or `~/.nexus/commands/*.md`, and agent types in `.nexus/agents/` or `~/.nexus/agents/`.
 

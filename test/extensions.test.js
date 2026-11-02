@@ -26,6 +26,19 @@ test('bundled design skill is discoverable outside the Nexus repository', () => 
   assert.match(design.body, /browser or screenshot tooling is unavailable/);
 });
 
+test('bundled engineering skills expose command hints and usage in every project', () => {
+  const found = skills(cwd);
+  for (const name of ['debug', 'test', 'review', 'refactor']) {
+    const skill = found.find(s => s.name === name);
+    assert.ok(skill, `${name} must be discoverable`);
+    assert.equal(skill.dir, fileURLToPath(new URL(`../skills/${name}`, import.meta.url)));
+    assert.ok(skill.description.length > 20 && skill.description.length <= 300);
+    assert.ok(skill.argumentHint.includes('<'), `${name} needs a request hint`);
+    assert.ok(skill.usage.includes(`/${name} `), `${name} needs a usage example`);
+    assert.ok(skill.body.length > 500, `${name} needs a substantive workflow`);
+  }
+});
+
 test('user and project skills can override a bundled skill', () => {
   const user = path.join(process.env.NEXUS_HOME, 'skills/design');
   const project = path.join(cwd, '.nexus/skills/design');

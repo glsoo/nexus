@@ -144,20 +144,29 @@ details.fold > summary::-webkit-details-marker { display: none; }
 
 .composer { flex: none; max-width: 900px; width: 100%; margin: 0 auto; padding: 0 max(16px, var(--sar)) max(4px, var(--sab)) max(16px, var(--sal)); position: relative; }
 .kb .composer { padding-bottom: 4px; }
-.cbox { position: relative; border-radius: 22px; }
+.cbox { position: relative; border-radius: 18px; }
 .cbox:focus-within { border-color: #a55bea; }
-.cbox textarea { width: 100%; background: none; border: 0; outline: 0; resize: none; padding: 8px 14px 4px; display: block; min-height: 38px; max-height: calc(var(--app-h, 100dvh) * .35); field-sizing: content; }
+.cbox textarea { width: 100%; background: none; border: 0; outline: 0; resize: none; padding: 4px 12px 0; display: block; min-height: 30px; max-height: calc(var(--app-h, 100dvh) * .35); field-sizing: content; }
 .cbox textarea::placeholder { color: var(--muted); opacity: 1; }
-.cbar { display: flex; flex-wrap: nowrap; gap: 4px; align-items: center; padding: 2px 6px 6px; }
-.cbar > .mbtn { flex: 1; max-width: 280px; }
-.cbar .send-btn, .cbar .stop-btn { flex: none; width: 40px; height: 40px; min-height: 40px; padding: 0; border-radius: 50%; font-size: 0; }
-.send-btn::before { content: '↑'; font: 500 23px/1 var(--sans); transition: transform .2s var(--ease); }
-.stop-btn::before { content: '■'; font-size: 13px; line-height: 1; }
+.cbar { --control-inset: 0px; display: flex; flex-wrap: nowrap; gap: 3px; align-items: center; padding: 0 5px 2px; }
+.cbar > .mbtn { position: relative; isolation: isolate; flex: 1; max-width: 240px; height: 30px; min-height: 30px; padding: 0 9px; background: none; border: 0; font-size: 11px; }
+.cbar > .mbtn::before { content: ''; position: absolute; inset: var(--control-inset) 0; border: 1px solid var(--line-strong); border-radius: inherit; background: #ffffff08; pointer-events: none; }
+.cbar > .mbtn > * { position: relative; }
+.cbar > .icon-btn, .composer-options > summary { width: 32px; height: 32px; }
+.cbar > .icon-btn svg, .composer-options > summary svg { width: 14px; height: 14px; }
+.cbar .send-btn, .cbar .stop-btn { position: relative; isolation: isolate; flex: none; width: 32px; height: 32px; min-height: 32px; padding: 0; border-radius: 50%; border: 0; background: none; font-size: 0; }
+.send-btn::before { content: '↑'; position: relative; z-index: 1; font: 500 19px/1 var(--sans); transition: transform .2s var(--ease); }
+.stop-btn::before { content: '■'; position: relative; z-index: 1; font-size: 11px; line-height: 1; }
+.send-btn::after, .stop-btn::after { content: ''; position: absolute; inset: var(--control-inset); z-index: 0; border-radius: inherit; pointer-events: none; }
+.send-btn::after { background: var(--accent); }
+.stop-btn::after { border: 1px solid #7f1d1d; background: var(--card); }
 .composer-options { flex: none; margin-left: auto; }
-.composer-options > summary { list-style: none; cursor: pointer; }
+.composer-options > summary { position: relative; list-style: none; cursor: pointer; }
 .composer-options > summary::-webkit-details-marker { display: none; }
-.composer-options > summary svg { transition: transform .25s var(--ease); }
-.composer-options[open] > summary { background: var(--raised); color: var(--fg); }
+.composer-options > summary::before { content: ''; position: absolute; inset: var(--control-inset); border-radius: inherit; background: var(--raised); opacity: 0; pointer-events: none; transition: opacity .2s var(--ease); }
+.composer-options > summary svg { position: relative; transition: transform .25s var(--ease); }
+.composer-options[open] > summary { color: var(--fg); }
+.composer-options[open] > summary::before { opacity: 1; }
 .composer-options[open] > summary svg { transform: rotate(90deg); }
 .composer-options > summary[data-mode=bypass] { color: var(--danger); outline: 1px solid var(--danger); outline-offset: -3px; }
 .composer-options > summary[data-mode=plan] { color: var(--info); }
@@ -371,8 +380,8 @@ dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top
   .top .hamb { display: inline-grid; background: var(--glass-solid); border: 1px solid var(--glass-edge); }
   .top h1 { flex: 1; font-size: 16px; }
   .log { padding: 16px max(16px, var(--sar)) 10px max(16px, var(--sal)); }
-  .cbox { border-radius: 22px; }
-  .cbox textarea { min-height: 40px; }
+  .cbox { border-radius: 18px; }
+  .cbox textarea { min-height: 32px; }
   .cbar > .mbtn { max-width: none; }
   .files { grid-template-columns: minmax(0, 1fr); grid-template-rows: 34% minmax(0, 1fr); }
   .tree { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -397,6 +406,10 @@ dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top
   input, select, textarea { font-size: 16px !important; }
   .icon-btn { width: 44px; height: 44px; }
   .btn, .btn.small, .tab, .mbtn, .seg button { min-height: 44px; }
+  /* Smaller visible controls keep full-size, non-overlapping touch targets. */
+  .cbar { --control-inset: 6px; }
+  .cbar > .icon-btn, .composer-options > summary { width: 44px; height: 44px; }
+  .cbar > .mbtn { height: 44px; min-height: 44px; }
   .cbar .send-btn, .cbar .stop-btn { width: 44px; height: 44px; min-height: 44px; }
   .tab { display: grid; place-items: center; }
   .pitem > button.open, .navbtn, .menu button, .slash button, .tree button { min-height: 44px; align-items: center; }
@@ -463,6 +476,10 @@ dialog.closing::backdrop { animation: fadeout .16s ease-in forwards; }
   details.fold > summary:hover { background: var(--card); color: var(--fg); }
   .slash button:hover { background: var(--raised); }
   .tree button:hover { background: var(--card); }
+  .cbar .send-btn:hover, .cbar .stop-btn:hover, .composer-options > summary:hover { background: none; }
+  .send-btn:hover::after { background: var(--accent-hover); }
+  .stop-btn:hover::after { background: #2a0a0e; }
+  .composer-options > summary:hover::before { opacity: 1; }
 }
 @media (hover: hover) and (prefers-reduced-motion: no-preference) {
   .btn:hover:not(:disabled):not(:active), .mbtn:hover:not(:active) { transform: translateY(-1px); }
@@ -485,6 +502,8 @@ dialog.closing::backdrop { animation: fadeout .16s ease-in forwards; }
   .pill { background: Highlight; border-color: Highlight; box-shadow: none; }
   .tab.on { color: HighlightText; }
   .pitem.on { outline: 1px solid Highlight; }
+  .cbar > .mbtn::before, .send-btn::after, .stop-btn::after { background: Canvas; border: 1px solid ButtonText; }
+  .cbar .send-btn, .cbar .stop-btn { color: ButtonText; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
