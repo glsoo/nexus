@@ -123,15 +123,19 @@ function showLogin() {
 }
 
 // ---- layout ----
-let $list, $main, $side, $scrim;
+let $list, $main, $side, $scrim, $find;
 function shell() {
   $list = h('nav', { class: 'plist', 'aria-label': 'Projects' });
+  let findTimer;
+  $find = h('input', { class: 'field find', type: 'search', placeholder: 'Search chats', 'aria-label': 'Search chats', autocomplete: 'off',
+    oninput: () => { clearTimeout(findTimer); findTimer = setTimeout(guard(findChats), 200); },
+    onkeydown: e => { if (e.key === 'Escape' && $find.value) { e.stopPropagation(); $find.value = ''; guard(findChats)(); } } });
   $main = h('main', { class: 'main' });
   $scrim = h('div', { class: 'scrim', onclick: () => drawer(false) });
   $side = h('aside', { class: 'side' },
     h('div', { class: 'side-head' }, h('img', { src: '/icon.svg?v=purple', alt: '' }), 'Nexus'),
     h('button', { class: 'btn new', onclick: guard(newProject) }, icon('plus'), 'New project'),
-    $list,
+    $find, $list,
     h('div', { class: 'side-foot' },
       // Keeps the open project, which is where agents get installed.
       h('button', { class: 'navbtn', id: 'nav-market', onclick: () => go(S.project, 'marketplace') }, icon('grid'), 'Marketplace'),
@@ -153,11 +157,32 @@ async function newProject() {
 
 async function refreshProjects() {
   S.projects = await api('GET', '/api/projects');
+  if ($find.value.trim()) return; // search results stay until the box is cleared
   $list.replaceChildren(...S.projects.map(p => h('div', { class: `pitem ${p.name === S.project && !S.page ? 'on' : ''}` },
     h('button', { class: 'open', title: pretty(p.name), 'aria-current': p.name === S.project ? 'true' : undefined, onclick: () => go(p.name, null, 'chat') },
       h('span', { class: `dot ${p.busy ? 'busy' : ''}` }), h('span', { class: 'nm' }, pretty(p.name))),
     h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(p.name)}`, 'aria-haspopup': 'menu', onclick: e => projectMenu(e.currentTarget, p.name) }, icon('dots')))));
 }
+// Each hit opens its chat scrolled to the message.
+let findSeq = 0;
+async function findChats() {
+  const q = $find.value.trim(), seq = ++findSeq;
+  if (!q) return refreshProjects();
+  const found = await api('GET', `/api/search?q=${encodeURIComponent(q)}`);
+  if (seq !== findSeq) return;
+  const open = (name, id) => { go(name, null, 'chat'); if (S.state?.name === name) jumpTo(id); else S.jump = id; };
+  $list.replaceChildren(...(found.length ? found.map(r => h('div', { class: 'found' },
+    h('div', { class: 'pitem' }, h('button', { class: 'open', onclick: () => open(r.name) }, h('span', { class: 'nm' }, pretty(r.name)))),
+    ...r.hits.map(x => h('button', { class: 'snip', onclick: () => open(r.name, x.id) }, x.text)))) : [h('p', { class: 'small muted nohit' }, `No chats mention "${q}".`)]));
+}
+function jumpTo(id) {
+  const el = id && entries.get(id)?.el;
+  if (!el) return;
+  el.scrollIntoView({ block: 'center' });
+  el.classList.add('jumped');
+  setTimeout(() => el.classList.remove('jumped'), 2000);
+}
+
 let refreshTimer;
 const refreshSoon = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(guard(refreshProjects), 200); };
 
@@ -352,7 +377,7 @@ function onEvent(m) {
       { const first = !S.state;
         S.state = m.state;
         if (m.state.name !== S.project) return;
-        if (S.tab === 'chat' && !S.page) { render(); if (first) motion($log, FADE); } }
+        if (S.tab === 'chat' && !S.page) { render(); if (first) motion($log, FADE); if (S.jump) { jumpTo(S.jump); S.jump = null; } } }
       break;
     case 'entry': {
       if (!S.state) return;

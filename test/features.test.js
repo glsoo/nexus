@@ -638,3 +638,13 @@ test('Undo file puts one changed file back and deletes one the agent created', {
   assert.ok(!fs.existsSync(path.join(dir, 'new.txt')));
   assert.equal(fs.readFileSync(path.join(dir, 'other.txt'), 'utf8'), 'o2', 'other files keep their changes');
 });
+
+test('search finds messages in any chat, newest first, and chats by name', () => {
+  projects.create('search-me');
+  projects.save('search-me', { log: [{ id: 'a', type: 'user', text: 'Fix the Login bug' }, { id: 'b', type: 'tool', text: 'login' }, { id: 'c', type: 'assistant', text: 'The login bug was a typo in auth.js' }] });
+  const hit = agent.search('login BUG').find(r => r.name === 'search-me');
+  assert.deepEqual(hit.hits.map(x => x.id), ['c', 'a'], 'user and assistant text only, newest first');
+  assert.deepEqual(agent.search('search me').find(r => r.name === 'search-me').hits, [], 'a name match lists the chat');
+  assert.deepEqual(agent.search('   '), []);
+  assert.ok(!agent.search('nothing-says-this').length);
+});

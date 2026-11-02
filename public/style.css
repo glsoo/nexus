@@ -54,6 +54,12 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .pitem > button.open { flex: 1; min-width: 0; background: none; border: 0; text-align: left; padding: 8px 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; border-radius: 6px; }
 .pitem .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 13px; }
 .pitem .icon-btn { opacity: .75; }
+.side .find { margin: 0 12px 8px; width: calc(100% - 24px); }
+.found { margin-bottom: 6px; }
+.found .snip { width: 100%; background: none; border: 0; border-radius: 6px; text-align: left; padding: 4px 8px 6px 16px; color: var(--muted); font-size: 12.5px; cursor: pointer; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.found .snip:hover { background: var(--card); color: var(--fg); }
+.nohit { padding: 8px; }
+.e.jumped { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); flex: none; }
 .dot.busy { background: var(--accent); animation: pulse 1.4s infinite; }
 .dot.warn { background: var(--warn); }
@@ -367,7 +373,7 @@ label.check input { width: 18px; height: 18px; accent-color: var(--accent); flex
   .icon-btn { width: 44px; height: 44px; }
   .btn, .btn.small, .tab, .cbar select, .mbtn, .seg button { min-height: 44px; }
   .tab { display: grid; place-items: center; }
-  .pitem > button.open, .navbtn, .menu button, .slash button, .tree button { min-height: 44px; align-items: center; }
+  .pitem > button.open, .found .snip, .navbtn, .menu button, .slash button, .tree button { min-height: 44px; align-items: center; }
   .tree button { padding-block: 11px; }
   .tkeys { display: flex; }
   .top, .side-head, .side-foot, .tabs, .cbar, .tkeys, .acts { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }

@@ -976,4 +976,26 @@ export async function undoFile(name, file) {
   await checkpoint.restoreFile(cwdOf(s), last.cp, file);
 }
 
+// Finds what was said in any chat, newest first, plus chats whose name matches.
+// ponytail: reads every conversation.json per query; keep an index if that ever gets slow.
+export function search(q) {
+  const terms = String(q).toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return [];
+  const out = [];
+  for (const { name } of projects.list()) {
+    const log = sessions.get(name)?.state.log ?? projects.load(name).log;
+    const hits = [];
+    for (let i = log.length - 1; i >= 0 && hits.length < 3; i--) {
+      const e = log[i];
+      if (!['user', 'assistant'].includes(e.type) || typeof e.text !== 'string') continue;
+      const low = e.text.toLowerCase();
+      if (!terms.every(t => low.includes(t))) continue;
+      const at = Math.max(0, low.indexOf(terms[0]) - 40);
+      hits.push({ id: e.id, text: `${at ? '…' : ''}${e.text.slice(at, at + 160).replace(/\s+/g, ' ')}` });
+    }
+    if (hits.length || terms.every(t => name.toLowerCase().replace(/[-_]+/g, ' ').includes(t))) out.push({ name, hits });
+  }
+  return out.slice(0, 30);
+}
+
 export { killGroup, shells };
