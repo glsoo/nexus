@@ -258,6 +258,7 @@ async function deleteDialog(name) {
 // ---- navigation ----
 function go(project, page = null, tab = 'chat') {
   drawer(false);
+  dictation?.abort();
   if (project !== S.project) teardownTerm();
   const changed = project !== S.project;
   const moved = changed || page !== S.page;
@@ -338,7 +339,10 @@ async function setPush(on) {
   }
   const { key } = await api('GET', '/api/push/key');
   const raw = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
-  const sub = old || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw });
+  const bytes = b => Array.from(new Uint8Array(b || [])).join();
+  const keep = old && bytes(old.options.applicationServerKey) === bytes(raw);
+  if (old && !keep) { await api('POST', '/api/push/unsubscribe', { endpoint: old.endpoint }).catch(() => {}); await old.unsubscribe(); }
+  const sub = keep ? old : await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw });
   await api('POST', '/api/push/subscribe', sub.toJSON());
 }
 if (canPush) navigator.serviceWorker.addEventListener('message', e => { if (S.projects.some(p => p.name === e.data?.open)) go(e.data.open); });
@@ -690,6 +694,7 @@ function send() {
   if (!text && !S.images.length) return;
   if (S.ws?.readyState !== 1) { toast('Not connected. Your message is still here, so send it once you are back.'); return; }
   $slash.hidden = true;
+  fileHits = { q: null, files: [] };
   dictation?.abort();
   delete drafts[S.project];
   if (text.startsWith('/') && localCommand(text)) { $input.value = ''; grow(); return; }
@@ -753,14 +758,15 @@ function saveDrafts() { try { localStorage.setItem('nexus.drafts', JSON.stringif
 addEventListener('pagehide', saveDrafts);
 const grow = () => { if (!CSS.supports('field-sizing', 'content')) { $input.style.height = 'auto'; $input.style.height = `${$input.scrollHeight}px`; } };
 function composer() {
+  fileHits = { q: null, files: [] };
   $input = h('textarea', { rows: 1, placeholder: 'Message Nexus', 'aria-label': 'Message', oninput: () => { drafts[S.project] = $input.value; grow(); updateSlash(); },
     onpaste: e => { const f = [...e.clipboardData.files]; if (f.length) { e.preventDefault(); addFiles(f); } },
     onkeydown: e => {
-      if (!$slash.hidden) {
+      if (!$slash.hidden && !e.isComposing) {
         const items = [...$slash.children];
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); slashIndex = (slashIndex + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length; updateSlash(); return; }
         if (e.key === 'Tab' || (e.key === 'Enter' && $slash.dataset.mode === '@')) { e.preventDefault(); items[slashIndex].click(); return; }
-        if (e.key === 'Escape') { $slash.hidden = true; return; }
+        if (e.key === 'Escape') { e.stopPropagation(); $slash.hidden = true; return; }
       }
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !touch.matches) { e.preventDefault(); send(); } else if (e.key === 'Tab' && e.shiftKey) {
         e.preventDefault();
@@ -880,7 +886,7 @@ function tokenPanel() {
   const auto = h('button', { class: 'btn', type: 'button', onclick: () => sendWs({ t: 'send', text: `/autocompact ${S.state.compactAt ? 'off' : 'on'}` }) });
   const autoText = h('span', {});
   const budget = h('input', { class: 'field', type: 'number', min: '0', step: 'any', inputmode: 'decimal', placeholder: 'None', 'aria-label': 'Budget in dollars', title: 'The agent stops once this chat has cost this much',
-    onchange: () => setOption('budget', Math.max(0, Number(budget.value) || 0)) });
+    onchange: () => { if (!budget.validity.badInput) setOption('budget', Math.max(0, Number(budget.value) || 0)); } });
   syncTokens = () => {
     const { usage: u, compactAt: at, running } = S.state;
     if (document.activeElement !== budget) budget.value = S.state.budget || '';
@@ -1311,7 +1317,8 @@ function filesView(view) {
   });
   const newBtn = h('button', { class: 'btn small', onclick: () => newFile(open) }, 'New file');
   // Hands the open file, and the selected lines if any, to the chat as an @ mention.
-  const askBtn = h('button', { class: 'btn small', disabled: true, title: 'Ask about this file, or about the selected lines', onclick: () => {
+  const askBtn = h('button', { class: 'btn small', disabled: true, title: 'Ask about this file, or about the selected lines', onclick: guard(async () => {
+    if (!saveBtn.disabled && !await confirmBox('Discard unsaved changes?', `${current} has changes that aren't saved. Save first if you want to ask about them.`, 'Discard', 'danger')) return;
     const line = i => area.value.slice(0, i).split('\n').length;
     const [a, b] = [line(area.selectionStart), line(Math.max(area.selectionStart, area.selectionEnd - 1))];
     const ref = `@${current}${area.selectionEnd > area.selectionStart ? (a === b ? ` line ${a}` : ` lines ${a}-${b}`) : ''} `;
@@ -1319,7 +1326,7 @@ function filesView(view) {
     go(S.project, null, 'chat');
     $input.focus();
     $input.setSelectionRange($input.value.length, $input.value.length);
-  } }, 'Ask Nexus');
+  }) }, 'Ask Nexus');
   const open = guard(async rel => {
     if (!saveBtn.disabled && !await confirmBox('Discard unsaved changes?', `${current} has changes that aren't saved.`, 'Discard', 'danger')) return;
     try {
@@ -1373,7 +1380,7 @@ function changesView(view) {
       const { since: s, diff } = await api('GET', `${P(S.project)}/changes`);
       since.textContent = s ? `Since your last prompt: ${s}` : 'No checkpoint yet. Send a prompt first.';
       box.replaceChildren(...(diff ? diff.split('\n').map(l => {
-        const file = /^diff --git a\/.+ b\/(.+)$/.exec(l)?.[1];
+        const file = /^diff --git a\/(.+) b\/\1$/.exec(l)?.[1];
         if (file) return h('span', { class: 'head' }, l, h('button', { class: 'btn small undo', type: 'button', onclick: guard(async () => {
           if (!await confirmBox(`Undo ${file}?`, 'It goes back to how it was before your last prompt. A checkpoint is saved first, so Rewind can bring the change back.', 'Undo file', 'danger')) return;
           await api('POST', `${P(S.project)}/changes/undo`, { path: file });
@@ -1605,11 +1612,11 @@ function autopilotCard(area) {
   guard(async () => { input.value = JSON.parse((await api('GET', '/api/settings')).text).autopilotRequests ?? 150; })();
   const save = guard(async () => {
     const n = Number(input.value);
-    if (!Number.isInteger(n) || n < 0) return toast('Use a whole number, or 0 for no limit.');
+    if (input.value === '' || input.validity.badInput || !Number.isInteger(n) || n < 0) return toast('Use a whole number, or 0 for no limit.');
     const { text } = await api('GET', '/api/settings');
     const next = `${JSON.stringify({ ...JSON.parse(text), autopilotRequests: n }, null, 2)}\n`;
     await api('PUT', '/api/settings', { text: next });
-    if (area.value === text) area.value = next;
+    if (area.value === text.replace(/\r\n?/g, '\n')) area.value = next;
     toast(n ? `Autopilot now pauses after ${n} requests in one go.` : 'Autopilot has no request limit now. Only a budget stops it.');
   });
   return [h('h2', {}, h('label', { htmlFor: 'apreq' }, 'Autopilot request limit')),
