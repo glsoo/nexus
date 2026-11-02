@@ -8,12 +8,15 @@ import pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
 import * as agent from './agent.js';
 import { anthropicModels } from './anthropic.js';
+import { compatModels } from './compat.js';
 import * as auth from './auth.js';
 import { agentDefs, commands, deleteAgentDef, saveAgentDef, skills } from './extensions.js';
 import * as market from './market.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
+import { findFiles } from './tools.js';
 import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
+import * as push from './push.js';
 import { childEnv, isInside, presentSocket, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -33,7 +36,7 @@ const VENDOR = {
   'inter.woff2': '@fontsource-variable/inter/files/inter-latin-wght-normal.woff2',
   'mono.woff2': '@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2',
 };
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 const SECURITY = {
   'content-security-policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
   'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY',
@@ -55,13 +58,13 @@ function setCookie(req, res, value, maxAge) {
   res.setHeader('set-cookie', `nexus_session=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`);
 }
 
-function body(req) {
+function body(req, max = 40_000_000) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on('data', c => {
       size += c.length;
-      if (size > 40_000_000) { reject(fail(413, 'Request too large.')); req.destroy(); } else chunks.push(c);
+      if (size > max) { reject(fail(413, 'Request too large.')); req.destroy(); } else chunks.push(c);
     });
     req.on('end', () => {
       try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks)) : {}); } catch { reject(fail(400, 'Invalid JSON.')); }
@@ -85,8 +88,14 @@ const routes = [];
 const route = (method, pattern, fn) => routes.push({ method, re: new RegExp(`^${pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)')}$`), fn });
 
 route('GET', '/api/projects', () => projects.list().map(p => ({ ...p, busy: agent.isBusy(p.name) })));
+route('GET', '/api/search', ({ q }) => agent.search(q.get('q') || ''));
 route('POST', '/api/projects', async ({ req }) => {
   const name = projects.create((await body(req)).name);
+  broadcast({ t: 'projects' });
+  return { name };
+});
+route('POST', '/api/projects/clone', async ({ req }) => {
+  const name = await projects.clone((await body(req)).url);
   broadcast({ t: 'projects' });
   return { name };
 });
@@ -108,6 +117,7 @@ route('GET', '/api/projects/:name/tree', ({ p, q }) => {
     .map(d => ({ name: d.name, dir: d.isDirectory() }))
     .sort((a, b) => b.dir - a.dir || a.name.localeCompare(b.name));
 });
+route('GET', '/api/projects/:name/files', ({ p, q }) => findFiles(projectPath(p.name), q.get('q') || ''));
 route('GET', '/api/projects/:name/file', ({ p, q }) => {
   const file = projectPath(p.name, q.get('path'));
   const { size } = fs.statSync(file);
@@ -125,6 +135,13 @@ route('PUT', '/api/projects/:name/file', async ({ req, p }) => {
   return {};
 });
 route('GET', '/api/projects/:name/changes', ({ p }) => agent.changes(need(p.name)));
+route('POST', '/api/projects/:name/changes/undo', async ({ req, p }) => {
+  const raw = String((await body(req)).path || '');
+  const file = path.relative(projects.projectDir(p.name), projectPath(p.name, raw)).split(path.sep).join('/');
+  if (!raw || !file || /^\.nexus(\/|$)/.test(file)) throw fail(400, 'That file cannot be undone.');
+  await agent.undoFile(p.name, file);
+  return {};
+});
 route('GET', '/api/projects/:name/export', ({ p }) => ({ markdown: agent.exportMarkdown(need(p.name)) }));
 route('POST', '/api/projects/:name/rewind', async ({ req, p }) => {
   const { id, files, conversation } = await body(req);
@@ -179,18 +196,22 @@ route('DELETE', '/api/mcp-servers/:server', ({ p }) => {
 });
 
 const shellInfo = ({ proc, output, read, ...s }) => s;
-route('GET', '/api/agents', () => ({ agents: agent.listAgents(), shells: [...agent.shells.values()].map(shellInfo).reverse() }));
+route('GET', '/api/agents', () => ({ agents: agent.listAgents(), shells: [...agent.shells.values()].map(shellInfo).reverse(), schedules: agent.schedules() }));
+route('DELETE', '/api/schedules/:id', ({ p }) => { agent.removeSchedule(p.id); return {}; });
 route('GET', '/api/agents/:id', ({ p }) => {
   const a = agent.getAgent(p.id);
   if (!a) throw fail(404, 'Agent not found.');
   const { controller, ...rest } = a;
   return rest;
 });
+route('GET', '/api/push/key', () => ({ key: push.publicKey() }));
+route('POST', '/api/push/subscribe', async ({ req }) => { push.subscribe(await body(req), auth.sessionKey(cookieToken(req))); return {}; });
+route('POST', '/api/push/unsubscribe', async ({ req }) => { push.unsubscribe(String((await body(req)).endpoint || '')); return {}; });
 route('POST', '/api/agents/:id/stop', ({ p }) => { agent.stopAgent(p.id); return {}; });
 route('POST', '/api/agents', async ({ req }) => {
-  const { project, type, description, prompt } = await body(req);
+  const { project, type, description, prompt, isolation } = await body(req);
   if (!prompt) throw fail(400, 'A prompt is required.');
-  agent.runSubagent(agent.getSession(need(project)), { subagent_type: type, description, prompt, run_in_background: true, notify: false });
+  await agent.runSubagent(agent.getSession(need(project)), { subagent_type: type, description, prompt, run_in_background: true, notify: false, isolation: isolation === 'worktree' ? 'worktree' : undefined });
   return {};
 });
 route('GET', '/api/shells/:id', ({ p }) => {
@@ -204,6 +225,7 @@ route('POST', '/api/shells/:id/kill', ({ p }) => {
   return {};
 });
 
+route('GET', '/api/spending', () => agent.spending());
 route('GET', '/api/settings', () => ({
   text: fs.existsSync(settingsPath()) ? fs.readFileSync(settingsPath(), 'utf8') : '{\n  "hooks": {},\n  "mcpServers": {}\n}\n',
   mcp: mcp.status(),
@@ -267,14 +289,14 @@ async function openaiModels() {
     const list = (await res.json()).data.map(m => m.id)
       .filter(id => /^(gpt-[4-9]|o\d)/.test(id) && !/audio|realtime|image|tts|transcribe|search|embed|moderation|-\d{4}-\d\d-\d\d$/.test(id))
       .sort((a, b) => a.startsWith('o') - b.startsWith('o') || b.localeCompare(a, undefined, { numeric: true }))
-      .map(id => ({ id, name: id.replace(/^gpt/, 'GPT').replace(/-([a-z])/g, (_, c) => ` ${c.toUpperCase()}`), provider: 'openai', efforts: agent.supportsReasoning(id) ? ['low', 'medium', 'high', 'xhigh'] : [] }));
+      .map(id => ({ id, name: id.replace(/^gpt/, 'GPT').replace(/-([a-z])/g, (_, c) => ` ${c.toUpperCase()}`), provider: 'openai', providerName: 'OpenAI', efforts: agent.supportsReasoning(id) ? ['low', 'medium', 'high', 'xhigh'] : [] }));
     modelCache = { at: Date.now(), list };
   }
   return modelCache.list;
 }
-// One provider being down must not hide the other's models.
+// One provider being down must not hide the others' models.
 route('GET', '/api/models', async () => {
-  const results = await Promise.allSettled([anthropicModels(), openaiModels()]);
+  const results = await Promise.allSettled([anthropicModels(), openaiModels(), compatModels()]);
   const list = results.flatMap(r => r.value || []);
   if (!list.length) throw results.find(r => r.reason)?.reason || fail(502, 'No models available.');
   return list;
@@ -293,11 +315,11 @@ async function api(req, res, url) {
   if (url.pathname === '/api/login' && req.method === 'POST') {
     const ip = clientIp(req);
     if (auth.loginBlocked(ip)) throw fail(429, 'Too many failed attempts. Try again later.');
-    const { user, pass } = await body(req);
-    if (!await auth.verifyPassword(user ?? '', pass ?? '')) {
-      auth.recordFail(ip);
-      throw fail(401, 'Incorrect username or password.');
-    }
+    // Counted before anything is awaited, so guesses sent in parallel can't all pass the check above.
+    const attempt = auth.recordFail(ip);
+    const { user, pass } = await body(req, 10_000);
+    if (!await auth.verifyPassword(user ?? '', pass ?? '')) throw fail(401, 'Incorrect username or password.');
+    auth.forgive(attempt);
     setCookie(req, res, auth.createSession(), 30 * 24 * 3600);
     return { ok: true };
   }
@@ -346,9 +368,16 @@ function present(req, res, url) {
   up.end();
 }
 
-const server = http.createServer(async (req, res) => {
+// Anything a handler throws ends that request, never the server.
+const server = http.createServer((req, res) => handle(req, res).catch(err => {
+  console.error(req.method, req.url, err);
+  if (!res.headersSent) res.writeHead(500);
+  res.end();
+}));
+async function handle(req, res) {
   for (const [k, v] of Object.entries(SECURITY)) res.setHeader(k, v);
-  const url = new URL(req.url, 'http://x');
+  let url;
+  try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400).end(); return; }
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('cache-control', 'no-store');
     try {
@@ -365,17 +394,17 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname.startsWith('/present/')) return present(req, res, url);
   if (url.pathname.startsWith('/vendor/')) {
-    const file = VENDOR[url.pathname.slice(8)];
+    const file = Object.hasOwn(VENDOR, url.pathname.slice(8)) ? VENDOR[url.pathname.slice(8)] : null; // not "constructor"
     if (!file) { res.writeHead(404).end(); return; }
     serveStatic(res, path.join(NM, file), true);
     return;
   }
-  const rel = { '/app.js': 'app.js', '/style.css': 'style.css', '/icon.svg': 'icon.svg', '/icon-180.png': 'icon-180.png' }[url.pathname] || 'index.html';
+  const rel = { '/app.js': 'app.js', '/sw.js': 'sw.js', '/style.css': 'style.css', '/icon.svg': 'icon.svg', '/icon-180.png': 'icon-180.png', '/manifest.webmanifest': 'manifest.webmanifest' }[url.pathname] || 'index.html';
   if (rel !== 'index.html') return serveStatic(res, path.join(PUBLIC, rel));
   // Cloudflare gives static files a 4h browser TTL whatever we send, so each build needs its own URLs.
   const html = fs.readFileSync(path.join(PUBLIC, rel), 'utf8').replace(/"\/(app\.js|style\.css)"/g, `"/$1?v=${BUILD}"`);
   res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-cache' }).end(html);
-});
+}
 
 // ---- WebSockets: /ws for the conversation, /term for the terminal ----
 const wss = new WebSocketServer({ noServer: true, maxPayload: 40_000_000 });
@@ -384,7 +413,8 @@ const sendTo = (ws, msg) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON
 const broadcast = msg => wss.clients.forEach(ws => sendTo(ws, msg));
 
 server.on('upgrade', (req, socket, head) => {
-  const url = new URL(req.url, 'http://x');
+  let url;
+  try { url = new URL(req.url, 'http://x'); } catch { socket.destroy(); return; }
   const token = cookieToken(req);
   const target = { '/ws': wss, '/term': termWss }[url.pathname];
   if (!target || !originOk(req, true) || !auth.validSession(token)) {
@@ -434,9 +464,21 @@ wss.on('connection', ws => {
   });
 });
 
+// Subscribed browsers get a push when a chat finishes or waits on the user, even with Nexus closed.
+const busy = new Set(), pinged = new WeakSet();
+const ping = (title, body, project) => push.notify({ title, body, project }, auth.liveSessionKey).catch(err => console.error('Web Push:', err.message));
+const asks = { AskUserQuestion: 'has a question for you', ExitPlanMode: 'has a plan for you to approve' };
 agent.hub.on('project', (name, ev) => {
   for (const ws of wss.clients) if (ws.project === name) sendTo(ws, ev);
   if (ev.t === 'status') broadcast({ t: 'projects' });
+  if (ev.t === 'status' && ev.running) busy.add(name);
+  else if (ev.t === 'status' && busy.delete(name)) {
+    const reply = agent.getSession(name).state.log.findLast(e => e.type === 'assistant')?.text || '';
+    ping(`${name} finished`, reply.replace(/\s+/g, ' ').slice(0, 140) || 'The agent is done.', name);
+  } else if (ev.t === 'entry' && ev.entry.status === 'awaiting' && !pinged.has(ev.entry)) {
+    pinged.add(ev.entry);
+    ping(`${name} needs you`, `The agent ${asks[ev.entry.name] || `wants to run ${ev.entry.name}`}.`, name);
+  }
 });
 agent.hub.on('agent', ({ agent: a }) => broadcast({ t: 'agent', agent: a }));
 agent.hub.on('renamed', (from, to) => {
@@ -473,6 +515,8 @@ mcp.reload();
 fs.watchFile(settingsPath(), { interval: 2000 }, () => mcp.reload());
 agent.reportFailedDeploy();
 agent.resumeAfterRestart();
+agent.startSchedules();
+agent.startWatches();
 let stopping = false;
 async function shutdown() {
   if (stopping) return;

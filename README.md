@@ -9,14 +9,16 @@
 
 <p align="center">
   <img alt="Node.js 24+" src="https://img.shields.io/badge/node-24%2B-7e22ce?style=flat-square&logo=nodedotjs&logoColor=white">
-  <img alt="Claude and GPT" src="https://img.shields.io/badge/models-Claude%20%2B%20GPT-7e22ce?style=flat-square">
+  <img alt="Any model" src="https://img.shields.io/badge/models-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini%20%C2%B7%20local-7e22ce?style=flat-square">
   <img alt="Linux and Windows" src="https://img.shields.io/badge/runs%20on-Linux%20%7C%20Windows-111111?style=flat-square">
   <img alt="No build step" src="https://img.shields.io/badge/build%20step-none-111111?style=flat-square">
 </p>
 
 <p align="center">
   <a href="#-quick-start">Quick start</a> ·
+  <a href="#-why-nexus">Why Nexus</a> ·
   <a href="#-whats-inside">What's inside</a> ·
+  <a href="#-models">Models</a> ·
   <a href="#-agents-prompts-and-the-marketplace">Agents and marketplace</a> ·
   <a href="#-windows">Windows</a> ·
   <a href="#-configuration">Configuration</a>
@@ -26,6 +28,14 @@
   <img src="docs/screenshots/chat.png" alt="A Nexus chat: the agent searched, read and edited files, ran the tests, and summarized the change" width="100%">
 </p>
 
+## 💡 Why Nexus
+
+- **It works while you're away.** Turn on autopilot with a dollar budget, walk off, and your phone buzzes when the chat finishes or needs you. Or schedule it: `/schedule 0 9 * * 1-5 /review branch` reviews the branch every weekday morning.
+- **It's yours.** It runs on your computer, with your files, your shell and your keys, and your chats are stored there too, not in someone else's cloud.
+- **Any model, with the cost in plain sight.** Claude, GPT, Gemini, Groq, DeepSeek, Mistral, xAI, hundreds more through OpenRouter, or a free local model in Ollama or LM Studio. Each chat shows its cost in dollars, estimated from list prices.
+- **Several agents at once without collisions.** Agents can work in their own git worktrees and hand back a branch each, so you merge the one you like.
+- **Any screen.** The same agent on your desktop, a laptop or an installed phone app, with voice input.
+
 ## ✨ What's inside
 
 | | |
@@ -33,12 +43,25 @@
 | 🤖 **A real coding agent** | Reads, searches and edits your code, runs shell commands and tests, spins up subagents for side quests, and keeps a task list. Plan mode researches first and proposes a plan before touching anything. |
 | 🛒 **Agent marketplace** | 120+ hand-picked agents ship with Nexus, from security reviewers and vulnerability patchers to test writers, DevOps and frontend specialists. You can also browse [aiagentslist.com](https://aiagentslist.com/agents) and [Hugging Face](https://huggingface.co/datasets/tiny-agents/tiny-agents). Install any of them in one click. |
 | 🔌 **MCP marketplace** | One-click [MCP](https://modelcontextprotocol.io) servers: Hugging Face, GitHub, Playwright, Context7, Brave Search and more, plus hundreds of community servers and Hugging Face Spaces. Both local (stdio) and remote (streamable HTTP) servers work. |
+| ✈️ **Autopilot** | One click and the agent stops asking: it approves its own tool calls, answers its own questions, approves its own plan, and keeps going. A request cap (150 in one go by default; change it in **Settings**) and your budget keep it from running away. |
+| 💵 **Cost and budgets** | The meter shows each chat's cost in dollars, from the provider's list prices. Set a budget in the Tokens panel or with `/budget 5`, and the agent stops when it's reached. **Settings** adds up every chat. |
+| 🌿 **Parallel agents on branches** | Tick **Own branch** on the Agents page, or let the agent launch subagents with worktree isolation. Each one works in its own git worktree, and its changes come back committed on a branch to review and merge. |
+| 🧪 **Tests that fix themselves** | `/check npm test` runs your command after every turn that changed files. When it fails, the agent gets the output and fixes it, up to three rounds. |
+| ✍️ **Works with your editor** | `/watch on`, then write a comment like `// handle empty input AI!` in VS Code, Vim or anything else and save. Nexus does it and removes the comment. |
+| 📥 **Clone and go** | Paste a GitHub (or any git) URL into the clone button next to **New project**, and the repo becomes a chat. |
+| 🔎 **Search every chat** | The box above your chats searches what was said in all of them and jumps to the message. |
+| 📜 **Bring your rules** | Nexus reads `AGENTS.md` and `NEXUS.md`, and in a repo without `AGENTS.md` it follows `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`, Copilot instructions or Aider's `CONVENTIONS.md`. |
+| ⏰ **Schedules** | `/schedule <cron> <prompt>` runs a prompt on a timer in that chat: a morning review, a nightly dependency audit, a weekly cleanup. |
+| 🔔 **Push notifications** | Your phone hears when a chat finishes or waits for an approval, even with Nexus closed. This is standard Web Push, sent straight from your server. |
+| 🐙 **GitHub flow** | `/review branch [base]` reviews your branch, `/review 42` reviews a pull request, `/issue 42` fixes an issue with a test, and `/pr` commits, pushes and opens the pull request. GitHub tasks use the GitHub CLI. |
+| 👀 **It can see** | A Screenshot tool lets the agent look at the page it just built in headless Edge or Chrome, at desktop or phone width. |
+| 📎 **Point at code** | Type `@` to pick a project file, or select lines in the Files tab and press **Ask Nexus**. |
 | 🎭 **Swap agents per chat** | The **Agent** button next to the model turns a chat into any agent type, with its own instructions, tools and model. |
 | ✍️ **Create agents with AI** | Type `/create-agent reviews my PRs for security holes` and the AI writes a new agent type for you, tailored to your project. |
 | 🧠 **Your own prompts** | Edit the system prompt for everywhere, one project or one chat. Prompt injection adds standing instructions to every message you send, where models weigh them most. |
 | 🧑‍🦰 **Ponytail mode** | The [ponytail](https://github.com/DietrichGebert) "lazy senior dev" agents ship in the catalog: the smallest change that fully solves the task, plus review, audit and debt ledger agents. |
-| 📱 **Phone-ready** | A layout built for small screens, a keyboard-aware composer, 44pt touch targets, and a notification when a long task finishes. |
-| ⏪ **Safe by default** | Permission modes, approval prompts, a checkpoint before every prompt so you can rewind files and conversation, and a server that listens on localhost only. |
+| 📱 **Phone app and voice** | Install it from the browser's **Add to Home Screen** for a full-screen app. It has a layout built for small screens, a keyboard-aware composer, 44pt touch targets, and a mic button that turns speech into your message. |
+| ⏪ **Safe by default** | Permission modes, approval prompts, a checkpoint before every prompt so you can rewind files and conversation, an **Undo file** button for each file in the Changes tab, and a server that listens on localhost only. |
 | 🔁 **Self-improving** | Ask the built-in self-improvement bot for a feature and it edits Nexus itself and runs the tests. As a Linux service it also restarts, and rolls back if the server doesn't come back. |
 
 <table>
@@ -51,7 +74,7 @@
 
 ## 🚀 Quick start
 
-You need **Node.js 24+**, **Git** and **ripgrep**, plus `make`, `g++` and `python3` in case `node-pty` has to compile for your platform. You also need an **OpenAI or Anthropic API key**, or both.
+You need **Node.js 24+**, **Git** and **ripgrep**, plus `make`, `g++` and `python3` in case `node-pty` has to compile for your platform. You also need a model: an API key for **OpenAI, Anthropic, OpenRouter, Gemini, Groq, DeepSeek, Mistral or xAI**, or a local model in **Ollama** or **LM Studio**.
 
 ```sh
 git clone https://github.com/glsoo/nexus.git
@@ -66,6 +89,9 @@ Add your API keys to `.env`:
 ```sh
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
+# any of these work too; see Models below
+OPENROUTER_API_KEY=sk-or-...
+GEMINI_API_KEY=...
 ```
 
 Then start it and open **http://127.0.0.1:7711**:
@@ -77,14 +103,36 @@ npm start
 There is no build step. Never commit `.env`; it is already in `.gitignore`.
 
 > [!IMPORTANT]
-> The server listens on `127.0.0.1` only. To use it from your phone or another computer, put an HTTPS tunnel or reverse proxy in front of it. Anyone who logs in gets shell access to the machine, so use a strong password.
+> The server listens on `127.0.0.1` only. To use it from your phone or another computer, put an HTTPS tunnel or reverse proxy in front of it. Anyone who logs in gets shell access to the machine, so use a strong password. Push notifications, voice input and installing the app need that HTTPS address too, because browsers only allow them on secure origins. On iPhone, add Nexus to the Home Screen before turning on notifications.
+
+## 🧠 Models
+
+The model picker lists every model your keys unlock, grouped by provider, with prices and a **Free** tag.
+
+| Provider | How to turn it on |
+| --- | --- |
+| OpenAI, Anthropic | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` |
+| OpenRouter (hundreds of models, some free) | `OPENROUTER_API_KEY` |
+| Google Gemini, Groq, DeepSeek, Mistral, xAI | `GEMINI_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY` |
+| Ollama, LM Studio | Nothing: their models appear while they run on this computer |
+| Any OpenAI-compatible server | A `providers` entry in `~/.nexus/settings.json` |
+
+```json
+{
+  "providers": {
+    "work": { "name": "Work gateway", "baseURL": "https://llm.example.com/v1", "apiKey": "..." }
+  }
+}
+```
+
+A `providers` entry can also hold the key for a built-in provider, as in `"gemini": { "apiKey": "..." }`. Model ids look like `ollama:qwen3-coder:30b` or `openrouter:anthropic/claude-haiku-4.5`. The agent needs a model that can call tools, and Ollama's default context is small for agent work, so start Ollama with a larger `OLLAMA_CONTEXT_LENGTH`. Keys never reach the shell commands the agent runs.
 
 ## 🧩 Agents, prompts and the marketplace
 
 ```mermaid
 flowchart LR
   you(["You: browser or phone"]) --> nexus["Nexus server"]
-  nexus --> models["Claude / GPT"]
+  nexus --> models["Claude, GPT, Gemini, OpenRouter, local models"]
   nexus --> tools["Shell, files, tests, git checkpoints"]
   nexus --> mcp["MCP servers: local or remote"]
   market["Marketplace: Nexus picks, aiagentslist.com, Hugging Face"] -. one click .-> agents["Agent types"]
@@ -115,6 +163,13 @@ flowchart LR
 | `/plan` · `/mode <mode>` | Research-only plan mode, or `default`, `acceptEdits`, `plan` or `bypass` |
 | `/model <id>` · `/effort <level>` | Change the model or the reasoning effort |
 | `/compact` · `/autocompact` | Summarize the chat to free context, now or automatically |
+| `/autopilot [on\|off]` | Keep working without stopping to ask |
+| `/cost` · `/budget <dollars>\|off` | Show tokens and cost, or stop once the chat has cost that much |
+| `/review branch [base]` · `/review <PR number\|URL>` | Review a branch or GitHub pull request; `/review` alone shows help |
+| `/issue <n>` · `/pr [notes]` | Fix a GitHub issue or open a pull request |
+| `/schedule <cron> <prompt>` | Run a prompt on a timer; `/schedule` lists them and `/schedule remove <id>` drops one |
+| `/check <command>\|off` | Run a command after each change and have the agent fix failures |
+| `/watch [on\|off]` | Act on `AI!` comments you save in any editor |
 | `/export` | Download the chat as Markdown |
 | `/init` · `#note` | Write a `NEXUS.md` for the project, or save a note to it |
 | `!cmd` · `@path` | Run a shell command yourself, or mention a file |
@@ -149,7 +204,7 @@ Optional settings, in `.env` (or `windows\.env` on Windows):
 | `NEXUS_AUTO_UPDATE` | on | Set to `0` to turn off automatic updates |
 | `NEXUS_COMPAT` | unset | Name of another tool whose `.name/` folders and `NAME.md` should also be read |
 
-Hooks, MCP servers and the auto-compact size live in `~/.nexus/settings.json`, which you can edit on the Settings page. The global system prompt lives in `~/.nexus/prompts.json`.
+Hooks, MCP servers, providers and the auto-compact size live in `~/.nexus/settings.json`, which you can edit on the Settings page. Hooks run on `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact` and `Notification`, and a hook that exits with 2 blocks the tool call or prompt. The global system prompt lives in `~/.nexus/prompts.json`.
 
 ## 🔄 Updates
 

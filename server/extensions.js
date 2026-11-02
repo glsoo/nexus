@@ -86,9 +86,13 @@ export function commands(cwd) {
   return [...out.values()];
 }
 
+// A repo set up for another tool keeps its rules. AGENTS.md is the shared standard, so it wins over these to avoid reading the same rules twice.
+const BORROWED = ['CLAUDE.md', 'GEMINI.md', '.cursorrules', '.windsurfrules', '.github/copilot-instructions.md', 'CONVENTIONS.md'];
+
 export function instructions(cwd) {
   const parts = [];
-  for (const file of [path.join(NEXUS_HOME, 'NEXUS.md'), ...(process.env.NEXUS_COMPAT ? [path.join(cwd, `${process.env.NEXUS_COMPAT.toUpperCase()}.md`)] : []), path.join(cwd, 'AGENTS.md'), path.join(cwd, 'NEXUS.md')]) {
+  const borrowed = fs.existsSync(path.join(cwd, 'AGENTS.md')) ? [] : BORROWED.map(f => path.join(cwd, f)).filter(f => fs.existsSync(f)).slice(0, 1);
+  for (const file of new Set([path.join(NEXUS_HOME, 'NEXUS.md'), ...(process.env.NEXUS_COMPAT ? [path.join(cwd, `${process.env.NEXUS_COMPAT.toUpperCase()}.md`)] : []), ...borrowed, path.join(cwd, 'AGENTS.md'), path.join(cwd, 'NEXUS.md')])) {
     try { parts.push(`Contents of ${file}:\n${fs.readFileSync(file, 'utf8').slice(0, 40000)}`); } catch { /* optional file */ }
   }
   return parts.join('\n\n');

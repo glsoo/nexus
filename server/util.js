@@ -35,7 +35,7 @@ export const newId = (prefix = 'e') => `${prefix}_${Date.now().toString(36)}${Ma
 export function childEnv() {
   const env = { ...process.env };
   env.HOME ||= HOME;
-  for (const key of Object.keys(env)) if (key === 'OPENAI_API_KEY' || key === 'ANTHROPIC_API_KEY' || key === 'GEMINI_API_KEY' || key === 'GOOGLE_API_KEY' || (key.startsWith('NEXUS_') && key !== 'NEXUS_URL')) delete env[key];
+  for (const key of Object.keys(env)) if (['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY', 'XAI_API_KEY'].includes(key) || (key.startsWith('NEXUS_') && key !== 'NEXUS_URL')) delete env[key];
   return env;
 }
 
@@ -88,7 +88,7 @@ export async function postWithRetry(label, url, headers, body, signal) {
       continue;
     }
     let message = text.slice(0, 500), code;
-    try { const e = JSON.parse(text).error; message = e.message; code = e.code; } catch { /* raw text */ }
+    try { const e = JSON.parse(text).error; message = typeof e === 'string' ? e : e?.message || message; code = e?.code; } catch { /* raw text */ }
     throw Object.assign(new Error(`${label} ${res.status}: ${message}`), { code });
   }
 }

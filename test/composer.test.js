@@ -43,7 +43,8 @@ test('compact controls keep permission status and Send/Queue names accessible', 
   const start = app.indexOf('function syncComposer(');
   const end = app.indexOf('\nlet uidN', start);
   assert.ok(start >= 0 && end > start);
-  const summary = { dataset: {} };
+  const classes = new Set();
+  const summary = { dataset: {}, classList: { toggle: (name, on) => on ? classes.add(name) : classes.delete(name) } };
   const emptyClasses = { toggle() {} };
   const context = {
     S: { state: { mode: 'default', model: 'preview', effort: 'medium', running: false, usage: { lastInput: 0 }, compactAt: 100000, todos: [] }, models: [], meta: { agents: [] }, prompts: null },
@@ -51,7 +52,9 @@ test('compact controls keep permission status and Send/Queue names accessible', 
     $input: { isConnected: true },
     $mode: { closest: () => ({ querySelector: () => summary }) },
     $modelLabel: {}, $agentLabel: {}, $agentBtn: { classList: emptyClasses }, $promptBtn: { classList: emptyClasses },
-    $stopBtn: {}, $sendBtn: {}, $meter: {}, $todos: { replaceChildren() {} }, syncTokens: null, fmt: n => String(n),
+    $autoBtn: { classList: emptyClasses, setAttribute(name, value) { this[name] = value; } },
+    $stopBtn: {}, $sendBtn: {}, $meter: { replaceChildren(...children) { this.children = children; } }, $todos: { replaceChildren() {} }, syncTokens: null, fmt: n => String(n),
+    h: (tag, props, text) => ({ tag, ...props, text }), usd: n => `$${n.toFixed(2)}`,
   };
   vm.runInNewContext(app.slice(start, end), context);
   context.syncComposer();
@@ -71,6 +74,24 @@ test('compact controls keep permission status and Send/Queue names accessible', 
   context.syncComposer();
   assert.equal(summary.dataset.mode, 'plan');
   assert.match(summary.ariaLabel, /Plan/);
+  context.S.state.mode = 'default';
+  context.S.state.autopilot = true;
+  context.S.state.usage.cost = 1.23;
+  context.syncComposer();
+  assert.match(summary.ariaLabel, /Ask first.*Autopilot on: automatic approvals/);
+  assert.equal(classes.has('autopilot'), true, 'automatic approvals must be visible even with settings closed');
+  assert.equal(context.$autoBtn['aria-pressed'], 'true');
+  assert.match(context.$autoBtn.title, /without asking/);
+  assert.equal(context.$meter.ariaLabel, 'Tokens, cost and compacting');
+  assert.equal(context.$meter.children[1].class, 'mcost');
+  assert.equal(context.$meter.children[1].text, ' · $1.23');
+  context.S.state.autopilot = false;
+  context.S.state.usage.cost = 0;
+  context.syncComposer();
+  assert.equal(classes.has('autopilot'), false);
+  assert.doesNotMatch(summary.ariaLabel, /Autopilot on/);
+  assert.equal(context.$autoBtn['aria-pressed'], 'false');
+  assert.equal(context.$meter.children[1], '');
 });
 
 test('shorter visible controls keep separate full-size touch targets', () => {

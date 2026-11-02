@@ -13,7 +13,48 @@ if (-not (Test-Path -LiteralPath (Join-Path $root 'node_modules\node-pty\package
     if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
 }
 $output = Join-Path $PSScriptRoot 'Nexus.exe'
-& $compiler /nologo /target:winexe /optimize+ /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll /reference:System.Security.dll "/out:$output" (Join-Path $PSScriptRoot 'NexusLauncher.cs')
+# The logo goes into the exe, so the taskbar, Start, Explorer and the desktop shortcut show it instead of a blank program icon.
+# Frames at 256 (PNG), 48, 32 and 16 pixels (32-bit bitmaps, which every reader of .ico files handles), from the web app's icon.
+$icon = Join-Path $PSScriptRoot 'Nexus.ico'
+Add-Type -AssemblyName System.Drawing
+$logo = [System.Drawing.Image]::FromFile((Join-Path $root 'public\icon-180.png'))
+try {
+    $frames = foreach ($size in 256, 48, 32, 16) {
+        $bitmap = New-Object System.Drawing.Bitmap $size, $size
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $graphics.DrawImage($logo, 0, 0, $size, $size)
+        $graphics.Dispose()
+        $stream = New-Object System.IO.MemoryStream
+        if ($size -eq 256) { $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png) }
+        else {
+            # BITMAPINFOHEADER (height doubled for the mask), bottom-up BGRA rows, then an all-zero AND mask; alpha does the masking.
+            $dib = New-Object System.IO.BinaryWriter $stream
+            $dib.Write([uint32]40); $dib.Write([int32]$size); $dib.Write([int32]($size * 2)); $dib.Write([uint16]1); $dib.Write([uint16]32)
+            $dib.Write([uint32]0); $dib.Write([uint32]0); $dib.Write([int32]0); $dib.Write([int32]0); $dib.Write([uint32]0); $dib.Write([uint32]0)
+            for ($y = $size - 1; $y -ge 0; $y--) {
+                for ($x = 0; $x -lt $size; $x++) { $c = $bitmap.GetPixel($x, $y); $dib.Write([byte[]]@($c.B, $c.G, $c.R, $c.A)) }
+            }
+            $dib.Write((New-Object byte[] ([int]([math]::Ceiling($size / 32) * 4 * $size))))
+            $dib.Flush()
+        }
+        $bitmap.Dispose()
+        , @($size, $stream.ToArray())
+    }
+} finally { $logo.Dispose() }
+$writer = New-Object System.IO.BinaryWriter ([System.IO.File]::Create($icon))
+try {
+    $writer.Write([uint16]0); $writer.Write([uint16]1); $writer.Write([uint16]$frames.Count)
+    $offset = 6 + 16 * $frames.Count
+    foreach ($frame in $frames) {
+        $side = [byte]($frame[0] % 256)  # 0 means 256
+        $writer.Write($side); $writer.Write($side); $writer.Write([byte]0); $writer.Write([byte]0)
+        $writer.Write([uint16]1); $writer.Write([uint16]32); $writer.Write([uint32]$frame[1].Length); $writer.Write([uint32]$offset)
+        $offset += $frame[1].Length
+    }
+    foreach ($frame in $frames) { $writer.Write([byte[]]$frame[1]) }
+} finally { $writer.Dispose() }
+& $compiler /nologo /target:winexe /optimize+ /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll /reference:System.Security.dll "/win32icon:$icon" "/out:$output" (Join-Path $PSScriptRoot 'NexusLauncher.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Windows launcher compilation failed. Close the launcher before rebuilding.' }
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $null

@@ -37,6 +37,9 @@ export function validSession(token) {
   return false;
 }
 
+// Push subscriptions remember the session that made them, by this key, and stop once it ends.
+export const sessionKey = token => sha(String(token || '')).toString('hex');
+export const liveSessionKey = key => sessions.get(key) > Date.now();
 export function endSession(token) {
   if (token && sessions.delete(sha(token).toString('hex'))) persist();
 }
@@ -48,5 +51,6 @@ export function loginBlocked(ip, now = Date.now()) {
   while (fails.length && fails[0].at < now - 3600_000) fails.shift();
   return fails.length >= 30 || fails.filter(f => f.ip === ip && f.at > now - 900_000).length >= 5;
 }
-export const recordFail = (ip, now = Date.now()) => fails.push({ ip, at: now });
+export const recordFail = (ip, now = Date.now()) => { const f = { ip, at: now }; fails.push(f); return f; };
+export const forgive = f => { const i = fails.indexOf(f); if (i >= 0) fails.splice(i, 1); };
 export const clearFails = () => { fails.length = 0; };

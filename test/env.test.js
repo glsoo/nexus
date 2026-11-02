@@ -3,7 +3,7 @@ import test from 'node:test';
 import { childEnv } from '../server/util.js';
 
 test('child processes cannot inherit panel provider keys or login settings', () => {
-  const secrets = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'NEXUS_USER', 'NEXUS_PASS_HASH'];
+  const secrets = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY', 'XAI_API_KEY', 'NEXUS_USER', 'NEXUS_PASS_HASH'];
   const keys = [...secrets, 'NEXUS_URL'];
   const saved = new Map(keys.map(key => [key, process.env[key]]));
   try {

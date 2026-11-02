@@ -15,7 +15,7 @@ test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 for (const [name, request] of [
   ['debug', 'explain why login fails\nDo not change files.'],
   ['test', 'write regression tests for viewport sizing'],
-  ['review', 'public/style.css for keyboard accessibility'],
+  ['review', 'public/style.css for keyboard accessibility\nTrace focus handling in public/app.js too.\nKeep the review read-only.'],
   ['refactor', 'the composer without changing behavior'],
 ]) {
   test(`/${name} shows help without a model request and preserves the full brief`, async () => {

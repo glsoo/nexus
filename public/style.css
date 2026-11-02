@@ -63,7 +63,8 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .side-head img { width: 32px; height: 32px; }
 .side-head .icon-btn { margin-left: auto; }
 .side-close { display: none; }
-.side .new { margin: 0 14px 22px; min-height: 44px; justify-content: flex-start; background: #7e22ce24; border-color: #a55bea55; color: var(--accent-text); }
+.side .newrow { display: flex; gap: 6px; margin: 0 14px 22px; }
+.side .new { flex: 1; min-width: 0; min-height: 44px; justify-content: flex-start; background: #7e22ce24; border-color: #a55bea55; color: var(--accent-text); }
 .side-label { padding: 0 22px 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .plist { flex: 1; overflow-y: auto; padding: 0 10px; min-height: 0; }
 .pitem { display: flex; align-items: center; border-radius: 13px; position: relative; margin-bottom: 3px; }
@@ -72,6 +73,15 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .pitem > button.open { flex: 1; min-width: 0; background: none; border: 0; text-align: left; padding: 11px 10px; cursor: pointer; display: flex; align-items: center; gap: 10px; border-radius: 13px; }
 .pitem .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--sans); font-size: 13px; color: #c7c7d0; }
 .pitem .icon-btn { opacity: .75; }
+.side .find { margin: 0 12px 8px; width: calc(100% - 24px); }
+.found { margin-bottom: 6px; }
+.found .snip { width: 100%; background: none; border: 0; border-radius: 6px; text-align: left; padding: 4px 8px 6px 16px; color: var(--muted); font-size: 12.5px; cursor: pointer; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.found .snip:hover { background: var(--card); color: var(--fg); }
+.nohit { padding: 8px; }
+.spend { margin-top: 6px; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--info); text-align: left; cursor: pointer; font: inherit; }
+#apreq { width: 140px; }
+.e.jumped { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); flex: none; }
 .dot.busy { background: var(--accent); animation: pulse 1.4s infinite; }
 .dot.warn { background: var(--warn); }
@@ -104,6 +114,8 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .e.user { width: fit-content; max-width: min(85%, 860px); margin-left: auto; margin-right: max(0px, calc((100% - 860px) / 2)); background: var(--card); border: 1px solid var(--line); border-radius: 20px 20px 6px 20px; padding: 12px 42px 12px 16px; position: relative; white-space: pre-wrap; overflow-wrap: anywhere; }
 .e.user.queued { border-style: dashed; opacity: .75; }
 .e.user img { max-width: 220px; max-height: 160px; border-radius: 6px; display: block; margin-top: 8px; }
+.diff .undo { float: right; margin: -2px 0 2px 8px; font-family: var(--sans); }
+.e.tool img.seen { display: block; max-width: min(100%, 640px); max-height: 480px; border: 1px solid var(--line); border-radius: 6px; margin: 8px 0 4px; }
 .e.user .rw { position: absolute; top: 5px; right: 5px; opacity: 0; }
 .e.user .rw:focus-visible { opacity: 1; }
 @media (hover: none) { .e.user .rw { opacity: .75; } }
@@ -170,6 +182,8 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .composer-options[open] > summary svg { transform: rotate(90deg); }
 .composer-options > summary[data-mode=bypass] { color: var(--danger); outline: 1px solid var(--danger); outline-offset: -3px; }
 .composer-options > summary[data-mode=plan] { color: var(--info); }
+/* Keep autopilot visible with the settings closed, without changing the compact hit target. */
+.composer-options-toggle.autopilot::after { content: ''; position: absolute; top: calc(3px + var(--control-inset)); right: calc(3px + var(--control-inset)); width: 6px; height: 6px; border: 1px solid var(--glass-solid); border-radius: 50%; background: var(--warn); pointer-events: none; }
 .composer-settings { position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 12; width: 300px; max-width: 100%; max-height: min(340px, calc(var(--app-h, 100dvh) * .45)); overflow-y: auto; overscroll-behavior: contain; border-radius: 20px; padding: 14px; display: grid; gap: 12px; transform-origin: bottom right; }
 .options-title { font-size: 13px; font-weight: 600; }
 .composer-setting { display: grid; gap: 4px; min-width: 0; }
@@ -179,7 +193,7 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .composer-settings .mbtn > svg:last-child { margin-left: auto; }
 .composer-settings select.bypass { color: var(--danger); border-color: var(--danger); }
 .composer-settings select.plan { color: var(--info); }
-.composer-setting-actions { display: flex; gap: 8px; align-items: center; }
+.composer-setting-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .composer-setting-actions .btn { min-height: 44px; }
 .composer-setting-actions .meter { margin-left: auto; min-height: 44px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); color: var(--muted); font: 11px var(--mono); cursor: pointer; white-space: nowrap; }
 .mbtn { display: flex; align-items: center; gap: 5px; min-width: 0; max-width: 240px; min-height: 34px; background: #ffffff08; border: 1px solid var(--line-strong); border-radius: 999px; padding: 5px 9px 5px 10px; font-size: 12px; cursor: pointer; }
@@ -199,6 +213,7 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .empty h2 { color: var(--fg); font-size: clamp(24px, 3vw, 34px); font-weight: 600; letter-spacing: -.9px; }
 .empty p { margin: 0; max-width: 100%; overflow-wrap: anywhere; }
 .empty .mono { font-size: 11px; color: var(--muted); }
+.empty .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .welcome-mark { display: grid; place-items: center; width: 64px; height: 64px; border: 1px solid var(--glass-edge); border-radius: 22px; background: var(--glass-sheen), var(--glass-solid); box-shadow: var(--glass-shadow); margin-bottom: 10px; }
 .welcome-mark img { width: 40px; height: 40px; }
 .log .empty { min-height: 100%; }
@@ -254,6 +269,7 @@ dialog.tokens { width: min(420px, calc(100vw - 32px)); padding: 0; }
 .tstats > div, .tauto { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .tstats > div { padding: 5px 0; font-size: 13px; }
 .tstats b { font: 12px var(--mono); }
+.tauto input.field { width: 110px; }
 .tauto { font-size: 13px; padding-top: 12px; border-top: 1px solid var(--line); }
 .tbody .btn { min-height: 44px; }
 .picker > input { margin: 0 16px 8px; width: auto; flex: none; }
@@ -268,6 +284,7 @@ dialog.tokens { width: min(420px, calc(100vw - 32px)); padding: 0; }
 .mfacts { font: 12px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
 .mtag { font-size: 11px; font-weight: 500; color: var(--accent-text); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; }
 .mtag.old { color: var(--warn); }
+.mtag.free { color: #34d399; }
 .mnone { padding: 24px 8px; text-align: center; }
 .mfoot { display: flex; align-items: center; gap: 12px; padding: 10px 16px calc(12px + var(--sab)); border-top: 1px solid var(--line); }
 /* Effort: the bar charges up and glows in each level's color, faster and brighter the higher it goes. Motion is transform and opacity only. */
@@ -301,9 +318,14 @@ dialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 1
 .cbar .abtn .mlabel { max-width: 150px; }
 .cbar .abtn.on { border-color: color-mix(in srgb, var(--accent) 65%, var(--line)); }
 .cbar .abtn.on svg:first-child { color: var(--accent); }
+.cbar .mic.on { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); animation: pulse 1.4s infinite; }
 .pbtn { position: relative; }
 .pbtn.on { color: var(--fg); }
 .pbtn.on::after { content: ''; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--card); }
+/* autopilot: the button glows while it's on, and what it answered is tagged */
+.cbar .apbtn.on { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent), 0 0 14px color-mix(in srgb, var(--warn) 35%, transparent); }
+.tool .aptag { flex: none; font-size: 11px; color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent); border-radius: 4px; padding: 0 5px; }
+.tool .plan { border-left: 2px solid var(--line-strong); padding: 2px 0 2px 12px; margin: 6px 0; }
 .e.user .itag { display: inline-block; margin-left: 8px; font-size: 11px; color: var(--accent-text); border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); border-radius: 4px; padding: 0 5px; vertical-align: 1px; white-space: nowrap; }
 .mtag.dim { color: var(--muted); }
 .afoot { flex-wrap: wrap; gap: 8px; }
@@ -325,11 +347,19 @@ textarea.cfg { min-height: 110px; font-size: 12.5px; }
 label.check { cursor: pointer; }
 label.check input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
 
-/* marketplace */
-dialog.market { width: min(960px, calc(100vw - 32px)); height: min(780px, calc(var(--app-h, 100dvh) - 32px - var(--sat))); padding: 0; overflow: hidden; }
-dialog.market[open] { display: flex; flex-direction: column; }
-.mtop { display: grid; gap: 10px; padding: 0 16px 12px; border-bottom: 1px solid var(--line); }
-.mbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+/* marketplace: a page like VS Code's Extensions view, the list beside the selected item when there's room */
+.mpage { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.mside { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.mtop { display: grid; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.msrc button { padding-inline: 9px; }
+.tile.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+@media (max-width: 1099px) { .mpage.showing .mside, .mpage:not(.showing) .mdetail { display: none; } }
+@media (min-width: 1100px) {
+  .mpage { grid-template-columns: minmax(380px, 460px) minmax(0, 1fr); }
+  .mside { border-right: 1px solid var(--line); }
+  .mpage .dhead { display: none; }
+  .mpage .mdetail { grid-template-columns: minmax(0, 820px); }
+}
 .mchips { display: flex; flex-wrap: wrap; gap: 6px; overflow-x: auto; scrollbar-width: none; }
 .mdetail summary svg.i { width: 14px; height: 14px; transition: transform .2s var(--ease); }
 .mdetail details[open] summary svg.i { transform: rotate(180deg); }
@@ -346,7 +376,7 @@ dialog.market[open] { display: flex; flex-direction: column; }
 .tname b { font: 600 13.5px var(--mono); overflow-wrap: anywhere; }
 .tmeta { font-size: 12px; color: var(--muted); }
 .tdesc { font-size: 13px; color: #cfcfcf; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.mdetail { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 16px; display: grid; gap: 12px; align-content: start; }
+.mdetail { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px 16px; display: grid; gap: 12px; align-content: start; }
 .mdetail p { margin: 0; }
 .mdetail .acts { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .dtitle { display: flex; gap: 12px; align-items: center; }
@@ -354,7 +384,7 @@ dialog.market[open] { display: flex; flex-direction: column; }
 .mlinks { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
 .mlinks a { display: inline-flex; gap: 4px; align-items: center; }
 .mlinks svg.i { width: 13px; height: 13px; }
-dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top: 1px solid var(--line); }
+.mside > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top: 1px solid var(--line); }
 .note { color: var(--warn); border-left: 2px solid var(--warn); padding-left: 10px; }
 @media (hover: hover) {
   .tile:hover { border-color: var(--line-strong); }
@@ -396,6 +426,12 @@ dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top
   .mtop, .mdetail { padding-inline: 12px; }
   .mchips { flex-wrap: nowrap; }
 }
+/* Clone, search and Marketplace must all remain reachable in a short drawer. */
+@media (max-height: 520px) {
+  .side { overflow-y: auto; }
+  .side > * { flex-shrink: 0; }
+  .side .plist { flex: none; overflow-y: visible; }
+}
 @media (max-width: 760px) and (orientation: portrait) {
   .top { flex-wrap: wrap; padding-bottom: 8px; padding-inline: max(12px, var(--sal)) max(12px, var(--sar)); }
   .tabs { margin: 3px 0 0; width: 100%; }
@@ -406,13 +442,14 @@ dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top
   input, select, textarea { font-size: 16px !important; }
   .icon-btn { width: 44px; height: 44px; }
   .btn, .btn.small, .tab, .mbtn, .seg button { min-height: 44px; }
+  .newrow .btn { min-width: 44px; }
   /* Smaller visible controls keep full-size, non-overlapping touch targets. */
   .cbar { --control-inset: 6px; }
   .cbar > .icon-btn, .composer-options > summary { width: 44px; height: 44px; }
   .cbar > .mbtn { height: 44px; min-height: 44px; }
   .cbar .send-btn, .cbar .stop-btn { width: 44px; height: 44px; min-height: 44px; }
   .tab { display: grid; place-items: center; }
-  .pitem > button.open, .navbtn, .menu button, .slash button, .tree button { min-height: 44px; align-items: center; }
+  .pitem > button.open, .found .snip, .navbtn, .menu button, .slash button, .tree button { min-height: 44px; align-items: center; }
   .tree button { padding-block: 11px; }
   .tkeys { display: flex; }
   .top, .side-head, .side-foot, .tabs, .cbar, .tkeys, .acts { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
@@ -504,6 +541,8 @@ dialog.closing::backdrop { animation: fadeout .16s ease-in forwards; }
   .pitem.on { outline: 1px solid Highlight; }
   .cbar > .mbtn::before, .send-btn::after, .stop-btn::after { background: Canvas; border: 1px solid ButtonText; }
   .cbar .send-btn, .cbar .stop-btn { color: ButtonText; }
+  .composer-options-toggle.autopilot::after { background: Highlight; border-color: ButtonText; forced-color-adjust: none; }
+  .cbar .apbtn.on { outline: 1px solid ButtonText; outline-offset: -1px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
