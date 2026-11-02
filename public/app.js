@@ -647,6 +647,20 @@ try { drafts = JSON.parse(localStorage.getItem('nexus.drafts')) || {}; } catch {
 function saveDrafts() { try { localStorage.setItem('nexus.drafts', JSON.stringify(drafts)); } catch { /* private window */ } }
 addEventListener('pagehide', saveDrafts);
 const grow = () => { if (!CSS.supports('field-sizing', 'content')) { $input.style.height = 'auto'; $input.style.height = `${$input.scrollHeight}px`; } };
+// Keep secondary settings out of the message bar without removing any controls.
+function closeComposerOptions(e) {
+  const options = document.querySelector('.composer-options[open]');
+  if (!options || document.querySelector('dialog[open]')) return;
+  if (e.type === 'keydown') {
+    if (e.key !== 'Escape') return;
+    options.open = false;
+    options.querySelector('summary').focus();
+    e.preventDefault(); e.stopPropagation();
+  } else if (!options.contains(e.target)) options.open = false;
+}
+document.addEventListener('pointerdown', closeComposerOptions);
+document.addEventListener('keydown', closeComposerOptions, true);
+
 function composer() {
   $input = h('textarea', { rows: 1, placeholder: 'Message Nexus', 'aria-label': 'Message', oninput: () => { drafts[S.project] = $input.value; grow(); updateSlash(); },
     onpaste: e => { const f = [...e.clipboardData.files]; if (f.length) { e.preventDefault(); addFiles(f); } },
@@ -670,16 +684,23 @@ function composer() {
   $mode = h('select', { 'aria-label': 'Permission mode', title: 'Permission mode (Shift+Tab)', onchange: () => setMode($mode.value) }, MODES.map(([v, l]) => h('option', { value: v }, l)));
   $agentLabel = h('span', { class: 'mlabel' });
   $agentBtn = h('button', { class: 'mbtn abtn', type: 'button', 'aria-label': 'Choose the agent for this chat', onclick: guard(agentPicker) }, icon('bot'), $agentLabel, icon('down'));
-  $promptBtn = h('button', { class: 'icon-btn pbtn', type: 'button', 'aria-label': 'System prompts and injected text', title: 'Prompts', onclick: guard(() => promptsDialog()) }, icon('sliders'));
+  $promptBtn = h('button', { class: 'btn small pbtn', type: 'button', 'aria-label': 'System prompts and injected text', title: 'Prompts', onclick: guard(() => promptsDialog()) }, icon('sliders'), 'Prompts');
   $modelLabel = h('span', { class: 'mlabel' });
   $model = h('button', { class: 'mbtn', type: 'button', 'aria-label': 'Choose model and effort', title: 'Model and effort', onclick: modelPicker }, $modelLabel, icon('down'));
   $meter = h('button', { class: 'meter', type: 'button', onclick: tokenPanel });
-  $sendBtn = h('button', { class: 'btn small primary', onmousedown: e => e.preventDefault(), onclick: send }, 'Send');
-  $stopBtn = h('button', { class: 'btn small danger', hidden: true, onclick: () => sendWs({ t: 'interrupt' }) }, 'Stop');
+  $sendBtn = h('button', { class: 'btn primary send-btn', 'aria-label': 'Send', title: 'Send', onmousedown: e => e.preventDefault(), onclick: send }, 'Send');
+  $stopBtn = h('button', { class: 'btn danger stop-btn', 'aria-label': 'Stop', title: 'Stop', hidden: true, onclick: () => sendWs({ t: 'interrupt' }) }, 'Stop');
+  const options = h('details', { class: 'composer-options' },
+    h('summary', { class: 'icon-btn', 'aria-label': 'Message options', title: 'Message options' }, icon('dots')),
+    h('div', { class: 'composer-settings' },
+      h('span', { class: 'options-title' }, 'Message settings'),
+      h('label', { class: 'composer-setting' }, h('span', { class: 'lbl' }, 'Permissions'), $mode),
+      h('div', { class: 'composer-setting' }, h('span', { class: 'lbl' }, 'Agent'), $agentBtn),
+      h('div', { class: 'composer-setting-actions' }, $promptBtn, $meter)));
   syncThumbs();
   return h('div', { class: 'composer' }, $slash, h('div', { class: 'cbox' }, $thumbs, $input, h('div', { class: 'cbar' },
     h('button', { class: 'icon-btn', 'aria-label': 'Attach image', title: 'Attach image', onclick: () => file.click() }, icon('clip')), file,
-    $mode, $agentBtn, $model, $promptBtn, $meter, $stopBtn, $sendBtn)));
+    $model, options, $stopBtn, $sendBtn)));
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -800,6 +821,10 @@ function syncComposer() {
   if (!st || !$input?.isConnected) return;
   $mode.value = st.mode;
   $mode.className = st.mode;
+  const options = $mode.closest('.composer-options').querySelector('summary');
+  const permission = MODES.find(([value]) => value === st.mode)?.[1] || st.mode;
+  options.dataset.mode = st.mode;
+  options.title = options.ariaLabel = `Message options, permissions: ${permission}`;
   const info = S.models.find(m => m.id === st.model);
   $modelLabel.textContent = (info?.name || st.model) + (info?.efforts.length === 0 ? '' : ` · ${st.effort}`);
   const role = st.agent && S.meta.agents.find(a => a.name === st.agent);
@@ -809,7 +834,7 @@ function syncComposer() {
   const p = S.prompts;
   $promptBtn.classList.toggle('on', Boolean(p && [p.chat, p.project, p.global].some(x => x.system.trim() || x.inject.trim())));
   $stopBtn.hidden = !st.running;
-  $sendBtn.textContent = st.running ? 'Queue' : 'Send';
+  $sendBtn.textContent = $sendBtn.ariaLabel = $sendBtn.title = st.running ? 'Queue' : 'Send';
   $meter.textContent = `${fmt(st.usage.lastInput)} / ${st.compactAt ? fmt(st.compactAt) : 'off'}`;
   $meter.title = $meter.ariaLabel = 'Tokens and compacting';
   syncTokens?.();

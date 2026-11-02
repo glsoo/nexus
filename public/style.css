@@ -40,11 +40,11 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 
 /* Glass belongs to the control layer; the workspace and its content stay black and opaque.
    Start with a solid surface so older browsers never get unreadable transparent controls. */
-.side, .tabs, .cbox, .menu, .slash, dialog, .toast, .login form {
+.side, .tabs, .cbox, .composer-settings, .menu, .slash, dialog, .toast, .login form {
   background: var(--glass-solid); border: 1px solid var(--glass-edge); box-shadow: var(--glass-shadow);
 }
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .side, .tabs, .cbox, .menu, .slash, dialog, .toast, .login form {
+  .side, .tabs, .cbox, .composer-settings, .menu, .slash, dialog, .toast, .login form {
     background: var(--glass-sheen), var(--glass-fill);
     -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
   }
@@ -144,20 +144,39 @@ details.fold > summary::-webkit-details-marker { display: none; }
 
 .composer { flex: none; max-width: 900px; width: 100%; margin: 0 auto; padding: 0 max(16px, var(--sar)) max(4px, var(--sab)) max(16px, var(--sal)); position: relative; }
 .kb .composer { padding-bottom: 4px; }
-.cbox { border-radius: 26px; }
+.cbox { position: relative; border-radius: 22px; }
 .cbox:focus-within { border-color: #a55bea; }
-.cbox textarea { width: 100%; background: none; border: 0; outline: 0; resize: none; padding: 16px 18px 8px; display: block; min-height: 62px; max-height: calc(var(--app-h, 100dvh) * .35); field-sizing: content; }
+.cbox textarea { width: 100%; background: none; border: 0; outline: 0; resize: none; padding: 8px 14px 4px; display: block; min-height: 38px; max-height: calc(var(--app-h, 100dvh) * .35); field-sizing: content; }
 .cbox textarea::placeholder { color: var(--muted); opacity: 1; }
-.cbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 10px 10px; }
-.cbar .btn { min-height: 36px; padding-inline: 14px; }
-.cbar select { background: #ffffff08; border: 1px solid var(--line-strong); border-radius: 999px; padding: 5px 8px; font-size: 12px; max-width: 150px; min-height: 34px; text-overflow: ellipsis; }
-.cbar select.bypass { color: var(--danger); border-color: var(--danger); }
-.cbar select.plan { color: var(--info); }
+.cbar { display: flex; flex-wrap: nowrap; gap: 4px; align-items: center; padding: 2px 6px 6px; }
+.cbar > .mbtn { flex: 1; max-width: 280px; }
+.cbar .send-btn, .cbar .stop-btn { flex: none; width: 40px; height: 40px; min-height: 40px; padding: 0; border-radius: 50%; font-size: 0; }
+.send-btn::before { content: '↑'; font: 500 23px/1 var(--sans); transition: transform .2s var(--ease); }
+.stop-btn::before { content: '■'; font-size: 13px; line-height: 1; }
+.composer-options { flex: none; margin-left: auto; }
+.composer-options > summary { list-style: none; cursor: pointer; }
+.composer-options > summary::-webkit-details-marker { display: none; }
+.composer-options > summary svg { transition: transform .25s var(--ease); }
+.composer-options[open] > summary { background: var(--raised); color: var(--fg); }
+.composer-options[open] > summary svg { transform: rotate(90deg); }
+.composer-options > summary[data-mode=bypass] { color: var(--danger); outline: 1px solid var(--danger); outline-offset: -3px; }
+.composer-options > summary[data-mode=plan] { color: var(--info); }
+.composer-settings { position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 12; width: 300px; max-width: 100%; max-height: min(340px, calc(var(--app-h, 100dvh) * .45)); overflow-y: auto; overscroll-behavior: contain; border-radius: 20px; padding: 14px; display: grid; gap: 12px; transform-origin: bottom right; }
+.options-title { font-size: 13px; font-weight: 600; }
+.composer-setting { display: grid; gap: 4px; min-width: 0; }
+.composer-setting .lbl { margin: 0; font-size: 12px; }
+.composer-settings select, .composer-settings .mbtn { width: 100%; max-width: none; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); font-size: 16px; }
+.composer-settings .mbtn { justify-content: flex-start; }
+.composer-settings .mbtn > svg:last-child { margin-left: auto; }
+.composer-settings select.bypass { color: var(--danger); border-color: var(--danger); }
+.composer-settings select.plan { color: var(--info); }
+.composer-setting-actions { display: flex; gap: 8px; align-items: center; }
+.composer-setting-actions .btn { min-height: 44px; }
+.composer-setting-actions .meter { margin-left: auto; min-height: 44px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); color: var(--muted); font: 11px var(--mono); cursor: pointer; white-space: nowrap; }
 .mbtn { display: flex; align-items: center; gap: 5px; min-width: 0; max-width: 240px; min-height: 34px; background: #ffffff08; border: 1px solid var(--line-strong); border-radius: 999px; padding: 5px 9px 5px 10px; font-size: 12px; cursor: pointer; }
 .mbtn .mlabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mbtn svg { width: 14px; height: 14px; flex: none; color: var(--muted); }
-.cbar .meter { font: 12px var(--mono); color: var(--muted); margin-left: auto; white-space: nowrap; background: none; border: 0; padding: 0 4px; min-height: 44px; }
-.cbar .meter:hover { color: var(--fg); }
+.composer-setting-actions .meter:hover { color: var(--fg); }
 .thumbs { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 10px 0; }
 .thumbs button { background: none; border: 0; padding: 0; cursor: pointer; }
 .thumbs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line-strong); display: block; }
@@ -352,17 +371,12 @@ dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top
   .top .hamb { display: inline-grid; background: var(--glass-solid); border: 1px solid var(--glass-edge); }
   .top h1 { flex: 1; font-size: 16px; }
   .log { padding: 16px max(16px, var(--sar)) 10px max(16px, var(--sal)); }
-  .cbox { border-radius: 24px; }
-  .cbox textarea { padding: 14px 16px 6px; min-height: 52px; }
-  .cbar { padding: 4px 8px 8px; }
-  .cbar .meter { min-width: 0; max-width: 120px; overflow: hidden; text-overflow: ellipsis; font-size: 11px; white-space: nowrap; }
+  .cbox { border-radius: 22px; }
+  .cbox textarea { min-height: 40px; }
+  .cbar > .mbtn { max-width: none; }
   .files { grid-template-columns: minmax(0, 1fr); grid-template-rows: 34% minmax(0, 1fr); }
   .tree { border-right: 0; border-bottom: 1px solid var(--line); }
   .form .two { grid-template-columns: 1fr; }
-  .cbar select { flex: 1 1 28%; min-width: 0; max-width: none; }
-  .mbtn { flex: 1 1 56%; max-width: none; justify-content: space-between; }
-  .cbar .icon-btn, .cbar .meter { order: 1; }
-  .cbar .btn { order: 2; }
   dialog { margin: calc(16px + var(--sat)) auto auto; }
   /* Sized from the top so it ends at the keyboard on iOS, where the layout viewport doesn't shrink. */
   dialog.picker { margin: calc(8px + var(--sat)) 8px 0; width: calc(100vw - 16px); max-width: none; max-height: none; height: calc(var(--app-h, 100dvh) - 16px - var(--sat)); border-radius: 26px; }
@@ -371,11 +385,6 @@ dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top
   dialog.market[open] { animation: sheet .34s var(--ease); }
   .mgrid { grid-template-columns: minmax(0, 1fr); padding: 10px 12px; }
   .mtop, .mdetail { padding-inline: 12px; }
-  /* mode, agent and model share the first row; the agent button drops its arrow to fit a name like "ponytail" */
-  .cbar select { flex-basis: 29%; min-width: 110px; }
-  .cbar .abtn { flex: 1 1 24%; max-width: none; justify-content: flex-start; }
-  .cbar .abtn > svg:last-child { display: none; }
-  .cbar .mbtn:not(.abtn) { flex-basis: 38%; }
   .mchips { flex-wrap: nowrap; }
 }
 @media (max-width: 760px) and (orientation: portrait) {
@@ -383,16 +392,12 @@ dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top
   .tabs { margin: 3px 0 0; width: 100%; }
   .tab { padding: 7px 2px; font-size: 12px; gap: 6px; }
 }
-@media (max-width: 360px) {
-  .cbar .abtn { flex-basis: 22%; }
-  .cbar .abtn > svg:first-child { display: none; }
-  .cbar .mbtn:not(.abtn) { flex-basis: 33%; }
-}
 /* Every iPhone: under 16px iOS zooms the page on focus, and fingers need 44pt targets. */
 @media (pointer: coarse) {
   input, select, textarea { font-size: 16px !important; }
   .icon-btn { width: 44px; height: 44px; }
-  .btn, .btn.small, .tab, .cbar select, .mbtn, .seg button { min-height: 44px; }
+  .btn, .btn.small, .tab, .mbtn, .seg button { min-height: 44px; }
+  .cbar .send-btn, .cbar .stop-btn { width: 44px; height: 44px; min-height: 44px; }
   .tab { display: grid; place-items: center; }
   .pitem > button.open, .navbtn, .menu button, .slash button, .tree button { min-height: 44px; align-items: center; }
   .tree button { padding-block: 11px; }
@@ -401,7 +406,6 @@ dialog.market > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top
 }
 /* Landscape or a keyboard on a small iPhone leaves little height, so give it all to the content. */
 .short .top { display: none; }
-.short .cbar select, .short .cbar .mbtn, .short .cbar .meter { display: none; }
 
 /* ---- motion: transform and opacity only, so it stays on the compositor ---- */
 .log, .plist, .page, .tree, .out, .diff, .files, dialog { overscroll-behavior: contain; }
@@ -427,6 +431,25 @@ dialog.closing::backdrop { animation: fadeout .16s ease-in forwards; }
 @keyframes drop { from { transform: translateY(-100%); } }
 @keyframes toast { from { opacity: 0; transform: translate(-50%, 12px); } }
 
+/* Short entrances and tactile feedback; animate only transforms and opacity. */
+.cbox::before { content: ''; position: absolute; inset: -1px; border: 1px solid var(--accent-text); border-radius: inherit; opacity: 0; transform: scale(.99); pointer-events: none; transition: opacity .3s var(--ease), transform .3s var(--ease); }
+.cbox:focus-within::before { opacity: .45; transform: scale(1); }
+.tab svg, .navbtn svg, .side .new svg { transition: transform .25s var(--ease); }
+@media (prefers-reduced-motion: no-preference) {
+  .cbox { animation: composer-in .4s var(--ease); }
+  .welcome-mark { animation: mark-in .65s var(--ease); }
+  .welcome-mark img { animation: mark-float 5s ease-in-out infinite; }
+  .empty > h2 { animation: rise .5s .06s var(--ease) both; }
+  .empty > p { animation: rise .5s .12s var(--ease) both; }
+  .composer-options[open] > .composer-settings { animation: options-in .22s var(--ease); }
+  .stop-btn:not([hidden])::before { animation: working-pulse 1.8s ease-in-out infinite; }
+}
+@keyframes composer-in { from { opacity: 0; transform: translateY(12px); } }
+@keyframes mark-in { from { opacity: 0; transform: scale(.8) rotate(-8deg); } }
+@keyframes mark-float { 50% { transform: translateY(-3px); } }
+@keyframes options-in { from { opacity: 0; transform: translateY(8px) scale(.97); } }
+@keyframes working-pulse { 50% { opacity: .55; transform: scale(.85); } }
+
 @media (hover: hover) {
   .btn:hover { background: var(--raised); }
   .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
@@ -441,15 +464,21 @@ dialog.closing::backdrop { animation: fadeout .16s ease-in forwards; }
   .slash button:hover { background: var(--raised); }
   .tree button:hover { background: var(--card); }
 }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .btn:hover:not(:disabled):not(:active), .mbtn:hover:not(:active) { transform: translateY(-1px); }
+  .icon-btn:hover:not(:active) { transform: scale(1.06); }
+  .tab:hover svg, .navbtn:hover svg, .side .new:hover svg { transform: translateY(-2px); }
+  .send-btn:hover::before { transform: translateY(-2px); }
+}
 /* Text and controls stay opaque and distinct when the user needs less transparency. */
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-  .side, .tabs, .cbox, .menu, .slash, dialog, .toast, .login form {
+  .side, .tabs, .cbox, .composer-settings, .menu, .slash, dialog, .toast, .login form {
     background: var(--glass-solid); border-color: var(--line-strong);
     -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none;
   }
 }
 @media (forced-colors: active) {
-  .side, .tabs, .cbox, .menu, .slash, dialog, .toast, .login form {
+  .side, .tabs, .cbox, .composer-settings, .menu, .slash, dialog, .toast, .login form {
     background: Canvas; border-color: ButtonText; box-shadow: none;
     -webkit-backdrop-filter: none; backdrop-filter: none;
   }
@@ -457,4 +486,6 @@ dialog.closing::backdrop { animation: fadeout .16s ease-in forwards; }
   .tab.on { color: HighlightText; }
   .pitem.on { outline: 1px solid Highlight; }
 }
-@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
