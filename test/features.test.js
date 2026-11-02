@@ -617,3 +617,24 @@ test('images the agent looks at show up in its tool entry', async () => {
   assert.deepEqual(read.images, [`data:image/png;base64,${png.toString('base64')}`]);
   assert.equal(read.output, '');
 });
+
+test('Undo file puts one changed file back and deletes one the agent created', { timeout: 30000 }, async () => {
+  projects.create('undo');
+  const s = agent.getSession('undo');
+  const dir = projects.projectDir('undo');
+  fs.writeFileSync(path.join(dir, 'keep.txt'), 'v1');
+  fs.writeFileSync(path.join(dir, 'other.txt'), 'o1');
+  agent.setOption(s, 'mode', 'acceptEdits');
+  const script = [['Write', { file_path: 'keep.txt', content: 'v2' }], ['Write', { file_path: 'other.txt', content: 'o2' }], ['Write', { file_path: 'new.txt', content: 'n' }]];
+  const model = fakeModel(n => script[n - 1]);
+  try {
+    await agent.submit('undo', 'change things');
+    await idle(s);
+  } finally { model.restore(); }
+  assert.match((await agent.changes('undo')).diff, /keep\.txt[\s\S]*new\.txt/);
+  await agent.undoFile('undo', 'keep.txt');
+  await agent.undoFile('undo', 'new.txt');
+  assert.equal(fs.readFileSync(path.join(dir, 'keep.txt'), 'utf8'), 'v1');
+  assert.ok(!fs.existsSync(path.join(dir, 'new.txt')));
+  assert.equal(fs.readFileSync(path.join(dir, 'other.txt'), 'utf8'), 'o2', 'other files keep their changes');
+});

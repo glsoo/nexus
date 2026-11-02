@@ -129,6 +129,13 @@ route('PUT', '/api/projects/:name/file', async ({ req, p }) => {
   return {};
 });
 route('GET', '/api/projects/:name/changes', ({ p }) => agent.changes(need(p.name)));
+route('POST', '/api/projects/:name/changes/undo', async ({ req, p }) => {
+  const raw = String((await body(req)).path || '');
+  const file = path.relative(projects.projectDir(p.name), projectPath(p.name, raw)).split(path.sep).join('/');
+  if (!raw || !file || /^\.nexus(\/|$)/.test(file)) throw fail(400, 'That file cannot be undone.');
+  await agent.undoFile(p.name, file);
+  return {};
+});
 route('GET', '/api/projects/:name/export', ({ p }) => ({ markdown: agent.exportMarkdown(need(p.name)) }));
 route('POST', '/api/projects/:name/rewind', async ({ req, p }) => {
   const { id, files, conversation } = await body(req);

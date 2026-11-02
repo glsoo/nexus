@@ -960,11 +960,20 @@ export function exportMarkdown(name) {
   return `${out.join('\n\n')}\n`;
 }
 
+const lastCheckpoint = s => [...s.state.log].reverse().find(e => e.type === 'user' && e.cp);
 export async function changes(name) {
   const s = getSession(name);
-  const last = [...s.state.log].reverse().find(e => e.type === 'user' && e.cp);
+  const last = lastCheckpoint(s);
   if (!last) return { since: null, diff: '' };
   return { since: last.text.slice(0, 80), diff: await checkpoint.diff(cwdOf(s), last.cp) };
+}
+
+export async function undoFile(name, file) {
+  const s = getSession(name);
+  if (s.running) throw projects.httpError(409, 'Stop the agent before undoing a file.');
+  const last = lastCheckpoint(s);
+  if (!last) throw projects.httpError(409, 'There is no checkpoint to go back to yet.');
+  await checkpoint.restoreFile(cwdOf(s), last.cp, file);
 }
 
 export { killGroup, shells };

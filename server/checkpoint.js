@@ -43,6 +43,13 @@ export async function restore(cwd, sha) {
   await git(cwd, 'read-tree', '-u', '--reset', sha);
 }
 
+// Puts one file back as it was at the checkpoint, or deletes it if it didn't exist then.
+export async function restoreFile(cwd, sha, file) {
+  if (!await snapshot(cwd, `before undoing ${file}`)) throw new Error('Could not save a checkpoint first, so nothing was undone.');
+  if (await git(cwd, 'cat-file', '-e', `${sha}:${file}`).then(() => true, () => false)) await git(cwd, 'checkout', sha, '--', file);
+  else fs.rmSync(path.join(cwd, file), { force: true });
+}
+
 export async function diff(cwd, sha) {
   await ensure(cwd);
   await git(cwd, 'add', '-A');

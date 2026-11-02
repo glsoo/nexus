@@ -1325,6 +1325,12 @@ function changesView(view) {
       const { since: s, diff } = await api('GET', `${P(S.project)}/changes`);
       since.textContent = s ? `Since your last prompt: ${s}` : 'No checkpoint yet. Send a prompt first.';
       box.replaceChildren(...(diff ? diff.split('\n').map(l => {
+        const file = /^diff --git a\/.+ b\/(.+)$/.exec(l)?.[1];
+        if (file) return h('span', { class: 'head' }, l, h('button', { class: 'btn small undo', type: 'button', onclick: guard(async () => {
+          if (!await confirmBox(`Undo ${file}?`, 'It goes back to how it was before your last prompt. A checkpoint is saved first, so Rewind can bring the change back.', 'Undo file', 'danger')) return;
+          await api('POST', `${P(S.project)}/changes/undo`, { path: file });
+          load();
+        }) }, 'Undo file'));
         const cls = /^(\+\+\+|---|diff )/.test(l) ? 'head' : l.startsWith('@@') ? 'hunk' : l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : '';
         return cls ? h('span', { class: cls }, l) : `${l}\n`;
       }) : ['No file changes.']));
