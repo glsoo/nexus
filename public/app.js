@@ -576,7 +576,7 @@ async function rewindDialog(e) {
 const BUILTIN = [
   ['help', 'Show commands and keys'], ['clear', 'Start over, archiving the transcript'], ['compact', 'Summarize to free up context'], ['autocompact', 'Turn auto-compact on or off, or set its size'],
   ['model', 'Show or set the model'], ['effort', 'low, medium, high, xhigh or max'], ['mode', 'default, acceptEdits, plan or bypass'], ['plan', 'Research only, then propose a plan'],
-  ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['review', 'Review this branch, or a pull request by number'], ['pr', 'Commit, push and open a GitHub pull request'], ['todos', 'Show the task list'],
+  ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['review', 'Review this branch, or a pull request by number'], ['pr', 'Commit, push and open a GitHub pull request'], ['schedule', 'Run a prompt on a timer: cron fields, then the prompt'], ['todos', 'Show the task list'],
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
   ['skills', 'List skills and agents'], ['mcp', 'Open MCP and hook settings'], ['settings', 'Open settings'], ['memory', 'Edit NEXUS.md'], ['rewind', 'How to rewind'],
   ['create-agent', 'Have the AI write a new agent type'], ['agent', 'Switch this chat to another agent'], ['prompts', 'Edit system prompts and injected text'],
@@ -1390,7 +1390,7 @@ function agentsPage(hamb) {
 
 async function fillAgents() {
   if (!agentsBox?.isConnected) return;
-  const { agents, shells } = await api('GET', '/api/agents');
+  const { agents, shells, schedules } = await api('GET', '/api/agents');
   const project = S.project || S.projects[0]?.name;
   const meta = project ? await api('GET', `${P(project)}/meta`) : { agents: [], skills: [] };
   // Don't wipe a form someone is typing in when an agent event arrives.
@@ -1404,6 +1404,11 @@ async function fillAgents() {
         h('div', { class: 'small muted' }, `${a.type} · ${pretty(a.project)}${a.branch ? ` · ${a.branch}` : ''} · ${a.status} · ${ago(a.started)} · ${fmt(a.tokens || 0)} tokens`)),
       h('button', { class: 'btn small', onclick: () => agentDetail(a.id) }, 'View'),
       a.status === 'running' && h('button', { class: 'btn small danger', onclick: guard(() => api('POST', `/api/agents/${a.id}/stop`)) }, 'Stop'))) : h('p', { class: 'muted' }, 'No agents have run yet.'),
+    h('h2', {}, `Schedules (${schedules.length})`),
+    schedules.length ? schedules.map(x => h('div', { class: 'card rowline' },
+      h('div', { class: 'grow' }, h('div', { class: 'mono' }, x.cron), h('div', { class: 'small muted' }, `${pretty(x.project)} · ${x.prompt}`)),
+      h('button', { class: 'btn small danger', 'aria-label': `Remove schedule ${x.cron}`, onclick: guard(() => api('DELETE', `/api/schedules/${encodeURIComponent(x.id)}`).then(refreshAgentsSoon)) }, 'Remove')))
+      : h('p', { class: 'muted' }, 'Nothing scheduled. In a chat, /schedule 0 9 * * 1-5 /review reviews that project every weekday at 9.'),
     h('h2', {}, `Background shells (${shells.length})`),
     shells.length ? shells.map(s => h('div', { class: 'card rowline' },
       h('span', { class: `dot ${statusDot(s.status)}`, title: s.status }),

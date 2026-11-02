@@ -183,7 +183,8 @@ route('DELETE', '/api/mcp-servers/:server', ({ p }) => {
 });
 
 const shellInfo = ({ proc, output, read, ...s }) => s;
-route('GET', '/api/agents', () => ({ agents: agent.listAgents(), shells: [...agent.shells.values()].map(shellInfo).reverse() }));
+route('GET', '/api/agents', () => ({ agents: agent.listAgents(), shells: [...agent.shells.values()].map(shellInfo).reverse(), schedules: agent.schedules() }));
+route('DELETE', '/api/schedules/:id', ({ p }) => { agent.removeSchedule(p.id); return {}; });
 route('GET', '/api/agents/:id', ({ p }) => {
   const a = agent.getAgent(p.id);
   if (!a) throw fail(404, 'Agent not found.');
@@ -479,6 +480,7 @@ mcp.reload();
 fs.watchFile(settingsPath(), { interval: 2000 }, () => mcp.reload());
 agent.reportFailedDeploy();
 agent.resumeAfterRestart();
+agent.startSchedules();
 let stopping = false;
 async function shutdown() {
   if (stopping) return;

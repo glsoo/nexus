@@ -499,3 +499,35 @@ test('Web Push: encryption matches RFC 8291, VAPID is signed, and gone subscript
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(process.env.NEXUS_HOME, 'push.json'), 'utf8')).subscriptions.map(x => x.endpoint), [endpoint]);
 });
 const b64 = buf => Buffer.from(buf).toString('base64url');
+
+test('scheduled prompts: cron matching, one run per due minute, and /schedule to add and remove', async () => {
+  const at = (h, m, day = 2) => new Date(2026, 10, day, h, m); // 2026-11-02 is a Monday
+  assert.equal(agent.cronMatches('*/15 9-17 * * 1-5', at(9, 30)), true);
+  assert.equal(agent.cronMatches('*/15 9-17 * * 1-5', at(9, 31)), false);
+  assert.equal(agent.cronMatches('*/15 9-17 * * 1-5', at(9, 30, 1)), false, 'Sunday');
+  assert.equal(agent.cronMatches('0,30 9 2 11 *', at(9, 30)), true);
+  assert.throws(() => agent.cronMatches('61 * * * *', at(9, 30)), /isn't a valid cron value/);
+  assert.throws(() => agent.cronMatches('0 9 * *', at(9, 30)), /five cron fields/);
+
+  projects.create('timed');
+  const s = agent.getSession('timed');
+  await agent.submit('timed', '/schedule 30 9 * * 1-5 say good morning');
+  await agent.submit('timed', '/schedule 99 9 * * * nope');
+  assert.match(s.state.log.at(-1).text, /"99" isn't a valid cron value/);
+  const [x] = agent.schedules();
+  assert.deepEqual([x.project, x.cron, x.prompt], ['timed', '30 9 * * 1-5', 'say good morning']);
+
+  const model = fakeModel();
+  try {
+    await agent.runSchedules(at(9, 29));
+    await agent.runSchedules(at(9, 30));
+    await agent.runSchedules(at(9, 30)); // the same minute again
+    await idle(s);
+  } finally { model.restore(); }
+  assert.equal(model.sent.length, 1);
+  assert.match(JSON.stringify(model.sent[0].input.at(-1)), /say good morning/);
+  assert.ok(s.state.log.some(e => e.type === 'system' && /Scheduled run/.test(e.text)));
+
+  await agent.submit('timed', `/schedule remove ${x.id}`);
+  assert.deepEqual(agent.schedules(), []);
+});

@@ -414,6 +414,49 @@ export async function runSubagent(s, args, parentSignal) {
   return `Started background agent ${a.id}. You will be notified when it finishes.`;
 }
 
+// ---- schedules ----
+// Five cron fields, minute hour day-of-month month day-of-week, each *, n, a-b or a list of those, with an optional /step.
+// ponytail: day-of-month and day-of-week must both match (cron ORs them when both are set), and names like MON aren't read.
+const CRON = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
+export function cronMatches(expr, d) {
+  const fields = String(expr).trim().split(/\s+/);
+  if (fields.length !== 5) throw new Error('A schedule needs five cron fields, minute hour day month weekday, like `0 9 * * 1-5`.');
+  const now = [d.getMinutes(), d.getHours(), d.getDate(), d.getMonth() + 1, d.getDay()];
+  // map, not every/some, so a bad value is reported even when an earlier one already decided the answer
+  return fields.map((field, i) => field.split(',').map(term => {
+    const m = /^(\*|\d+)(?:-(\d+))?(?:\/(\d+))?$/.exec(term) || [];
+    const [min, max] = CRON[i];
+    const lo = m[1] === '*' ? min : Number(m[1]), hi = m[2] ? Number(m[2]) : m[1] === '*' || m[3] ? max : lo, step = Number(m[3] || 1);
+    if (!m[1] || lo < min || hi > max || lo > hi || step < 1) throw new Error(`"${term}" isn't a valid cron value; that field takes ${min}-${max}.`);
+    return now[i] >= lo && now[i] <= hi && (now[i] - lo) % step === 0;
+  }).some(Boolean)).every(Boolean);
+}
+
+const schedulesFile = () => path.join(NEXUS_HOME, 'schedules.json');
+export const schedules = () => readJson(schedulesFile(), []);
+const saveSchedules = list => writeAtomic(schedulesFile(), JSON.stringify(list, null, 2));
+export function removeSchedule(id) {
+  const list = schedules();
+  if (!list.some(x => x.id === id)) throw projects.httpError(404, `There is no schedule ${id}.`);
+  saveSchedules(list.filter(x => x.id !== id));
+}
+
+// Checked every 20 seconds. A minute the server was down for is skipped, not caught up later.
+export function runSchedules(now = new Date()) {
+  const minute = Math.floor(now / 60000);
+  const isDue = x => { try { return cronMatches(x.cron, now); } catch { return false; } };
+  const list = schedules();
+  const due = list.filter(x => x.last !== minute && projects.exists(x.project) && isDue(x));
+  if (!due.length) return;
+  for (const x of due) x.last = minute;
+  saveSchedules(list);
+  return Promise.all(due.map(x => {
+    addEntry(getSession(x.project), { type: 'system', text: `Scheduled run (\`${x.cron}\`).` });
+    return submit(x.project, x.prompt).catch(err => console.error(`Schedule ${x.id}:`, err.message));
+  }));
+}
+export const startSchedules = () => setInterval(runSchedules, 20_000).unref();
+
 // ---- worktrees ----
 // An isolated agent works on its own branch in .nexus/worktrees, so agents editing at the same time never collide.
 const readText = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
@@ -578,7 +621,7 @@ export function interrupt(name) { sessions.get(name)?.controller?.abort(); }
 export function answer(name, id, value) { sessions.get(name)?.pending.get(id)?.(value); }
 
 const HELP = `**Commands**
-\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review [PR number|URL]\` review this branch or a pull request · \`/pr [notes]\` commit, push and open a pull request · \`/todos\` · \`/help\`
+\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review [PR number|URL]\` review this branch or a pull request · \`/pr [notes]\` commit, push and open a pull request · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/todos\` · \`/help\`
 
 Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover a prompt to rewind to it.
 
@@ -695,6 +738,20 @@ async function slash(s, text) {
       if (arg) setOption(s, 'budget', n);
       return note(s, s.state.budget ? `Budget: the agent stops once this chat has cost $${s.state.budget}. Cost so far: ${spent(s)}.` : `No budget. Cost so far: ${spent(s)}. Set one with /budget <dollars>.`);
     }
+    case 'schedule': {
+      const [first, id] = arg.split(/\s+/);
+      if (first === 'remove') { removeSchedule(id); return note(s, `Removed schedule ${id}.`); }
+      if (arg) {
+        const m = /^((?:\S+\s+){4}\S+)\s+([\s\S]+)$/.exec(arg);
+        if (!m) return note(s, 'Usage: `/schedule <minute hour day month weekday> <prompt>`, for example `/schedule 0 9 * * 1-5 /review`', 'error');
+        cronMatches(m[1], new Date()); // throws on a bad expression
+        saveSchedules([...schedules(), { id: newId('sch'), project: s.name, cron: m[1].replace(/\s+/g, ' '), prompt: m[2].trim() }]);
+      }
+      const mine = schedules().filter(x => x.project === s.name);
+      return note(s, mine.length
+        ? `${mine.map(x => `- \`${x.cron}\` ${x.prompt} (remove: \`/schedule remove ${x.id}\`)`).join('\n')}\n\nTimes are this computer's local time. Turn on autopilot so a run doesn't wait for approvals.`
+        : 'No schedules in this chat. Add one with `/schedule <minute hour day month weekday> <prompt>`, for example `/schedule 0 9 * * 1-5 /review`.');
+    }
     case 'todos': return note(s, s.state.todos.map(t => `- [${t.status === 'completed' ? 'x' : ' '}] ${t.content}`).join('\n') || 'No todos.');
     case 'pr': return prompt(s, `Open a GitHub pull request for the work in this project.${arg ? ` Notes from the user: ${arg}` : ''}
 1. Run \`gh auth status\`. If GitHub CLI is missing or signed out, stop and tell the user to install it and run \`gh auth login\`.
@@ -772,6 +829,8 @@ export function renameProject(from, to) {
   if (s) { sessions.delete(from); s.name = to; sessions.set(to, s); }
   for (const a of agents.values()) if (a.project === from) a.project = to;
   for (const sh of shells.values()) if (sh.project === from) sh.project = to;
+  const list = schedules();
+  if (list.some(x => x.project === from)) saveSchedules(list.map(x => (x.project === from ? { ...x, project: to } : x)));
   hub.emit('renamed', from, to);
 }
 
