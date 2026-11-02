@@ -123,9 +123,26 @@ export function toMessages(instructions, items, provider) {
   return messages;
 }
 
+// Gradio file inputs can be strings with a stale object-only required: ['path'].
+// JSON Schema ignores that requirement for non-objects, but Gemini rejects it.
+function geminiSchema(schema) {
+  if (Array.isArray(schema)) return schema.map(geminiSchema);
+  if (!schema || typeof schema !== 'object') return schema;
+  const out = { ...schema };
+  if (schema.type && ![schema.type].flat().includes('object')) delete out.required;
+  // Visit schemas only: defaults, examples, enum and const can contain literal data.
+  for (const key of ['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas']) {
+    if (schema[key]) out[key] = Object.fromEntries(Object.entries(schema[key]).map(([name, value]) => [name, geminiSchema(value)]));
+  }
+  for (const key of ['items', 'additionalItems', 'additionalProperties', 'prefixItems', 'contains', 'propertyNames', 'allOf', 'anyOf', 'oneOf', 'not', 'if', 'then', 'else']) {
+    if (key in schema) out[key] = geminiSchema(schema[key]);
+  }
+  return out;
+}
+
 export async function callCompat({ model, instructions, input, tools, toolChoice }, sink, signal) {
   const id = providerOf(model), p = providers()[id];
-  const fns = tools.filter(t => t.type === 'function').map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+  const fns = tools.filter(t => t.type === 'function').map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: id === 'gemini' ? geminiSchema(t.parameters) : t.parameters } }));
   const body = {
     model: model.slice(id.length + 1), messages: toMessages(instructions, input, id), stream: true, stream_options: { include_usage: true },
     ...(fns.length ? { tools: fns, ...(toolChoice ? { tool_choice: toolChoice } : {}) } : {}),
