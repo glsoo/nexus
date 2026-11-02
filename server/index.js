@@ -16,6 +16,7 @@ import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { findFiles } from './tools.js';
 import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
+import * as push from './push.js';
 import { childEnv, isInside, presentSocket, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -189,6 +190,9 @@ route('GET', '/api/agents/:id', ({ p }) => {
   const { controller, ...rest } = a;
   return rest;
 });
+route('GET', '/api/push/key', () => ({ key: push.publicKey() }));
+route('POST', '/api/push/subscribe', async ({ req }) => { push.subscribe(await body(req)); return {}; });
+route('POST', '/api/push/unsubscribe', async ({ req }) => { push.unsubscribe(String((await body(req)).endpoint || '')); return {}; });
 route('POST', '/api/agents/:id/stop', ({ p }) => { agent.stopAgent(p.id); return {}; });
 route('POST', '/api/agents', async ({ req }) => {
   const { project, type, description, prompt, isolation } = await body(req);
@@ -360,7 +364,7 @@ const server = http.createServer(async (req, res) => {
     serveStatic(res, path.join(NM, file), true);
     return;
   }
-  const rel = { '/app.js': 'app.js', '/style.css': 'style.css', '/icon.svg': 'icon.svg', '/icon-180.png': 'icon-180.png', '/manifest.webmanifest': 'manifest.webmanifest' }[url.pathname] || 'index.html';
+  const rel = { '/app.js': 'app.js', '/sw.js': 'sw.js', '/style.css': 'style.css', '/icon.svg': 'icon.svg', '/icon-180.png': 'icon-180.png', '/manifest.webmanifest': 'manifest.webmanifest' }[url.pathname] || 'index.html';
   if (rel !== 'index.html') return serveStatic(res, path.join(PUBLIC, rel));
   // Cloudflare gives static files a 4h browser TTL whatever we send, so each build needs its own URLs.
   const html = fs.readFileSync(path.join(PUBLIC, rel), 'utf8').replace(/"\/(app\.js|style\.css)"/g, `"/$1?v=${BUILD}"`);
@@ -424,9 +428,21 @@ wss.on('connection', ws => {
   });
 });
 
+// Subscribed browsers get a push when a chat finishes or waits on the user, even with Nexus closed.
+const busy = new Set(), pinged = new WeakSet();
+const ping = (title, body, project) => push.notify({ title, body, project }).catch(err => console.error('Web Push:', err.message));
+const asks = { AskUserQuestion: 'has a question for you', ExitPlanMode: 'has a plan for you to approve' };
 agent.hub.on('project', (name, ev) => {
   for (const ws of wss.clients) if (ws.project === name) sendTo(ws, ev);
   if (ev.t === 'status') broadcast({ t: 'projects' });
+  if (ev.t === 'status' && ev.running) busy.add(name);
+  else if (ev.t === 'status' && busy.delete(name)) {
+    const reply = agent.getSession(name).state.log.findLast(e => e.type === 'assistant')?.text || '';
+    ping(`${name} finished`, reply.replace(/\s+/g, ' ').slice(0, 140) || 'The agent is done.', name);
+  } else if (ev.t === 'entry' && ev.entry.status === 'awaiting' && !pinged.has(ev.entry)) {
+    pinged.add(ev.entry);
+    ping(`${name} needs you`, `The agent ${asks[ev.entry.name] || `wants to run ${ev.entry.name}`}.`, name);
+  }
 });
 agent.hub.on('agent', ({ agent: a }) => broadcast({ t: 'agent', agent: a }));
 agent.hub.on('renamed', (from, to) => {

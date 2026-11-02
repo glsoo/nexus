@@ -466,3 +466,36 @@ test('@ suggests project files by name, skipping dependencies and Nexus data', a
   assert.deepEqual(await findFiles(dir, 'app'), ['src/app.js', 'src/lib/apply.js', 'docs/app-notes.md', 'zapp.txt']);
   assert.deepEqual(await findFiles(dir, 'LIB'), ['src/lib/apply.js']);
 });
+
+test('Web Push: encryption matches RFC 8291, VAPID is signed, and gone subscriptions are dropped', async () => {
+  const crypto = await import('node:crypto');
+  const push = await import('../server/push.js');
+  // RFC 8291 section 5 and appendix A
+  const ecdh = crypto.createECDH('prime256v1');
+  ecdh.setPrivateKey(Buffer.from('yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw', 'base64url'));
+  const ua = { keys: { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' } };
+  assert.equal(push.encrypt(ua, 'When I grow up, I want to be a watermelon', Buffer.from('DGv6ra1nlYgDCS1FRnbzlw', 'base64url'), ecdh).toString('base64url'),
+    'DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN');
+
+  const endpoint = 'https://push.example.net/send/abc';
+  const [, token, key] = /^vapid t=(.+), k=(.+)$/.exec(push.vapid(endpoint));
+  assert.equal(key, push.publicKey());
+  const [head, claims, sig] = token.split('.');
+  assert.equal(JSON.parse(Buffer.from(claims, 'base64url')).aud, 'https://push.example.net');
+  const pub = crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: b64(Buffer.from(key, 'base64url').subarray(1, 33)), y: b64(Buffer.from(key, 'base64url').subarray(33)) }, format: 'jwk' });
+  assert.ok(crypto.verify('sha256', Buffer.from(`${head}.${claims}`), { key: pub, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig, 'base64url')));
+
+  assert.throws(() => push.subscribe({ endpoint: 'http://push.example.net/x', keys: ua.keys }), /not a valid push subscription/);
+  assert.throws(() => push.subscribe({ endpoint, keys: { p256dh: 'short', auth: ua.keys.auth } }), /not a valid push subscription/);
+  push.subscribe({ endpoint, keys: ua.keys });
+  push.subscribe({ endpoint: 'https://push.example.net/send/gone', keys: ua.keys });
+  const posts = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { posts.push([url, init]); return new Response('', { status: url.endsWith('gone') ? 410 : 201 }); };
+  try { await push.notify({ title: 'demo finished', body: 'ok', project: 'demo' }); } finally { globalThis.fetch = realFetch; }
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0][1].headers['content-encoding'], 'aes128gcm');
+  assert.match(posts[0][1].headers.authorization, /^vapid t=/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(process.env.NEXUS_HOME, 'push.json'), 'utf8')).subscriptions.map(x => x.endpoint), [endpoint]);
+});
+const b64 = buf => Buffer.from(buf).toString('base64url');

@@ -278,6 +278,23 @@ function finished() {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && doneUnseen) { doneUnseen = false; syncTitle(); } });
 
+// Web Push reaches the phone with Nexus closed: the server pings when a chat finishes or needs an answer.
+// Its notifications share finished()'s tag, so a browser that gets both shows one.
+const canPush = 'serviceWorker' in navigator && 'PushManager' in window;
+async function setPush(on) {
+  const reg = await navigator.serviceWorker.register('/sw.js');
+  const old = await reg.pushManager.getSubscription();
+  if (!on) {
+    if (old) { await api('POST', '/api/push/unsubscribe', { endpoint: old.endpoint }).catch(() => {}); await old.unsubscribe(); }
+    return;
+  }
+  const { key } = await api('GET', '/api/push/key');
+  const raw = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+  const sub = old || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw });
+  await api('POST', '/api/push/subscribe', sub.toJSON());
+}
+if (canPush) navigator.serviceWorker.addEventListener('message', e => { if (S.projects.some(p => p.name === e.data?.open)) go(e.data.open); });
+
 // ---- websocket ----
 let wsRetry = 0, wsTimer, $conn, lastHeard = 0;
 const connLost = (text = 'Connection lost. Reconnecting…') => {
@@ -1506,10 +1523,11 @@ function notifyCard() {
   const box = h('input', { type: 'checkbox', id: 'notify', disabled: !supported, checked: supported && pref('nexus.notify') === '1' && Notification.permission === 'granted', onchange: async () => {
     if (box.checked && Notification.permission !== 'granted') box.checked = (await Notification.requestPermission()) === 'granted';
     pref('nexus.notify', box.checked ? '1' : '0');
+    if (canPush) setPush(box.checked).catch(err => toast(`Push notifications didn't turn ${box.checked ? 'on' : 'off'}: ${err.message}`));
     if (box.checked) new Notification('Nexus', { body: 'Notifications are on.', icon: '/icon-180.png' });
   } });
   return [h('h2', {}, 'Notifications'),
-    h('label', { class: 'card rowline check', htmlFor: 'notify' }, box, h('span', { class: 'grow' }, 'Tell me when a chat finishes while Nexus is in the background'),
+    h('label', { class: 'card rowline check', htmlFor: 'notify' }, box, h('span', { class: 'grow' }, canPush ? 'Notify me when a chat finishes or needs me, even with Nexus closed' : 'Tell me when a chat finishes while Nexus is in the background'),
       !supported && h('span', { class: 'small muted' }, 'Not supported in this browser. Add Nexus to your home screen on iPhone.'))];
 }
 
@@ -1553,6 +1571,8 @@ addEventListener('keydown', e => {
 });
 
 async function boot() {
+  // Re-sending the subscription each visit keeps the server's copy current if the browser rotated it.
+  if (canPush && pref('nexus.notify') === '1' && window.Notification?.permission === 'granted') setPush(true).catch(() => {});
   S.me = await api('GET', '/api/me');
   shell();
   await refreshProjects();
