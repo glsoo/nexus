@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/glsoo/nexus/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/glsoo/nexus/actions/workflows/test.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-111111?style=flat-square"></a>
   <img alt="Node.js 24+" src="https://img.shields.io/badge/node-24%2B-7e22ce?style=flat-square&logo=nodedotjs&logoColor=white">
   <img alt="Any model" src="https://img.shields.io/badge/models-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini%20%C2%B7%20local-7e22ce?style=flat-square">
   <img alt="Linux, macOS and Windows" src="https://img.shields.io/badge/runs%20on-Linux%20%7C%20macOS%20%7C%20Windows-111111?style=flat-square">
@@ -245,3 +246,7 @@ Issues and pull requests are welcome. `npm test` runs the whole suite in a few s
 ## 🙏 Credits
 
 The Ponytail agents are adapted from [ponytail](https://github.com/DietrichGebert) by Dietrich Gebert, under the MIT license (see `catalog/LICENSE-ponytail`). Marketplace listings come live from [aiagentslist.com](https://aiagentslist.com) and [Hugging Face](https://huggingface.co). Treat third-party agents and servers like any code you install: read what they do first.
+
+## 📄 License
+
+MIT. See [LICENSE](LICENSE).
