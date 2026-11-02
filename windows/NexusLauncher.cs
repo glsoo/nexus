@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -46,6 +47,190 @@ internal static class Program
     }
 }
 
+// Palette mirrors public/style.css :root so the launcher matches the web app.
+internal static class Theme
+{
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] private static extern int SetWindowTheme(IntPtr window, string app, string idList);
+
+    public static readonly Color Bg = Color.FromArgb(0x00, 0x00, 0x00);
+    public static readonly Color Card = Color.FromArgb(0x11, 0x11, 0x11);
+    public static readonly Color Raised = Color.FromArgb(0x1c, 0x1c, 0x1c);
+    public static readonly Color Line = Color.FromArgb(0x1f, 0x1f, 0x1f);
+    public static readonly Color LineStrong = Color.FromArgb(0x36, 0x36, 0x36);
+    public static readonly Color Fg = Color.FromArgb(0xf5, 0xf5, 0xf5);
+    public static readonly Color Muted = Color.FromArgb(0xa1, 0xa1, 0xa1);
+    public static readonly Color Accent = Color.FromArgb(0x7e, 0x22, 0xce);
+    public static readonly Color AccentHover = Color.FromArgb(0x93, 0x33, 0xea);
+    public static readonly Color AccentDown = Color.FromArgb(0x6b, 0x21, 0xa8);
+    public static readonly Color OnAccent = Color.White;
+    public static readonly Color Danger = Color.FromArgb(0xf8, 0x71, 0x71);
+    public static readonly Color DangerLine = Color.FromArgb(0x7f, 0x1d, 0x1d);
+    public static readonly Color Warn = Color.FromArgb(0xfb, 0xbf, 0x24);
+    public static readonly Color Info = Color.FromArgb(0x7d, 0xd3, 0xfc);
+    public static readonly Color Ok = Color.FromArgb(0x34, 0xd3, 0x99);
+
+    public static readonly Font Sans = new Font("Segoe UI", 10);
+    public static readonly Font SansSemibold = new Font("Segoe UI Semibold", 10);
+    public static readonly Font Small = new Font("Segoe UI", 9);
+    public static readonly string MonoFamily = FindMono();
+    public static readonly Font Mono = new Font(MonoFamily, 10);
+
+    private static string FindMono()
+    {
+        foreach (FontFamily family in FontFamily.Families) if (family.Name == "Cascadia Mono") return family.Name;
+        return "Consolas";
+    }
+
+    public static void Apply(Form form)
+    {
+        form.BackColor = Bg; form.ForeColor = Fg; form.Font = Sans;
+        if (form.IsHandleCreated) DarkTitle(form.Handle);
+        form.HandleCreated += delegate { DarkTitle(form.Handle); };
+    }
+
+    private static void DarkTitle(IntPtr window)
+    {
+        int on = 1;
+        try { if (DwmSetWindowAttribute(window, 20, ref on, 4) != 0) DwmSetWindowAttribute(window, 19, ref on, 4); }
+        catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
+    }
+
+    public static void DarkScrollbars(Control control)
+    {
+        control.HandleCreated += delegate {
+            try { SetWindowTheme(control.Handle, "DarkMode_Explorer", null); }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
+        };
+    }
+
+    public static GraphicsPath Round(Rectangle r, int radius)
+    {
+        int d = Math.Min(radius * 2, Math.Min(r.Width, r.Height));
+        var path = new GraphicsPath();
+        if (d <= 0) { path.AddRectangle(r); return path; }
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    public static int Scale(Control control, int value)
+    {
+        return (int)Math.Round(value * control.DeviceDpi / 96f);
+    }
+
+    public static T Field<T>(T input) where T : Control
+    {
+        input.BackColor = Bg; input.ForeColor = Fg;
+        var box = input as TextBox; if (box != null) box.BorderStyle = BorderStyle.FixedSingle;
+        var number = input as NumericUpDown; if (number != null) number.BorderStyle = BorderStyle.FixedSingle;
+        return input;
+    }
+}
+
+// Owner-drawn button styled like .btn / .btn.primary / .btn.danger. Still a native BUTTON window, so test.ps1 finds it.
+internal sealed class ThemedButton : Button
+{
+    private bool primary, danger, hover, down;
+    public bool Primary { get { return primary; } set { primary = value; Font = value ? Theme.SansSemibold : Theme.Sans; Invalidate(); } }
+    public bool Danger { get { return danger; } set { danger = value; Invalidate(); } }
+
+    public ThemedButton()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0; UseVisualStyleBackColor = false;
+        BackColor = Theme.Bg; ForeColor = Theme.Fg; Font = Theme.Sans; Cursor = Cursors.Hand;
+        AutoSize = true; Padding = new Padding(10, 5, 10, 5); MinimumSize = new Size(0, 34); Margin = new Padding(0, 0, 8, 8);
+    }
+
+    protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { hover = down = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { down = true; Invalidate(); } base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { down = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Graphics g = e.Graphics;
+        g.Clear(Parent != null ? Parent.BackColor : Theme.Bg);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        Color fill = primary ? (down ? Theme.AccentDown : hover ? Theme.AccentHover : Theme.Accent)
+                             : (down ? Theme.LineStrong : hover ? Theme.Raised : Theme.Card);
+        Color border = primary ? fill : danger ? Theme.DangerLine : Theme.LineStrong;
+        bool focus = Focused && ShowFocusCues;
+        using (GraphicsPath path = Theme.Round(new Rectangle(1, 1, Width - 3, Height - 3), Theme.Scale(this, 8)))
+        using (var brush = new SolidBrush(Enabled ? fill : Theme.Card))
+        using (var pen = new Pen(focus ? Theme.Fg : border, focus ? 2f : 1f))
+        {
+            g.FillPath(brush, path); g.DrawPath(pen, path);
+        }
+        Color text = !Enabled ? Theme.Muted : primary ? Theme.OnAccent : danger ? Theme.Danger : Theme.Fg;
+        TextRenderer.DrawText(g, Text, Font, ClientRectangle, text,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+    }
+}
+
+// Rounded surface like .login form.
+internal sealed class CardPanel : Panel
+{
+    public CardPanel()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        BackColor = Theme.Card;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Graphics g = e.Graphics;
+        g.Clear(Parent != null ? Parent.BackColor : Theme.Bg);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (GraphicsPath path = Theme.Round(new Rectangle(0, 0, Width - 1, Height - 1), Theme.Scale(this, 14)))
+        using (var brush = new SolidBrush(Theme.Card))
+        using (var pen = new Pen(Theme.Line))
+        {
+            g.FillPath(brush, path); g.DrawPath(pen, path);
+        }
+    }
+}
+
+// Status indicator like .dot / .dot.busy (pulses while busy).
+internal sealed class StatusDot : Control
+{
+    private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer { Interval = 700 };
+    private Color color = Theme.LineStrong;
+    private bool dim;
+
+    public StatusDot()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        Size = new Size(9, 9); Anchor = AnchorStyles.Left; Margin = new Padding(0, 0, 9, 0);
+        timer.Tick += delegate { dim = !dim; Invalidate(); };
+    }
+
+    public void Set(Color value, bool pulse)
+    {
+        color = value; dim = false;
+        if (pulse) timer.Start(); else timer.Stop();
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(Parent != null ? Parent.BackColor : Theme.Card);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var brush = new SolidBrush(dim ? Color.FromArgb(90, color) : color))
+            e.Graphics.FillEllipse(brush, 0, 0, Width - 1, Height - 1);
+    }
+
+    protected override void Dispose(bool disposing) { if (disposing) timer.Dispose(); base.Dispose(disposing); }
+}
+
 internal sealed class Launcher : Form
 {
     private readonly string root, node, bash, credentialFile;
@@ -53,10 +238,12 @@ internal sealed class Launcher : Form
     private readonly StringBuilder log = new StringBuilder();
     private readonly object logLock = new object();
     private readonly System.Windows.Forms.Timer ready = new System.Windows.Forms.Timer();
-    private readonly Label statusLabel = new Label { AutoSize = true, Text = "Starting" };
-    private readonly Label accountLabel = new Label { AutoSize = true };
-    private readonly LinkLabel address = new LinkLabel { AutoSize = true };
-    private readonly Button toggle = new Button { AutoSize = true, Text = "Stop" };
+    private readonly Label statusLabel = new Label { AutoSize = true, Text = "Starting", Font = Theme.SansSemibold, Anchor = AnchorStyles.Left };
+    private readonly StatusDot statusDot = new StatusDot();
+    private readonly Label accountLabel = new Label { AutoSize = true, ForeColor = Theme.Muted };
+    private readonly LinkLabel address = new LinkLabel { AutoSize = true, Font = Theme.Mono, LinkColor = Theme.Info, ActiveLinkColor = Theme.Fg,
+        VisitedLinkColor = Theme.Info, LinkBehavior = LinkBehavior.HoverUnderline };
+    private readonly ThemedButton toggle = new ThemedButton { Text = "Stop", Danger = true };
     private Dictionary<string, object> config;
     private Process server;
     private DateTime starting;
@@ -120,15 +307,38 @@ internal sealed class Launcher : Form
             SaveCredential(Environment.UserName, password);
             config = ReadConfig();
         }
-        Text = "Nexus Launcher"; Font = new Font("Segoe UI", 10); AutoScaleMode = AutoScaleMode.Dpi;
+        Text = "Nexus Launcher"; Theme.Apply(this); AutoScaleMode = AutoScaleMode.Dpi;
         ClientSize = new Size(600, 260); MinimumSize = new Size(600, 300); StartPosition = FormStartPosition.CenterScreen;
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(22), RowCount = 6, ColumnCount = 1 };
-        layout.Controls.Add(new Label { Text = "Nexus", AutoSize = true, Font = new Font("Segoe UI", 23, FontStyle.Bold) });
-        statusLabel.Margin = new Padding(0, 10, 0, 6); layout.Controls.Add(statusLabel);
-        address.LinkClicked += delegate { Guard(OpenBrowser); }; layout.Controls.Add(address);
-        accountLabel.Margin = new Padding(0, 8, 0, 12); layout.Controls.Add(accountLabel);
-        var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
-        AddButton(buttons, "Open Nexus", OpenBrowser);
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(22), RowCount = 3, ColumnCount = 1 };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        // Header: logo + mono wordmark, like .login .brand
+        var brand = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 14) };
+        string iconFile = Path.Combine(root, "public", "icon-180.png");
+        if (File.Exists(iconFile))
+        {
+            var logo = new PictureBox { Size = new Size(30, 30), SizeMode = PictureBoxSizeMode.Zoom, Margin = new Padding(0, 0, 10, 0), Anchor = AnchorStyles.Left };
+            using (Image image = Image.FromFile(iconFile)) logo.Image = new Bitmap(image);
+            brand.Controls.Add(logo);
+            using (var small = new Bitmap(logo.Image, 32, 32)) Icon = Icon.FromHandle(small.GetHicon());
+        }
+        brand.Controls.Add(new Label { Text = "Nexus", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font(Theme.MonoFamily, 16, FontStyle.Bold), Margin = new Padding(0) });
+        layout.Controls.Add(brand, 0, 0);
+
+        // Status card, like .login form
+        var card = new CardPanel { Dock = DockStyle.Fill, Padding = new Padding(18, 14, 18, 14), Margin = new Padding(0, 0, 0, 16) };
+        var info = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = Theme.Card };
+        var statusRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 8) };
+        statusLabel.Margin = new Padding(0); statusRow.Controls.Add(statusDot); statusRow.Controls.Add(statusLabel);
+        info.Controls.Add(statusRow);
+        address.Margin = new Padding(0, 0, 0, 6); address.LinkClicked += delegate { Guard(OpenBrowser); }; info.Controls.Add(address);
+        accountLabel.Margin = new Padding(0); info.Controls.Add(accountLabel);
+        card.Controls.Add(info); layout.Controls.Add(card, 0, 1);
+        SetStatus("Starting", Theme.Accent, true);
+
+        var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true, Margin = new Padding(0) };
+        AddButton(buttons, "Open Nexus", OpenBrowser).Primary = true;
         AddButton(buttons, "Settings", EditSettings);
         AddButton(buttons, "Copy Password", delegate {
             var saved = ReadCredential();
@@ -138,7 +348,7 @@ internal sealed class Launcher : Form
         });
         toggle.Click += delegate { Guard(delegate { if (server == null) StartServer(); else StopServer(); }); };
         buttons.Controls.Add(toggle); AddButton(buttons, "Server Log", ShowLog);
-        layout.Controls.Add(buttons); Controls.Add(layout);
+        layout.Controls.Add(buttons, 0, 2); Controls.Add(layout);
         ready.Interval = 300; ready.Tick += delegate { CheckReady(); };
         Shown += delegate { Guard(StartServer); };
         FormClosing += delegate(object sender, FormClosingEventArgs args) {
@@ -148,10 +358,16 @@ internal sealed class Launcher : Form
         FormClosed += delegate { ready.Dispose(); };
     }
 
-    private void AddButton(Control parent, string text, Action action)
+    private ThemedButton AddButton(Control parent, string text, Action action)
     {
-        var button = new Button { Text = text, AutoSize = true, Padding = new Padding(4) };
+        var button = new ThemedButton { Text = text };
         button.Click += delegate { Guard(action); }; parent.Controls.Add(button);
+        return button;
+    }
+
+    private void SetStatus(string text, Color dot, bool pulse)
+    {
+        statusLabel.Text = text; statusDot.Set(dot, pulse);
     }
 
     private void Guard(Action action)
@@ -248,7 +464,7 @@ internal sealed class Launcher : Form
         server.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs args) { AppendLog(args.Data); };
         try { server.Start(); server.BeginOutputReadLine(); server.BeginErrorReadLine(); }
         catch { server.Dispose(); server = null; throw; }
-        starting = DateTime.UtcNow; statusLabel.Text = "Starting"; toggle.Text = "Stop"; ready.Start();
+        starting = DateTime.UtcNow; SetStatus("Starting", Theme.Accent, true); toggle.Text = "Stop"; toggle.Danger = true; ready.Start();
     }
 
     private void CheckReady()
@@ -266,7 +482,8 @@ internal sealed class Launcher : Form
         }
         catch (WebException) { return; }
         ready.Stop();
-        statusLabel.Text = (bool)config["openai"] || (bool)config["anthropic"] ? "Running" : "Running - API key needed";
+        if ((bool)config["openai"] || (bool)config["anthropic"]) SetStatus("Running", Theme.Ok, false);
+        else SetStatus("Running - API key needed", Theme.Warn, false);
         Guard(OpenBrowser);
     }
 
@@ -283,7 +500,7 @@ internal sealed class Launcher : Form
             }
             server.Dispose(); server = null;
         }
-        statusLabel.Text = "Stopped"; toggle.Text = "Start";
+        SetStatus("Stopped", Theme.LineStrong, false); toggle.Text = "Start"; toggle.Danger = false;
     }
 
     private void OpenBrowser()
@@ -297,7 +514,13 @@ internal sealed class Launcher : Form
         string text; lock (logLock) { text = log.ToString(); }
         using (var dialog = new Form { Text = "Nexus Server Log", Size = new Size(760, 480), StartPosition = FormStartPosition.CenterParent })
         {
-            dialog.Controls.Add(new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, Dock = DockStyle.Fill, Text = text, Font = new Font("Consolas", 10) });
+            Theme.Apply(dialog); dialog.ShowIcon = false;
+            var output = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill, Text = text,
+                Font = Theme.Mono, BackColor = Theme.Bg, ForeColor = Theme.Fg, BorderStyle = BorderStyle.None };
+            Theme.DarkScrollbars(output);
+            var frame = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12, 10, 4, 4) };
+            frame.Controls.Add(output); dialog.Controls.Add(frame);
+            dialog.Shown += delegate { output.SelectionStart = output.TextLength; output.ScrollToCaret(); };
             dialog.ShowDialog(this);
         }
     }
@@ -305,33 +528,37 @@ internal sealed class Launcher : Form
     private void EditSettings()
     {
         var saved = ReadCredential();
-        using (var dialog = new Form { Text = "Nexus Settings", ClientSize = new Size(550, 310), FormBorderStyle = FormBorderStyle.FixedDialog,
+        using (var dialog = new Form { Text = "Nexus Settings", ClientSize = new Size(550, 340), FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent })
         {
+            Theme.Apply(dialog); dialog.ShowIcon = false;
             var fields = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 2, RowCount = 8 };
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 155)); fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            var user = new TextBox { Text = (string)config["user"], Dock = DockStyle.Fill, AccessibleName = "Username" };
-            var password = new TextBox { Text = saved != null && (string)saved["user"] == (string)config["user"] ? (string)saved["pass"] : "",
-                UseSystemPasswordChar = true, Dock = DockStyle.Fill, AccessibleName = "Password" };
-            var openai = new TextBox { UseSystemPasswordChar = true, Dock = DockStyle.Fill, AccessibleName = "OpenAI API Key" };
-            var anthropic = new TextBox { UseSystemPasswordChar = true, Dock = DockStyle.Fill, AccessibleName = "Anthropic API Key" };
-            var port = new NumericUpDown { Minimum = 1, Maximum = 65535, Value = Convert.ToInt32(config["port"]), AccessibleName = "Port" };
+            var user = Theme.Field(new TextBox { Text = (string)config["user"], Dock = DockStyle.Fill, AccessibleName = "Username" });
+            var password = Theme.Field(new TextBox { Text = saved != null && (string)saved["user"] == (string)config["user"] ? (string)saved["pass"] : "",
+                UseSystemPasswordChar = true, Dock = DockStyle.Fill, AccessibleName = "Password" });
+            var openai = Theme.Field(new TextBox { UseSystemPasswordChar = true, Dock = DockStyle.Fill, AccessibleName = "OpenAI API Key" });
+            var anthropic = Theme.Field(new TextBox { UseSystemPasswordChar = true, Dock = DockStyle.Fill, AccessibleName = "Anthropic API Key" });
+            var port = Theme.Field(new NumericUpDown { Minimum = 1, Maximum = 65535, Value = Convert.ToInt32(config["port"]), AccessibleName = "Port" });
             string[] labels = { "Username", "Password", "OpenAI API Key", "Anthropic API Key", "Port" };
             Control[] inputs = { user, password, openai, anthropic, port };
             for (int index = 0; index < labels.Length; index++)
             {
-                fields.Controls.Add(new Label { Text = labels[index], AutoSize = true, Anchor = AnchorStyles.Left }, 0, index);
+                fields.Controls.Add(new Label { Text = labels[index], AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = Theme.Muted }, 0, index);
+                inputs[index].Margin = new Padding(3, 4, 3, 4);
                 fields.Controls.Add(inputs[index], 1, index);
             }
             var provider = new Label { Text = "OpenAI: " + ((bool)config["openai"] ? "configured" : "not set") +
-                "   Anthropic: " + ((bool)config["anthropic"] ? "configured" : "not set"), AutoSize = true };
+                "   Anthropic: " + ((bool)config["anthropic"] ? "configured" : "not set"), AutoSize = true, ForeColor = Theme.Muted, Font = Theme.Small,
+                Margin = new Padding(3, 8, 3, 4) };
             fields.Controls.Add(provider, 0, 5); fields.SetColumnSpan(provider, 2);
-            var show = new CheckBox { Text = "Show credentials", AutoSize = true };
+            var show = new CheckBox { Text = "Show credentials", AutoSize = true, FlatStyle = FlatStyle.Flat, ForeColor = Theme.Fg };
+            show.FlatAppearance.BorderColor = Theme.LineStrong;
             show.CheckedChanged += delegate { password.UseSystemPasswordChar = openai.UseSystemPasswordChar = anthropic.UseSystemPasswordChar = !show.Checked; };
             fields.Controls.Add(show, 1, 6);
-            var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
-            var save = new Button { Text = "Save", AutoSize = true, DialogResult = DialogResult.OK };
-            actions.Controls.Add(save); actions.Controls.Add(new Button { Text = "Cancel", AutoSize = true, DialogResult = DialogResult.Cancel });
+            var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Margin = new Padding(0, 10, 0, 0) };
+            var save = new ThemedButton { Text = "Save", Primary = true, DialogResult = DialogResult.OK, Margin = new Padding(8, 0, 0, 0) };
+            actions.Controls.Add(save); actions.Controls.Add(new ThemedButton { Text = "Cancel", DialogResult = DialogResult.Cancel, Margin = new Padding(0) });
             fields.Controls.Add(actions, 0, 7); fields.SetColumnSpan(actions, 2);
             dialog.Controls.Add(fields); dialog.AcceptButton = save;
             if (dialog.ShowDialog(this) != DialogResult.OK) return;
