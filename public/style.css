@@ -201,6 +201,7 @@ dialog.tokens { width: min(420px, calc(100vw - 32px)); padding: 0; }
 .tstats > div, .tauto { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .tstats > div { padding: 5px 0; font-size: 13px; }
 .tstats b { font: 12px var(--mono); }
+.tauto input.field { width: 110px; }
 .tauto { font-size: 13px; padding-top: 12px; border-top: 1px solid var(--line); }
 .tbody .btn { min-height: 44px; }
 .picker > input { margin: 0 16px 8px; width: auto; flex: none; }
@@ -338,6 +339,7 @@ label.check input { width: 18px; height: 18px; accent-color: var(--accent); flex
   .cbar select { flex: 1 1 28%; min-width: 0; max-width: none; }
   .mbtn { flex: 1 1 56%; max-width: none; justify-content: space-between; }
   .cbar .icon-btn, .cbar .meter { order: 1; }
+  .cbar .mcost { display: none; } /* no room beside Send; the Tokens panel still shows it */
   .cbar .btn { order: 2; }
   dialog { margin: calc(16px + var(--sat)) auto auto; }
   /* Sized from the top so it ends at the keyboard on iOS, where the layout viewport doesn't shrink. */

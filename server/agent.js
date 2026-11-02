@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { askAnthropic, callAnthropic, anthropicContext, isAnthropic } from './anthropic.js';
 import * as checkpoint from './checkpoint.js';
-import { callCompat, compatContext, providerOf } from './compat.js';
+import { callCompat, compatContext, costOf, providerOf } from './compat.js';
 import { agentDefs, commands, instructions, runHooks, skills } from './extensions.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
@@ -48,7 +48,7 @@ export function publicState(s) {
 }
 
 const persist = s => projects.save(s.name, s.state);
-const status = s => hub.emit('project', s.name, { t: 'status', running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), compactAt: compactAt(s) });
+const status = s => hub.emit('project', s.name, { t: 'status', running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), budget: s.state.budget || 0, compactAt: compactAt(s) });
 const send = (s, ev) => hub.emit('project', s.name, ev);
 
 function addEntry(s, entry) {
@@ -80,9 +80,15 @@ export function requestBody({ model, effort, instructions: sys, input, tools, to
 
 const fetchStream = (body, signal) => postWithRetry('OpenAI', 'https://api.openai.com/v1/responses', { authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'content-type': 'application/json' }, body, signal);
 
+// Each request's estimated cost rides on its usage, so conversations, subagents and compaction all count it.
 async function callModel(params, sink, signal) {
-  if (providerOf(params.model)) return callCompat(params, sink, signal);
-  if (isAnthropic(params.model)) return callAnthropic(params, sink, signal);
+  const call = providerOf(params.model) ? callCompat : isAnthropic(params.model) ? callAnthropic : callOpenAI;
+  const result = await call(params, sink, signal);
+  if (result.usage) result.usage.cost = await costOf(params.model, result.usage);
+  return result;
+}
+
+async function callOpenAI(params, sink, signal) {
   const res = await fetchStream(requestBody(params), signal);
   const open = new Map();
   const stream = (key, type, kind, text) => {
@@ -118,6 +124,8 @@ function addUsage(s, u) {
   t.cached += u.input_tokens_details?.cached_tokens || 0;
   t.reasoning += u.output_tokens_details?.reasoning_tokens || 0;
   t.requests += 1;
+  if (u.cost === undefined) t.unpriced = (t.unpriced || 0) + 1;
+  else t.cost = (t.cost || 0) + u.cost;
 }
 
 // ---- system prompt ----
@@ -285,6 +293,12 @@ async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLa
   let retriedCompact = false, autoSteps = 0;
   for (;;) {
     await drain?.();
+    const { cost = 0 } = s.state.usage;
+    if (s.state.budget && cost >= s.state.budget) {
+      const text = `Stopped at this chat's $${s.state.budget} budget, with $${cost.toFixed(2)} spent. Raise it with /budget <dollars>, or remove it with /budget off.`;
+      sink.add({ type: 'system', text });
+      return text;
+    }
     let result;
     try {
       result = await callModel({ model: model(), effort: effort(), instructions: sys(), input: items(), tools: await tools(), cacheKey: s.name }, sink, signal);
@@ -514,7 +528,7 @@ export function interrupt(name) { sessions.get(name)?.controller?.abort(); }
 export function answer(name, id, value) { sessions.get(name)?.pending.get(id)?.(value); }
 
 const HELP = `**Commands**
-\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens used · \`/init\` write NEXUS.md · \`/todos\` · \`/help\`
+\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/todos\` · \`/help\`
 
 Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover a prompt to rewind to it.
 
@@ -535,7 +549,8 @@ export function setOption(s, key, value) {
   else if (key === 'model' && !/^[\w.:/-]+$/.test(value)) throw new Error('Invalid model id.');
   else if (key === 'agent' && value && !agentDefs(cwdOf(s)).some(d => d.name === value && !d.builtin)) throw new Error(`There is no agent type called ${value}.`);
   else if (key === 'autopilot' && typeof value !== 'boolean') throw new Error('Autopilot is true or false.');
-  else if (!['mode', 'effort', 'model', 'agent', 'autopilot'].includes(key)) throw new Error(`Unknown option ${key}.`);
+  else if (key === 'budget' && !(Number.isFinite(value) && value >= 0)) throw new Error('A budget is a dollar amount.');
+  else if (!['mode', 'effort', 'model', 'agent', 'autopilot', 'budget'].includes(key)) throw new Error(`Unknown option ${key}.`);
   // The system prompt changes at once, but models lean on recent history, so the switch is also said in the conversation.
   if (key === 'agent' && (value || '') !== (s.state.agent || '')) {
     s.state.agentSwitch = value || '';
@@ -585,6 +600,12 @@ function clear(s) {
   status(s);
 }
 
+// Estimated from list prices; requests to models without a known price can't be counted, so say how many there were.
+const spent = s => {
+  const { cost = 0, unpriced = 0 } = s.state.usage;
+  return `about $${cost.toFixed(2)}${s.state.budget ? ` of the $${s.state.budget} budget` : ''}${unpriced ? `, not counting ${unpriced} requests to models with no known price` : ''}`;
+};
+
 async function slash(s, text) {
   const [, cmd, rest = ''] = /^\/(\S+)\s*([\s\S]*)$/.exec(text);
   const arg = rest.trim();
@@ -616,7 +637,13 @@ async function slash(s, text) {
         : 'Autopilot is off. The agent stops to ask when it needs you.');
     case 'cost': {
       const u = s.state.usage;
-      return note(s, `Tokens: ${u.input.toLocaleString()} input (${u.cached.toLocaleString()} cached), ${u.output.toLocaleString()} output (${u.reasoning.toLocaleString()} reasoning) over ${u.requests} requests.`);
+      return note(s, `Tokens: ${u.input.toLocaleString()} input (${u.cached.toLocaleString()} cached), ${u.output.toLocaleString()} output (${u.reasoning.toLocaleString()} reasoning) over ${u.requests} requests.\n\nCost: ${spent(s)}.`);
+    }
+    case 'budget': {
+      const n = arg === 'off' ? 0 : Number(arg.replace(/^\$/, ''));
+      if (arg && !(n > 0 || arg === 'off')) return note(s, 'Usage: /budget <dollars> or /budget off', 'error');
+      if (arg) setOption(s, 'budget', n);
+      return note(s, s.state.budget ? `Budget: the agent stops once this chat has cost $${s.state.budget}. Cost so far: ${spent(s)}.` : `No budget. Cost so far: ${spent(s)}. Set one with /budget <dollars>.`);
     }
     case 'todos': return note(s, s.state.todos.map(t => `- [${t.status === 'completed' ? 'x' : ' '}] ${t.content}`).join('\n') || 'No todos.');
     case 'init': return prompt(s, 'Analyze this project and create a NEXUS.md at its root with the build, test and run commands, the architecture, and conventions a new engineer could not guess. Keep it short. If the project is empty, say so instead.', text);

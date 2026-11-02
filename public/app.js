@@ -74,6 +74,7 @@ const copyButton = get => h('button', { class: 'icon-btn copy', type: 'button', 
   b.replaceChildren(icon('check')); b.classList.add('done');
   setTimeout(() => { b.replaceChildren(icon('copy')); b.classList.remove('done'); }, 1400);
 } }, icon('copy'));
+const usd = n => `$${(n || 0).toFixed(2)}`;
 const fmt = n => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? 'just now' : s < 3600 ? `${s / 60 | 0}m ago` : s < 86400 ? `${s / 3600 | 0}h ago` : `${s / 86400 | 0}d ago`; };
 
@@ -346,7 +347,7 @@ function onEvent(m) {
     case 'delta': delta(m); break;
     case 'status': {
       const was = S.state?.running;
-      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, compactAt: m.compactAt });
+      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt });
       if (was && !m.running) finished();
       syncTitle();
       syncComposer();
@@ -558,7 +559,7 @@ async function rewindDialog(e) {
 const BUILTIN = [
   ['help', 'Show commands and keys'], ['clear', 'Start over, archiving the transcript'], ['compact', 'Summarize to free up context'], ['autocompact', 'Turn auto-compact on or off, or set its size'],
   ['model', 'Show or set the model'], ['effort', 'low, medium, high, xhigh or max'], ['mode', 'default, acceptEdits, plan or bypass'], ['plan', 'Research only, then propose a plan'],
-  ['cost', 'Show tokens used'], ['init', 'Write a NEXUS.md for this project'], ['todos', 'Show the task list'],
+  ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['todos', 'Show the task list'],
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
   ['skills', 'List skills and agents'], ['mcp', 'Open MCP and hook settings'], ['settings', 'Open settings'], ['memory', 'Edit NEXUS.md'], ['rewind', 'How to rewind'],
   ['create-agent', 'Have the AI write a new agent type'], ['agent', 'Switch this chat to another agent'], ['prompts', 'Edit system prompts and injected text'],
@@ -786,15 +787,19 @@ function tokenPanel() {
   const run = h('button', { class: 'btn primary', type: 'button', onclick: () => { sendWs({ t: 'send', text: `/compact ${focus.value}`.trim() }); shut(); } }, 'Compact now');
   const auto = h('button', { class: 'btn', type: 'button', onclick: () => sendWs({ t: 'send', text: `/autocompact ${S.state.compactAt ? 'off' : 'on'}` }) });
   const autoText = h('span', {});
+  const budget = h('input', { class: 'field', type: 'number', min: '0', step: 'any', inputmode: 'decimal', placeholder: 'None', 'aria-label': 'Budget in dollars', title: 'The agent stops once this chat has cost this much',
+    onchange: () => setOption('budget', Math.max(0, Number(budget.value) || 0)) });
   syncTokens = () => {
     const { usage: u, compactAt: at, running } = S.state;
+    if (document.activeElement !== budget) budget.value = S.state.budget || '';
     const last = u.lastInput || 0;
     fill.style.width = `${at ? Math.min(100, last / at * 100) : 0}%`;
     stats.replaceChildren(
       row('Context', at ? `${fmt(last)} of ${fmt(at)}` : fmt(last)),
       row('Cached last request', last ? `${Math.round((u.lastCached || 0) / last * 100)}%` : 'None yet'),
       row('Total input', `${fmt(u.input)} (${fmt(u.cached)} cached)`),
-      row('Total output', fmt(u.output)));
+      row('Total output', fmt(u.output)),
+      row('Cost', `${u.cost || !u.unpriced ? usd(u.cost) : 'Unknown'}${u.cost && u.unpriced ? ` + ${u.unpriced} unpriced requests` : ''}`));
     autoText.textContent = at ? `Auto-compact is on, at ${fmt(at)}` : 'Auto-compact is off';
     auto.textContent = at ? 'Turn off' : 'Turn on';
     run.disabled = running;
@@ -806,6 +811,7 @@ function tokenPanel() {
     onclose: () => { syncTokens = null; d.remove(); } },
     h('div', { class: 'mhead' }, h('h2', {}, 'Tokens'), h('button', { class: 'btn small', type: 'button', onclick: shut }, 'Done')),
     h('div', { class: 'tbody' }, h('div', { class: 'tbar' }, fill), stats,
+      h('div', { class: 'tauto' }, h('span', {}, 'Budget for this chat, $'), budget),
       h('div', { class: 'tauto' }, autoText, auto), focus, run));
   syncTokens();
   document.body.append(d);
@@ -830,8 +836,8 @@ function syncComposer() {
   $promptBtn.classList.toggle('on', Boolean(p && [p.chat, p.project, p.global].some(x => x.system.trim() || x.inject.trim())));
   $stopBtn.hidden = !st.running;
   $sendBtn.textContent = st.running ? 'Queue' : 'Send';
-  $meter.textContent = `${fmt(st.usage.lastInput)} / ${st.compactAt ? fmt(st.compactAt) : 'off'}`;
-  $meter.title = $meter.ariaLabel = 'Tokens and compacting';
+  $meter.replaceChildren(`${fmt(st.usage.lastInput)} / ${st.compactAt ? fmt(st.compactAt) : 'off'}`, st.usage.cost ? h('span', { class: 'mcost' }, ` · ${usd(st.usage.cost)}`) : '');
+  $meter.title = $meter.ariaLabel = 'Tokens, cost and compacting';
   syncTokens?.();
   $todos.hidden = !st.todos?.length || st.todos.every(t => t.status === 'completed');
   $todos.replaceChildren(...(st.todos || []).map(t => h('div', { class: t.status }, h('span', {}, t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '▸' : '○'), t.content)));

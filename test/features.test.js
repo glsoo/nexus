@@ -16,11 +16,18 @@ const market = await import('../server/market.js');
 const settingsFile = path.join(process.env.NEXUS_HOME, 'settings.json');
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
+// The price catalog cost estimates read, so no test reaches OpenRouter.
+const PRICES = [
+  { id: 'openai/gpt-6.1-sol', pricing: { prompt: '0.000002', completion: '0.00001', input_cache_read: '0.0000002' } },
+  { id: 'anthropic/claude-haiku-4.5', pricing: { prompt: '0.000001', completion: '0.000005' } },
+];
+
 // A model that records what it was sent and answers "ok", unless call(n) names a tool [name, args] for its nth request.
 function fakeModel(call = () => null) {
   const sent = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
+    if (String(url) === 'https://openrouter.ai/api/v1/models') return Response.json({ data: PRICES });
     if (!String(url).includes('api.openai.com/v1/responses')) return realFetch(url, init);
     sent.push(JSON.parse(init.body));
     const tool = call(sent.length);
@@ -128,6 +135,32 @@ test('autopilot in plan mode: plan stays read-only, then the plan approves itsel
   assert.ok(s.state.log.some(e => e.type === 'system' && /Autopilot approved the plan/.test(e.text)));
   assert.equal(fs.readFileSync(path.join(projects.projectDir('pilot'), 'a.txt'), 'utf8'), 'hi');
   assert.equal(model.sent.length, 6);
+});
+
+test('costs are estimated from list prices, and a budget stops the agent', async () => {
+  const { costOf } = await import('../server/compat.js');
+  projects.create('budget');
+  const s = agent.getSession('budget');
+  agent.setOption(s, 'model', 'gpt-6.1-sol');
+  const model = fakeModel(n => ['Glob', { pattern: `*${n}` }]);
+  try {
+    // cached input is billed at the cache price; dated and dotted ids match the catalog's
+    assert.equal(await costOf('gpt-6.1-sol', { input_tokens: 1000, output_tokens: 100, input_tokens_details: { cached_tokens: 500 } }), 0.0021);
+    assert.equal(await costOf('claude-haiku-4-5-20251001', { input_tokens: 1000, output_tokens: 100 }), 0.0015);
+    assert.equal(await costOf('gpt-unpriced', { input_tokens: 1 }), undefined);
+
+    agent.setOption(s, 'budget', 0.00001);
+    await agent.submit('budget', 'look around');
+    await idle(s);
+  } finally { model.restore(); }
+  assert.equal(model.sent.length, 1, 'the first request used up the budget, so no second one went out');
+  assert.ok(s.state.usage.cost > 0.00001);
+  assert.ok(s.state.log.some(e => e.type === 'system' && /Stopped at this chat's \$0.00001 budget/.test(e.text)));
+  assert.throws(() => agent.setOption(s, 'budget', -1), /dollar amount/);
+  await agent.submit('budget', '/budget off');
+  assert.equal(s.state.budget, 0);
+  await agent.submit('budget', '/cost');
+  assert.match(s.state.log.at(-1).text, /Cost: about \$0\.00\./);
 });
 
 test('turning autopilot on answers what is already waiting, and /autopilot switches it', async () => {

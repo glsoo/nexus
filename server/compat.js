@@ -1,3 +1,4 @@
+import { isAnthropic } from './anthropic.js';
 import { postWithRetry, readSettings, sseEvents } from './util.js';
 
 // Any OpenAI-compatible Chat Completions server: OpenRouter, Ollama, LM Studio, or one added under "providers" in settings.json.
@@ -43,10 +44,32 @@ async function listModels(id, p) {
   const list = data.filter(m => (!m.supported_parameters || m.supported_parameters.includes('tools')) && !/embed|moderation|whisper|tts|transcri|dall-e/i.test(m.id)).map(m => ({
     id: `${id}:${m.id}`, name: m.name || m.id, provider: id, providerName: p.local ? `${p.name} · this computer` : p.name,
     context: m.context_length || undefined, efforts: [],
-    ...(m.pricing ? { price: [Number(m.pricing.prompt) * 1e6, Number(m.pricing.completion) * 1e6] } : {}),
+    ...(m.pricing ? { price: [Number(m.pricing.prompt) * 1e6, Number(m.pricing.completion) * 1e6], cachedPrice: m.pricing.input_cache_read ? Number(m.pricing.input_cache_read) * 1e6 : undefined } : p.local ? { price: [0, 0] } : {}),
   }));
   lists.set(id, { at: Date.now(), list });
   return list;
+}
+
+// ---- cost ----
+// Estimates from list prices: the compatible server's own, else OpenRouter's public catalog, which also prices Anthropic and OpenAI models.
+// A failed catalog fetch counts as empty for the hour, so an unreachable OpenRouter never slows every request.
+let catalog = null;
+const priceList = () => {
+  if (!catalog || Date.now() - catalog.at > 3600_000) catalog = { at: Date.now(), list: listModels('openrouter', providers().openrouter).catch(() => []) };
+  return catalog.list;
+};
+// "claude-haiku-4-5-20251001" and "openrouter:anthropic/claude-haiku-4.5" both become "claude-haiku-4-5".
+const bare = id => id.toLowerCase().replace(/^.*\//, '').replace(/-\d{8}$|-\d{4}-\d{2}-\d{2}$/, '').replaceAll('.', '-');
+
+// shortcut: Anthropic cache writes count at the plain input price (they cost 1.25x), since the usage passed in has dropped them.
+export async function costOf(model, u) {
+  const id = providerOf(model);
+  const vendor = `openrouter:${isAnthropic(model) ? 'anthropic' : 'openai'}/`;
+  const list = id ? await listModels(id, providers()[id]).catch(() => []) : await priceList();
+  const m = list.find(x => (id ? x.id === model : x.id.startsWith(vendor) && bare(x.id) === bare(model)));
+  if (!m?.price || !u) return undefined;
+  const cached = u.input_tokens_details?.cached_tokens || 0;
+  return (((u.input_tokens || 0) - cached) * m.price[0] + cached * (m.cachedPrice ?? m.price[0]) + (u.output_tokens || 0) * m.price[1]) / 1e6;
 }
 
 // Servers that aren't running or have no key are skipped, so they never hide the other providers.
