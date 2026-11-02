@@ -211,8 +211,9 @@ async function runTool(s, call, ctx) {
   try { args = JSON.parse(call.arguments || '{}'); } catch { args = null; }
   const entry = sink.add({ type: 'tool', name: call.name, args: args ?? { raw: call.arguments }, status: 'running', output: '', agent: ctx.agentLabel });
   const finish = (output, status = 'done') => {
-    const display = typeof output === 'string' ? output : '[image]';
-    setEntry(s, sink, entry, { status, output: clip(display, 60000) });
+    const text = typeof output === 'string';
+    // The user sees the images the agent looked at (screenshots, image files), as with their own attachments.
+    setEntry(s, sink, entry, { status, output: text ? clip(output, 60000) : '', images: text ? undefined : output.map(o => o.image_url) });
     return output;
   };
   if (!args) return finish('Tool arguments were not valid JSON. Retry with valid JSON.', 'error');

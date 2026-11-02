@@ -534,7 +534,7 @@ function renderEntry(e) {
     }
     case 'tool': {
       const awaiting = e.status === 'awaiting';
-      const d = h('details', { class: 'e fold tool', open: awaiting || e.status === 'error' || e.direct || e.name === 'ExitPlanMode' },
+      const d = h('details', { class: 'e fold tool', open: awaiting || e.status === 'error' || e.direct || e.name === 'ExitPlanMode' || e.name === 'Screenshot' },
         h('summary', {}, h('span', { class: `dot ${e.status}`, title: e.status }),
           h('span', { class: 'tname' }, e.name), h('span', { class: 'targ muted' }, String(toolTarget(e.name, e.args || {})).split('\n')[0]),
           e.autopilot && h('span', { class: 'aptag', title: 'Autopilot answered this for you' }, 'autopilot'),
@@ -543,7 +543,8 @@ function renderEntry(e) {
       else {
         const args = toolArgs(e);
         if (args) d.append(args);
-        if (e.status === 'running' || e.output) d.append(h('div', { class: 'out live' }, e.output || ''));
+        if (e.images) d.append(...e.images.map(src => h('img', { class: 'seen', src, alt: 'The image the agent looked at' })));
+        else if (e.status === 'running' || e.output) d.append(h('div', { class: 'out live' }, e.output || ''));
         if (e.status === 'denied') d.open = true;
       }
       return d;

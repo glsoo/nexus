@@ -602,3 +602,18 @@ test('Screenshot shows the agent a page as an image at the size it asked for', {
   assert.equal(png.toString('latin1', 1, 4), 'PNG');
   assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [390, 300]);
 });
+
+test('images the agent looks at show up in its tool entry', async () => {
+  projects.create('looks');
+  const s = agent.getSession('looks');
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
+  fs.writeFileSync(path.join(projects.projectDir('looks'), 'dot.png'), png);
+  const model = fakeModel(n => (n === 1 ? ['Read', { file_path: 'dot.png' }] : null));
+  try {
+    await agent.submit('looks', 'look at dot.png');
+    await idle(s);
+  } finally { model.restore(); }
+  const read = s.state.log.find(e => e.type === 'tool' && e.name === 'Read');
+  assert.deepEqual(read.images, [`data:image/png;base64,${png.toString('base64')}`]);
+  assert.equal(read.output, '');
+});
