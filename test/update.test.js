@@ -73,6 +73,29 @@ test('a conflict leaves the code alone and is not retried', () => {
   assert.ok(!fs.existsSync(restarted));
 });
 
+test('a merge in progress is finished by self-deploy, undoable, and not disturbed by an update', () => {
+  const { up, local } = setup('ai-merge');
+  fs.copyFileSync(fileURLToPath(new URL('../scripts/self-deploy.sh', import.meta.url)), path.join(local, 'scripts/self-deploy.sh'));
+  fs.chmodSync(path.join(local, 'scripts/self-deploy.sh'), 0o755);
+  for (const d of ['public', 'server']) fs.mkdirSync(path.join(local, d));
+  for (const f of ['public/app.js', 'server/a.js', 'scripts/a.js']) write(local, f, '');
+  write(local, 'shared.txt', 'mine\n');
+  save(local, 'mine');
+  write(up, 'shared.txt', 'theirs\n');
+  save(up, 'theirs');
+  assert.equal(update(local), 1);
+  const before = git(local, 'rev-parse', 'HEAD');
+  assert.throws(() => git(local, 'merge', 'origin/main'));
+  assert.equal(update(local), 0);
+  assert.equal(git(local, 'rev-parse', 'HEAD'), before);
+  write(local, 'shared.txt', 'mine and theirs\n');
+  execFileSync(shellCommand(), [path.join(local, 'scripts/self-deploy.sh').replaceAll('\\', '/'), 'Merge upstream'], { env, stdio: 'ignore' });
+  assert.equal(git(local, 'rev-list', '--count', 'HEAD..origin/main'), '0');
+  assert.equal(git(local, 'log', '-1', '--format=%p').split(' ').length, 2);
+  assert.ok(fs.readFileSync(restarted, 'utf8').trim().endsWith(before));
+  assert.match(status(local), /Your changes were kept/);
+});
+
 test('failing tests roll the merge back', () => {
   const { up, local } = setup('broken');
   write(up, 'package.json', '{"scripts":{"test":"exit 1"}}');

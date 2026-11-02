@@ -4,6 +4,7 @@ set -u
 cd "$(dirname "$0")/.."
 mkdir -p data
 say() { printf '%s\n' "$1" > data/update-status.txt; }
+[ -e "$(git rev-parse --git-path MERGE_HEAD)" ] && { say 'A merge is in progress.'; exit 0; } # committing now would save its conflict markers
 git fetch -q origin main || { say 'Could not reach origin.'; exit 1; }
 up=$(git rev-parse origin/main)
 [ "$(git rev-list --count HEAD..origin/main)" = 0 ] && { say 'Up to date.'; exit 0; }

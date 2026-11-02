@@ -35,7 +35,7 @@ export const newId = (prefix = 'e') => `${prefix}_${Date.now().toString(36)}${Ma
 export function childEnv() {
   const env = { ...process.env };
   env.HOME ||= HOME;
-  for (const key of Object.keys(env)) if (key === 'OPENAI_API_KEY' || key === 'ANTHROPIC_API_KEY' || (key.startsWith('NEXUS_') && key !== 'NEXUS_URL')) delete env[key];
+  for (const key of Object.keys(env)) if (key === 'OPENAI_API_KEY' || key === 'ANTHROPIC_API_KEY' || key === 'GEMINI_API_KEY' || key === 'GOOGLE_API_KEY' || (key.startsWith('NEXUS_') && key !== 'NEXUS_URL')) delete env[key];
   return env;
 }
 

@@ -1459,16 +1459,24 @@ function selfBot() {
 }
 
 async function versionCard() {
+  const merge = h('button', { class: 'btn primary', type: 'button', hidden: true, onclick: async () => {
+    try {
+      const { name } = await api('POST', '/api/update/merge', {});
+      await refreshProjects();
+      go(name);
+    } catch (e) { toast(e.message); }
+  } }, 'Merge with AI');
   const line = h('div', { class: 'title mono' });
   const note = h('div', { class: 'small muted' });
   const show = async () => {
     const v = await api('GET', '/api/version').catch(() => null);
     if (!v) { note.textContent = 'Version unavailable.'; return; }
     line.textContent = `v${v.version} · ${v.commit}`;
+    merge.hidden = !v.canMerge;
     note.textContent = [`${v.local} local change${v.local === 1 ? '' : 's'}`, v.behind ? `${v.behind} behind` : 'none behind', v.auto ? 'Auto-updates on' : 'Auto-updates off', v.status].filter(Boolean).join(' · ');
   };
   await show();
-  return [h('h2', {}, 'Version'), h('div', { class: 'card rowline' }, h('div', { class: 'grow' }, line, note),
+  return [h('h2', {}, 'Version'), h('div', { class: 'card rowline' }, h('div', { class: 'grow' }, line, note), merge,
     h('button', { class: 'btn', type: 'button', onclick: async () => {
       try { await api('POST', '/api/update', {}); toast('Checking for updates.'); setTimeout(show, 8000); } catch (e) { toast(e.message); }
     } }, 'Update now'))];
