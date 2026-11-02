@@ -552,6 +552,7 @@ async function drainQueue(s) {
       const { inject } = promptParts(cwdOf(s), s.state);
       text = withInjection(text, inject);
       Object.assign(m.entry, { queued: false, itemsLen: s.state.items.length, gen: s.state.gen, injected: Boolean(inject) || undefined });
+      s.checkFixes = 0;
       m.entry.cp = await checkpoint.snapshot(cwdOf(s), m.entry.text.slice(0, 72) || 'prompt');
       send(s, { t: 'entry', entry: m.entry });
       if (s.state.agentSwitch !== undefined) {
@@ -585,6 +586,7 @@ async function startTurn(s) {
       compact: () => compact(s),
     });
     await runHooks('Stop', {}, cwd);
+    await autoCheck(s, signal);
   } catch (err) {
     if (signal.aborted) addEntry(s, { type: 'system', text: stopping ? 'Stopped by a server restart.' : 'Interrupted.' });
     else addEntry(s, { type: 'error', text: err.message });
@@ -599,6 +601,22 @@ async function startTurn(s) {
     status(s);
     if (s.queue.length && !stopping) startTurn(s);
   }
+}
+
+// /check: after a turn that changed files, run the user's command and hand failures back, a few rounds at most.
+const CHECK_FIXES = 3;
+async function autoCheck(s, signal) {
+  const cp = lastCheckpoint(s)?.cp;
+  if (!s.state.check || !cp || signal.aborted || !(await checkpoint.diff(cwdOf(s), cp))) return;
+  const command = s.state.check;
+  const entry = addEntry(s, { type: 'tool', name: 'Bash', args: { command }, status: 'running', output: '' });
+  const output = await execTool('Bash', { command, timeout: 600000 }, { cwd: cwdOf(s), session: s, signal, progress: t => { entry.output += t; send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
+  const failed = /^Failed to start|\n\[(exit code \d+|Timed out after \d+ ms)\]$/.test(output);
+  Object.assign(entry, { status: failed ? 'error' : 'done', output });
+  send(s, { t: 'entry', entry });
+  if (!failed || signal.aborted) return;
+  if ((s.checkFixes = (s.checkFixes || 0) + 1) > CHECK_FIXES) return note(s, `\`${command}\` still fails after ${CHECK_FIXES} fixes, so Nexus stopped trying. Over to you.`, 'error');
+  enqueue(s, { text: `The check \`${command}\` failed after your changes:\n${clip(output, 20000)}\nFix the cause, then stop. Don't weaken or skip the check.`, label: `The check failed, so Nexus is fixing it (${s.checkFixes}/${CHECK_FIXES}).` });
 }
 
 // A manual /compact holds the session like a turn, so a prompt sent meanwhile queues instead of being lost when the summary replaces the history.
@@ -626,7 +644,7 @@ export function interrupt(name) { sessions.get(name)?.controller?.abort(); }
 export function answer(name, id, value) { sessions.get(name)?.pending.get(id)?.(value); }
 
 const HELP = `**Commands**
-\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review [PR number|URL]\` review this branch or a pull request · \`/pr [notes]\` commit, push and open a pull request · \`/issue <number>\` fix a GitHub issue · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/todos\` · \`/help\`
+\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review [PR number|URL]\` review this branch or a pull request · \`/pr [notes]\` commit, push and open a pull request · \`/issue <number>\` fix a GitHub issue · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/check <command>|off\` run tests after each change and fix failures · \`/todos\` · \`/help\`
 
 Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover a prompt to rewind to it.
 
@@ -743,6 +761,9 @@ async function slash(s, text) {
       if (arg) setOption(s, 'budget', n);
       return note(s, s.state.budget ? `Budget: the agent stops once this chat has cost $${s.state.budget}. Cost so far: ${spent(s)}.` : `No budget. Cost so far: ${spent(s)}. Set one with /budget <dollars>.`);
     }
+    case 'check':
+      if (arg) { s.state.check = arg === 'off' ? '' : arg; persist(s); }
+      return note(s, s.state.check ? `After each turn that changes files, Nexus runs \`${s.state.check}\` and fixes what fails (up to ${CHECK_FIXES} times). \`/check off\` stops it.` : 'No check. `/check <command>`, for example `/check npm test`, runs it after each turn that changes files and has Nexus fix failures.');
     case 'schedule': {
       const [first, id] = arg.split(/\s+/);
       if (first === 'remove') { removeSchedule(id); return note(s, `Removed schedule ${id}.`); }

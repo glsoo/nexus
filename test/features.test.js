@@ -660,3 +660,23 @@ test('a repo set up for another tool keeps its rules, unless AGENTS.md has them'
   assert.match(instructions(dir), /shared rules/);
   assert.doesNotMatch(instructions(dir), /run make test/);
 });
+
+test('/check runs after a turn that changed files and hands failures back until they pass', { timeout: 30000 }, async () => {
+  projects.create('checked');
+  const s = agent.getSession('checked');
+  agent.setOption(s, 'mode', 'acceptEdits');
+  await agent.submit('checked', '/check test "$(cat a.txt)" = good');
+  assert.equal(s.state.check, 'test "$(cat a.txt)" = good');
+  const script = [['Write', { file_path: 'a.txt', content: 'bad' }], null, ['Write', { file_path: 'a.txt', content: 'good' }], null, null];
+  const model = fakeModel(n => script[n - 1]);
+  try {
+    await agent.submit('checked', 'make a.txt');
+    await idle(s, 15000);
+    assert.match(JSON.stringify(model.sent[2].input.at(-1)), /The check .*failed after your changes/);
+    await agent.submit('checked', 'just a question');
+    await idle(s, 15000);
+  } finally { model.restore(); }
+  const checks = s.state.log.filter(e => e.type === 'tool' && e.name === 'Bash').map(e => e.status);
+  assert.deepEqual(checks, ['error', 'done'], 'failed once, passed after the fix, and not rerun for a turn without changes');
+  assert.ok(s.state.log.some(e => e.type === 'system' && /fixing it \(1\/3\)/.test(e.text)));
+});
