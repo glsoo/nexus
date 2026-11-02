@@ -576,7 +576,7 @@ async function rewindDialog(e) {
 const BUILTIN = [
   ['help', 'Show commands and keys'], ['clear', 'Start over, archiving the transcript'], ['compact', 'Summarize to free up context'], ['autocompact', 'Turn auto-compact on or off, or set its size'],
   ['model', 'Show or set the model'], ['effort', 'low, medium, high, xhigh or max'], ['mode', 'default, acceptEdits, plan or bypass'], ['plan', 'Research only, then propose a plan'],
-  ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['review', 'Review this branch, or a pull request by number'], ['pr', 'Commit, push and open a GitHub pull request'], ['schedule', 'Run a prompt on a timer: cron fields, then the prompt'], ['todos', 'Show the task list'],
+  ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['review', 'Review this branch, or a pull request by number'], ['pr', 'Commit, push and open a GitHub pull request'], ['issue', 'Fix a GitHub issue by number'], ['schedule', 'Run a prompt on a timer: cron fields, then the prompt'], ['todos', 'Show the task list'],
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
   ['skills', 'List skills and agents'], ['mcp', 'Open MCP and hook settings'], ['settings', 'Open settings'], ['memory', 'Edit NEXUS.md'], ['rewind', 'How to rewind'],
   ['create-agent', 'Have the AI write a new agent type'], ['agent', 'Switch this chat to another agent'], ['prompts', 'Edit system prompts and injected text'],
@@ -1511,7 +1511,7 @@ async function settingsPage(hamb) {
     await globalPromptsCard(),
     notifyCard(),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
-    h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit and Stop; a hook exiting with 2 blocks the action. MCP servers reconnect within seconds of saving.'),
+    h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact and Notification; a hook exiting with 2 blocks a tool call or prompt. MCP servers reconnect within seconds of saving.'),
     h('p', { class: 'small muted' }, 'Models: Ollama and LM Studio appear in the model picker while they run on this computer. Add OpenRouter (hundreds of models, some free) or any OpenAI-compatible server under "providers", as in the example.'),
     area, err,
     h('div', { style: 'margin-top:8px' }, h('button', { class: 'btn primary', onclick: async () => {

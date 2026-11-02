@@ -531,3 +531,34 @@ test('scheduled prompts: cron matching, one run per due minute, and /schedule to
   await agent.submit('timed', `/schedule remove ${x.id}`);
   assert.deepEqual(agent.schedules(), []);
 });
+
+test('hooks also fire on PreCompact, SubagentStop and Notification, and /issue hands over the issue', { timeout: 30000 }, async () => {
+  projects.create('hooked');
+  const s = agent.getSession('hooked');
+  const log = path.join(tmp, 'hook-events.txt').replaceAll('\\', '/');
+  const hook = [{ command: `cat >> "${log}"; echo >> "${log}"` }];
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ hooks: { PreCompact: hook, SubagentStop: hook, Notification: hook } }));
+  const model = fakeModel(n => (n === 4 ? ['Bash', { command: 'echo hi' }] : null));
+  try {
+    await agent.submit('hooked', '/issue 7');
+    await idle(s);
+    await agent.submit('hooked', '/compact');
+    await idle(s);
+    await agent.runSubagent(s, { description: 'side job', prompt: 'say ok' });
+    await agent.submit('hooked', 'run something');
+    for (let t = 0; t < 5000 && !s.state.log.some(e => e.status === 'awaiting'); t += 25) await new Promise(r => setTimeout(r, 25));
+    agent.interrupt('hooked');
+    await idle(s);
+  } finally {
+    model.restore();
+    fs.writeFileSync(settingsFile, '{}');
+  }
+  assert.match(JSON.stringify(model.sent[0].input.at(-1)), /gh issue view 7 --comments/);
+  for (let t = 0; t < 3000 && (fs.readFileSync(log, 'utf8').match(/"event"/g) || []).length < 3; t += 50) await new Promise(r => setTimeout(r, 50));
+  const events = fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+  assert.deepEqual(events.map(e => e.event), ['PreCompact', 'SubagentStop', 'Notification']);
+  assert.match(events[0].transcript, /conversation\.json$/);
+  assert.equal(events[1].description, 'side job');
+  assert.equal(events[2].tool, 'Bash');
+});

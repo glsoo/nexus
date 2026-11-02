@@ -198,6 +198,7 @@ function setEntry(s, sink, entry, patch) {
 function askUser(s, sink, entry, signal, kind) {
   if (s.state.autopilot) return { decision: 'auto' };
   Object.assign(entry, { status: 'awaiting', kind });
+  runHooks('Notification', { message: `Nexus needs your answer: ${entry.name}`, tool: entry.name }, cwdOf(s)).catch(() => {});
   surface(s, sink, entry);
   return waitFor(s, entry, signal);
 }
@@ -397,6 +398,7 @@ export async function runSubagent(s, args, parentSignal) {
     a.result = err.message;
     return `Subagent ${a.status}: ${err.message}`;
   }).then(async text => {
+    runHooks('SubagentStop', { agent: a.type, description: a.description, status: a.status }, cwd).catch(() => {});
     if (dir) {
       const note = await closeWorktree(cwd, dir, a.branch, a.description);
       a.result += `\n\n${note}`;
@@ -502,6 +504,8 @@ async function closeWorktree(cwd, dir, branch, label) {
 export async function compact(s, focus = '') {
   const { state } = s;
   if (!state.items.length) return note(s, 'Nothing to compact.');
+  // Runs before the history is replaced, so a hook can archive the full transcript.
+  await runHooks('PreCompact', { focus, transcript: path.join(cwdOf(s), '.nexus', 'conversation.json') }, cwdOf(s));
   const entry = addEntry(s, { type: 'system', text: 'Compacting conversation…', status: 'running' });
   const signal = s.controller?.signal ?? new AbortController().signal;
   const prompt = `Summarize this conversation so work can continue from the summary alone. Include the user's goals and every explicit instruction, decisions made, files changed and how, current state, errors and fixes, and the exact next steps. Reply with only the summary.${focus ? ` Focus especially on: ${focus}` : ''}`;
@@ -621,7 +625,7 @@ export function interrupt(name) { sessions.get(name)?.controller?.abort(); }
 export function answer(name, id, value) { sessions.get(name)?.pending.get(id)?.(value); }
 
 const HELP = `**Commands**
-\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review [PR number|URL]\` review this branch or a pull request · \`/pr [notes]\` commit, push and open a pull request · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/todos\` · \`/help\`
+\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review [PR number|URL]\` review this branch or a pull request · \`/pr [notes]\` commit, push and open a pull request · \`/issue <number>\` fix a GitHub issue · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/todos\` · \`/help\`
 
 Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover a prompt to rewind to it.
 
@@ -765,6 +769,9 @@ Reply with the pull request's URL.`, text);
         : /^#?\d+$|^https:\/\/github\.com\/.+\/pull\/\d+/.test(arg) ? `GitHub pull request ${arg.replace('#', '')}. Read it with \`gh pr view ${arg.replace('#', '')}\` and \`gh pr diff ${arg.replace('#', '')}\`` : arg;
       return prompt(s, `Review ${target}, as a senior engineer would before merging. Read the surrounding code where it matters, not just the diff. Report only real problems: bugs, security holes, data loss, unhandled edge cases, missing tests and misleading code, most severe first, each with file:line and a concrete fix. If it looks good, say so plainly. Don't change any files, and don't post anything to GitHub unless asked.`, text);
     }
+    case 'issue':
+      if (!/^#?\d+$/.test(arg)) return note(s, 'Usage: `/issue <number>`', 'error');
+      return prompt(s, `Fix GitHub issue ${arg.replace('#', '')}. Read it with \`gh issue view ${arg.replace('#', '')} --comments\` (if GitHub CLI is missing or signed out, say how to fix that and stop). Find the root cause in the code, fix it with the smallest complete change, add or update a test that fails without the fix, and run the tests. Then summarize the cause and the fix. Don't push or open a pull request unless asked; /pr does that.`, text);
     case 'init': return prompt(s, 'Analyze this project and create a NEXUS.md at its root with the build, test and run commands, the architecture, and conventions a new engineer could not guess. Keep it short. If the project is empty, say so instead.', text);
     case 'create-agent':
       if (!arg) return note(s, 'Usage: `/create-agent <what it should do>`, for example `/create-agent reviews my changes for security holes before I commit`', 'error');
