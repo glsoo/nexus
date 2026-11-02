@@ -323,6 +323,9 @@ internal sealed class Launcher : Form
             brand.Controls.Add(logo);
             using (var small = new Bitmap(logo.Image, 32, 32)) Icon = Icon.FromHandle(small.GetHicon());
         }
+        // The multi-size icon install.ps1 builds keeps the taskbar button sharp at any scale.
+        string icoFile = Path.Combine(Application.StartupPath, "Nexus.ico");
+        if (File.Exists(icoFile)) Icon = new Icon(icoFile);
         brand.Controls.Add(new Label { Text = "Nexus", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font(Theme.MonoFamily, 16, FontStyle.Bold), Margin = new Padding(0) });
         layout.Controls.Add(brand, 0, 0);
 
