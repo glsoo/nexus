@@ -468,7 +468,7 @@ function onEvent(m) {
 }
 
 // ---- chat ----
-let $log, $todos, $input, $sendBtn, $stopBtn, $mode, $autoBtn, $model, $modelLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
+let $log, $todos, $activity, $input, $sendBtn, $stopBtn, $mode, $autoBtn, $model, $modelLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
 
 function chatView(view) {
   entries.clear();
@@ -476,6 +476,8 @@ function chatView(view) {
   $log.addEventListener('touchstart', stopFollow, { passive: true });
   $log.addEventListener('wheel', stopFollow, { passive: true });
   $todos = h('div', { class: 'todos', hidden: true });
+  $activity = h('div', { class: 'chat-activity', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true', hidden: true },
+    h('span', { class: 'loading-dot', 'aria-hidden': 'true' }), 'Working…');
   if (S.state) {
     if (!S.state.log.length) $log.append(h('div', { class: 'empty', id: 'hello' },
       h('div', { class: 'welcome-mark', 'aria-hidden': 'true' }, h('img', { src: '/icon.svg?v=purple', alt: '' })),
@@ -483,7 +485,7 @@ function chatView(view) {
       h('p', { class: 'mono' }, `~/projects/${S.project}`), h('p', {}, 'Type a request. / runs a command and @ points at a file.')));
     for (const e of S.state.log) upsertEntry(e, false);
   }
-  view.append($log, $todos, composer());
+  view.append($log, $todos, $activity, composer());
   syncComposer();
   $log.scrollTop = $log.scrollHeight;
   if (matchMedia('(hover: hover)').matches) $input.focus();
@@ -985,6 +987,7 @@ function syncComposer() {
   const p = S.prompts;
   $promptBtn.classList.toggle('on', Boolean(p && [p.chat, p.project, p.global].some(x => x.system.trim() || x.inject.trim())));
   $stopBtn.hidden = !st.running;
+  $activity.hidden = !st.running;
   $sendBtn.textContent = $sendBtn.ariaLabel = $sendBtn.title = st.running ? 'Queue' : 'Send';
   $meter.replaceChildren(`${fmt(st.usage.lastInput)} / ${st.compactAt ? fmt(st.compactAt) : 'off'}`, st.usage.cost ? h('span', { class: 'mcost' }, ` · ${usd(st.usage.cost)}`) : '');
   $meter.title = $meter.ariaLabel = 'Tokens, cost and compacting';

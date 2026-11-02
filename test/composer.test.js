@@ -53,13 +53,14 @@ test('compact controls keep permission status and Send/Queue names accessible', 
     $mode: { closest: () => ({ querySelector: () => summary }) },
     $modelLabel: {}, $agentLabel: {}, $agentBtn: { classList: emptyClasses }, $promptBtn: { classList: emptyClasses },
     $autoBtn: { classList: emptyClasses, setAttribute(name, value) { this[name] = value; } },
-    $stopBtn: {}, $sendBtn: {}, $meter: { replaceChildren(...children) { this.children = children; } }, $todos: { replaceChildren() {} }, syncTokens: null, fmt: n => String(n),
+    $activity: {}, $stopBtn: {}, $sendBtn: {}, $meter: { replaceChildren(...children) { this.children = children; } }, $todos: { replaceChildren() {} }, syncTokens: null, fmt: n => String(n),
     h: (tag, props, text) => ({ tag, ...props, text }), usd: n => `$${n.toFixed(2)}`,
   };
   vm.runInNewContext(app.slice(start, end), context);
   context.syncComposer();
   assert.equal(context.$sendBtn.ariaLabel, 'Send');
   assert.equal(context.$stopBtn.hidden, true);
+  assert.equal(context.$activity.hidden, true, 'no loading indicator while idle');
   assert.equal(summary.dataset.mode, 'default');
   assert.match(summary.ariaLabel, /Ask first/);
   context.S.state.running = true;
@@ -68,6 +69,7 @@ test('compact controls keep permission status and Send/Queue names accessible', 
   assert.equal(context.$sendBtn.ariaLabel, 'Queue');
   assert.equal(context.$sendBtn.title, 'Queue');
   assert.equal(context.$stopBtn.hidden, false);
+  assert.equal(context.$activity.hidden, false, 'loading indicator follows the real running state');
   assert.equal(summary.dataset.mode, 'bypass');
   assert.match(summary.ariaLabel, /Bypass/);
   context.S.state.mode = 'plan';
@@ -92,6 +94,13 @@ test('compact controls keep permission status and Send/Queue names accessible', 
   assert.doesNotMatch(summary.ariaLabel, /Autopilot on/);
   assert.equal(context.$autoBtn['aria-pressed'], 'false');
   assert.equal(context.$meter.children[1], '');
+  context.S.state.running = false;
+  context.syncComposer();
+  assert.equal(context.$activity.hidden, true, 'completion, errors and Stop all clear the indicator');
+  context.$input.isConnected = false;
+  context.S.state.running = true;
+  context.syncComposer();
+  assert.equal(context.$activity.hidden, true, 'updates must not touch a detached chat view');
 });
 
 test('shorter visible controls keep separate full-size touch targets', () => {

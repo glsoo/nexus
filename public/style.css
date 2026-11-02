@@ -149,6 +149,10 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .ask .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ask input.field { margin: 8px 0; }
 
+.chat-activity { flex: none; display: flex; align-items: center; gap: 10px; width: 100%; max-width: 900px; margin: 0 auto; padding: 6px max(24px, var(--sar)) 10px max(24px, var(--sal)); color: var(--muted); font-size: 12px; }
+.loading-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-text); box-shadow: 0 0 8px var(--accent), 0 0 16px var(--accent); }
+.loading-dot::before { content: ''; position: absolute; inset: -5px; border: 1px solid var(--accent-text); border-radius: inherit; opacity: .25; }
+
 .todos { max-width: 860px; margin: 0 auto 6px; width: calc(100% - 32px); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 12px; font-size: 13px; max-height: 150px; overflow: auto; }
 .todos div { display: flex; gap: 8px; }
 .todos .completed { color: var(--muted); text-decoration: line-through; }
@@ -493,12 +497,16 @@ dialog.closing::backdrop { animation: fadeout .16s ease-in forwards; }
   .empty > p { animation: rise .5s .12s var(--ease) both; }
   .composer-options[open] > .composer-settings { animation: options-in .22s var(--ease); }
   .stop-btn:not([hidden])::before { animation: working-pulse 1.8s ease-in-out infinite; }
+  .chat-activity:not([hidden]) .loading-dot { animation: loading-breathe 1.8s ease-in-out infinite; }
+  .chat-activity:not([hidden]) .loading-dot::before { animation: loading-ring 1.8s ease-out infinite; }
 }
 @keyframes composer-in { from { opacity: 0; transform: translateY(12px); } }
 @keyframes mark-in { from { opacity: 0; transform: scale(.8) rotate(-8deg); } }
 @keyframes mark-float { 50% { transform: translateY(-3px); } }
 @keyframes options-in { from { opacity: 0; transform: translateY(8px) scale(.97); } }
 @keyframes working-pulse { 50% { opacity: .55; transform: scale(.85); } }
+@keyframes loading-breathe { 50% { opacity: .55; transform: scale(.8); } }
+@keyframes loading-ring { from { opacity: .5; transform: scale(.65); } to { opacity: 0; transform: scale(1.7); } }
 
 @media (hover: hover) {
   .btn:hover { background: var(--raised); }
@@ -543,6 +551,8 @@ dialog.closing::backdrop { animation: fadeout .16s ease-in forwards; }
   .cbar .send-btn, .cbar .stop-btn { color: ButtonText; }
   .composer-options-toggle.autopilot::after { background: Highlight; border-color: ButtonText; forced-color-adjust: none; }
   .cbar .apbtn.on { outline: 1px solid ButtonText; outline-offset: -1px; }
+  .loading-dot { background: Highlight; box-shadow: none; forced-color-adjust: none; }
+  .loading-dot::before { border-color: Highlight; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
