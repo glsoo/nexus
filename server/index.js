@@ -17,6 +17,7 @@ import * as projects from './projects.js';
 import { findFiles } from './tools.js';
 import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
 import * as push from './push.js';
+import * as notify from './notify.js';
 import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -373,7 +374,8 @@ async function api(req, res, url) {
     res.writeHead(200, { 'content-type': IMAGE_TYPES[path.extname(file)], 'cache-control': 'private, max-age=31536000, immutable' }).end(data);
     return RAW;
   }
-  if (url.pathname === '/api/me') return { build: BUILD, user: process.env.NEXUS_USER, defaultModel: projects.DEFAULT_MODEL, autoCompact: readSettings().autoCompactTokens || 300000, pickFolder: projects.canPickNatively(req.headers) };
+  if (url.pathname === '/api/me') return { build: BUILD, user: process.env.NEXUS_USER, defaultModel: projects.DEFAULT_MODEL, autoCompact: readSettings().autoCompactTokens || 300000, pickFolder: projects.canPickNatively(req.headers),
+    desktopNotify: projects.localBrowser(req.headers) ? (notify.available() ? notify.enabled() : null) : null };
   for (const r of routes) {
     if (r.method !== req.method) continue;
     const m = r.re.exec(url.pathname);
@@ -466,6 +468,7 @@ server.on('upgrade', (req, socket, head) => {
   }
   target.handleUpgrade(req, socket, head, ws => {
     ws.token = token;
+    ws.local = projects.localBrowser(req.headers); // a browser at this computer's screen, for desktop notifications
     ws.alive = true;
     ws.on('pong', () => { ws.alive = true; });
     ws.on('error', () => {});
@@ -489,6 +492,7 @@ wss.on('connection', ws => {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
     try {
+      if (m.t === 'visible') { ws.visible = Boolean(m.on); return; }
       if (m.t === 'open') {
         need(m.name);
         ws.project = m.name;
@@ -510,6 +514,10 @@ wss.on('connection', ws => {
 const busy = new Set(), pinged = new WeakSet();
 const ping = (title, body, project) => push.notify({ title, body, project }, auth.liveSessionKey).catch(err => console.error('Web Push:', err.message));
 const asks = { AskUserQuestion: 'has a question for you', ExitPlanMode: 'has a plan for you to approve' };
+// A notification on this computer itself, unless you're looking at Nexus in a browser here, which shows its own toast.
+const pcNotify = (title, body, name) => {
+  if (![...wss.clients].some(ws => ws.local && ws.visible)) notify.desktopNotify(title, body, `http://127.0.0.1:${PORT}/#/p/${encodeURIComponent(name)}/chat`);
+};
 agent.hub.on('project', (name, ev) => {
   for (const ws of wss.clients) if (ws.project === name) sendTo(ws, ev);
   if (ev.t === 'status') broadcast({ t: 'projects' });
@@ -518,11 +526,13 @@ agent.hub.on('project', (name, ev) => {
     const reply = agent.getSession(name).state.log.findLast(e => e.type === 'assistant')?.text || '';
     const body = reply.replace(/\s+/g, ' ').slice(0, 140) || 'The agent is done.';
     ping(`${name} finished`, body, name);
+    pcNotify(`${name} finished`, body, name);
     broadcast({ t: 'alert', project: name, kind: 'finished', body }); // every open page, which shows it unless you're watching that chat
   } else if (ev.t === 'entry' && ev.entry.status === 'awaiting' && !pinged.has(ev.entry)) {
     pinged.add(ev.entry);
     const body = `The agent ${asks[ev.entry.name] || `wants to run ${ev.entry.name}`}.`;
     ping(`${name} needs you`, body, name);
+    pcNotify(`${name} needs you`, body, name);
     broadcast({ t: 'alert', project: name, kind: 'waiting', body });
   }
 });

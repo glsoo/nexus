@@ -432,7 +432,7 @@ const seen = () => {
   if (!document.hidden && S.project && !S.page && S.tab === 'chat' && S.alerts[S.project]) { delete S.alerts[S.project]; refreshSoon(); }
   syncTitle();
 };
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { doneUnseen = false; seen(); } });
+document.addEventListener('visibilitychange', () => { sendWs({ t: 'visible', on: !document.hidden }); if (!document.hidden) { doneUnseen = false; seen(); } });
 
 // A chat that finishes or needs an answer while you look elsewhere: a mark in the sidebar, a toast that opens it, a count in the title,
 // and a system notification when Nexus is in the background and notifications are on in Settings.
@@ -443,7 +443,8 @@ function notice({ project, kind, body }) {
   syncTitle();
   const title = `${pretty(project)} ${kind === 'waiting' ? 'needs your answer' : 'finished'}`;
   if (!document.hidden) return toast(`${title}. ${body}`, ['Open', () => go(project, null, 'chat')], kind === 'waiting' ? 12000 : 6000);
-  if (pref('nexus.notify') === '1' && window.Notification?.permission === 'granted') {
+  // This computer shows its own notification for a browser on it, so the browser doesn't add a second one.
+  if (!S.me?.desktopNotify && pref('nexus.notify') === '1' && window.Notification?.permission === 'granted') {
     new Notification(title, { body, icon: '/icon-180.png', tag: `nexus-${project}` }).onclick = () => { focus(); go(project, null, 'chat'); };
   }
 }
@@ -485,6 +486,7 @@ function connect() {
     wsRetry = 0;
     lastHeard = Date.now();
     $conn?.remove(); $conn = null;
+    ws.send(JSON.stringify({ t: 'visible', on: !document.hidden }));
     if (S.project) ws.send(JSON.stringify({ t: 'open', name: S.project }));
     refreshSoon();
   };
@@ -2107,7 +2109,15 @@ function notifyCard() {
     if (canPush) setPush(box.checked).catch(err => toast(`Push notifications didn't turn ${box.checked ? 'on' : 'off'}: ${err.message}`));
     if (box.checked) new Notification('Nexus', { body: 'Notifications are on.', icon: '/icon-180.png' });
   } });
+  // null: not on this computer's screen, or nowhere to show them (a Linux server without a desktop).
+  const pc = S.me?.desktopNotify != null && h('input', { type: 'checkbox', id: 'pcnotify', checked: S.me.desktopNotify, onchange: guard(async () => {
+    const { text } = await api('GET', '/api/settings');
+    await api('PUT', '/api/settings', { text: `${JSON.stringify({ ...JSON.parse(text), desktopNotify: pc.checked ? undefined : false }, null, 2)}\n` });
+    S.me.desktopNotify = pc.checked;
+    toast(pc.checked ? 'This computer will notify you when a chat finishes or needs you.' : "This computer's own notifications are off.");
+  }) });
   return [h('h2', {}, 'Notifications'),
+    pc && h('label', { class: 'card rowline check', htmlFor: 'pcnotify' }, pc, h('span', { class: 'grow' }, "Notify me on this computer when a chat finishes or needs me, even with no browser open, unless I'm looking at Nexus")),
     h('label', { class: 'card rowline check', htmlFor: 'notify' }, box, h('span', { class: 'grow' }, canPush ? 'Notify me when a chat finishes or needs me, even with Nexus closed' : 'Tell me when a chat finishes while Nexus is in the background'),
       !supported && h('span', { class: 'small muted' }, 'Not supported in this browser. Add Nexus to your home screen on iPhone.'))];
 }

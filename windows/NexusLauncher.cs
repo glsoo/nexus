@@ -33,6 +33,12 @@ internal static class Program
             catch (Exception error) { Console.Error.Write(error.Message); Environment.ExitCode = 2; }
             return;
         }
+        // And "Nexus.exe --notify <title> <body> <url>" for a notification on this PC when a chat finishes or needs you.
+        if (args.Length > 0 && args[0] == "--notify")
+        {
+            Notifier.Run(args.Length > 1 ? args[1] : "Nexus", args.Length > 2 ? args[2] : "", args.Length > 3 ? args[3] : null);
+            return;
+        }
         string root = Path.GetFullPath(Path.Combine(Application.StartupPath, ".."));
         string key;
         using (SHA256 hash = SHA256.Create())
@@ -50,6 +56,28 @@ internal static class Program
             try { Application.Run(new Launcher(root, key)); }
             catch (Exception error) { MessageBox.Show(error.Message, "Nexus", MessageBoxButtons.OK, MessageBoxIcon.Error); }
             finally { mutex.ReleaseMutex(); }
+        }
+    }
+}
+
+// A Windows notification (a toast on Windows 10 and 11) with the Nexus icon. Clicking it opens the chat in the browser.
+// Stays running while the notification shows, so the click can be handled, then exits.
+internal static class Notifier
+{
+    public static void Run(string title, string body, string url)
+    {
+        using (var icon = new NotifyIcon { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath), Text = "Nexus", Visible = true })
+        {
+            bool done = false;
+            icon.BalloonTipClicked += delegate {
+                if (!string.IsNullOrEmpty(url) && url.StartsWith("http")) Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                done = true;
+            };
+            icon.BalloonTipClosed += delegate { done = true; };
+            icon.ShowBalloonTip(10000, title, string.IsNullOrEmpty(body) ? " " : body, ToolTipIcon.None);
+            DateTime until = DateTime.Now.AddSeconds(15);
+            while (!done && DateTime.Now < until) { Application.DoEvents(); Thread.Sleep(50); }
+            icon.Visible = false;
         }
     }
 }

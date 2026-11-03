@@ -328,6 +328,27 @@ test('any folder opens as a project: linked, not moved, and removing it leaves t
   projects.trash('My-App-2');
 });
 
+test('notifications on the computer itself: a Windows toast, macOS Notification Center, notify-send on a Linux desktop, none on a headless server', async () => {
+  const { notifyCommand, enabled, available } = await import('../server/notify.js');
+  const url = 'http://127.0.0.1:7711/#/p/demo/chat';
+  const [exe, winArgs] = notifyCommand('win32', 'demo finished', 'All done.', url);
+  assert.match(exe, /windows[\\/]Nexus\.exe$/);
+  assert.deepEqual(winArgs, ['--notify', 'demo finished', 'All done.', url]);
+  const [mac, macArgs] = notifyCommand('darwin', 'demo "quoted"', 'a\'b', url);
+  assert.equal(mac, 'osascript');
+  assert.deepEqual(macArgs.slice(-2), ['demo "quoted"', "a'b"], 'title and body go as arguments, never into the script');
+  const [linux, linuxArgs] = notifyCommand('linux', 'demo finished', 'All done.', url, { DISPLAY: ':0' });
+  assert.equal(linux, 'notify-send');
+  assert.deepEqual(linuxArgs.slice(-3), ['--', 'demo finished', 'All done.']);
+  assert.equal(notifyCommand('linux', 't', 'b', url, {}), null, 'a Linux server with no desktop has nowhere to show one');
+  if (available()) {
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    fs.writeFileSync(settingsFile, JSON.stringify({ desktopNotify: false }));
+    try { assert.equal(enabled(), false, 'Settings can turn them off'); } finally { fs.writeFileSync(settingsFile, '{}'); }
+    assert.equal(enabled(), true);
+  }
+});
+
 test('the Windows folder dialog: only for a browser on this PC, one at a time, and closed when the page stops waiting', async () => {
   const local = { host: '127.0.0.1:7711' };
   assert.equal(projects.localBrowser(local), true);
