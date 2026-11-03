@@ -37,6 +37,8 @@ const VENDOR = {
   'mono.woff2': '@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2',
 };
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
+const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const RAW = Symbol('answered already'); // a route that wrote its own response
 const SECURITY = {
   'content-security-policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
   'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY',
@@ -355,6 +357,15 @@ async function api(req, res, url) {
     for (const c of [...wss.clients, ...termWss.clients]) if (c.token === token) c.close();
     return {};
   }
+  // Chat images are named by their content, so a browser may keep each one for good.
+  const image = req.method === 'GET' && /^\/api\/projects\/([^/]+)\/images\/([^/]+)$/.exec(url.pathname);
+  if (image) {
+    const name = decodeURIComponent(image[1]), file = image[2];
+    if (!projects.exists(name) || !projects.IMAGE_FILE.test(file)) throw fail(404, 'Not found.');
+    const data = await fs.promises.readFile(path.join(projects.projectDir(name), '.nexus', 'images', file));
+    res.writeHead(200, { 'content-type': IMAGE_TYPES[path.extname(file)], 'cache-control': 'private, max-age=31536000, immutable' }).end(data);
+    return RAW;
+  }
   if (url.pathname === '/api/me') return { build: BUILD, user: process.env.NEXUS_USER, defaultModel: projects.DEFAULT_MODEL, autoCompact: readSettings().autoCompactTokens || 300000 };
   for (const r of routes) {
     if (r.method !== req.method) continue;
@@ -407,7 +418,7 @@ async function handle(req, res) {
     try {
       if (req.method !== 'GET' && !originOk(req)) throw fail(403, 'Cross-origin request refused.');
       const result = await api(req, res, url);
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
+      if (result !== RAW) res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
     } catch (err) {
       if (!err.status) console.error(req.method, url.pathname, err);
       const status = err.status || (err.code === 'ENOENT' ? 404 : 500);

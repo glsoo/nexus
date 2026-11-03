@@ -28,13 +28,29 @@ const compactAt = s => {
   return context ? Math.min(limit, Math.floor(context * 0.85)) : limit;
 };
 
+// Chats stay loaded while in use. Past a few, the least recently used idle ones are saved and let go, and load again when opened,
+// so memory doesn't grow with every chat opened since the server started.
+const KEEP_SESSIONS = 6;
+export const loadedSessions = () => [...sessions.keys()];
+const idle = s => !s.running && !s.queue.length && !s.pending.size && !s.controller && !s.watching && !s.naming
+  && ![...agents.values()].some(a => a.project === s.name && a.status === 'running')
+  && ![...shells.values()].some(sh => sh.project === s.name && sh.status === 'running');
+function trimSessions() {
+  const watching = watched();
+  for (const s of sessions.values()) { // oldest first
+    if (sessions.size <= KEEP_SESSIONS) return;
+    if (!idle(s) || watching.includes(s.name)) continue;
+    if (s.state.log.length) persist(s);
+    sessions.delete(s.name);
+  }
+}
 export function getSession(name) {
   let s = sessions.get(name);
-  if (!s) {
-    s = { name, state: projects.load(name), queue: [], pending: new Map(), running: false, controller: null };
-    sessions.set(name, s);
-    distrustCommitted(s);
-  }
+  if (s) { sessions.delete(name); sessions.set(name, s); return s; } // most recently used last
+  s = { name, state: projects.load(name), queue: [], pending: new Map(), running: false, controller: null };
+  sessions.set(name, s);
+  distrustCommitted(s);
+  trimSessions();
   return s;
 }
 
@@ -238,7 +254,7 @@ async function runTool(s, call, ctx) {
   const finish = (output, status = 'done') => {
     const text = typeof output === 'string';
     // The user sees the images the agent looked at (screenshots, image files), as with their own attachments.
-    setEntry(s, sink, entry, { status, output: text ? clip(output, 60000) : '', images: text ? undefined : output.map(o => o.image_url) });
+    setEntry(s, sink, entry, { status, output: text ? clip(output, 60000) : '', images: text ? undefined : output.map(o => projects.storeImage(s.name, o.image_url)) });
     return output;
   };
   if (!args) return finish('Tool arguments were not valid JSON. Retry with valid JSON.', 'error');
@@ -379,12 +395,18 @@ export function listAgents() {
       const id = f.replace(/\.json$/, '');
       if (agents.has(id)) continue;
       const a = readJson(path.join(dir, f));
-      if (a) agents.set(id, { ...a, project: name, status: a.status === 'running' ? 'interrupted' : a.status });
+      if (a) agents.set(id, { ...agentPublic(a), project: name, status: a.status === 'running' ? 'interrupted' : a.status });
     }
   }
   return [...agents.values()].map(agentPublic).sort((x, y) => y.started - x.started);
 }
-export const getAgent = id => agents.get(id);
+// A finished agent's log and model context are read from its file when asked for, rather than held in memory.
+export function getAgent(id) {
+  const a = agents.get(id);
+  if (!a || a.log) return a;
+  const { log = [] } = readJson(agentFile(a), {});
+  return { ...a, log };
+}
 export function stopAgent(id) { agents.get(id)?.controller?.abort(); }
 
 export async function runSubagent(s, args, parentSignal) {
@@ -439,6 +461,8 @@ export async function runSubagent(s, args, parentSignal) {
     a.ended = Date.now();
     saveAgent(a);
     announce(a);
+    delete a.log;
+    delete a.items;
     return text;
   });
   a.work = work;
@@ -929,7 +953,7 @@ Reply with the pull request's URL.`, text);
 }
 
 function prompt(s, text, shown = text, images) {
-  const entry = addEntry(s, { type: 'user', text: shown, images, queued: s.running });
+  const entry = addEntry(s, { type: 'user', text: shown, images: images?.map(u => projects.storeImage(s.name, u)), queued: s.running });
   enqueue(s, { text, images, entry });
 }
 

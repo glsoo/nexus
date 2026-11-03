@@ -708,12 +708,14 @@ function askBox(e) {
       h('button', { class: 'btn small danger', onclick: () => reply({ decision: 'deny', message: why.value }) }, 'Deny')));
 }
 
+// Images in the log are files in the chat's .nexus/images ("images/<hash>.png"); older entries may still hold data URLs.
+const imageSrc = src => (/^images\/[a-f0-9]{32}\.\w+$/.test(src) ? `${P(S.project)}/${src}` : src);
 function renderEntry(e) {
   switch (e.type) {
     case 'user': {
       const rw = !e.queued && e.cp !== undefined && h('button', { class: 'icon-btn rw', 'aria-label': 'Rewind to this prompt', title: 'Rewind to here', onclick: () => rewindDialog(e) }, icon('undo'));
       const tag = e.injected && h('span', { class: 'itag', title: 'Your standing instructions from Prompts were added to this message' }, '+ injected');
-      return h('div', { class: `e user ${e.queued ? 'queued' : ''}` }, e.text, (e.images || []).map(src => h('img', { src, alt: 'Attachment' })), tag, rw);
+      return h('div', { class: `e user ${e.queued ? 'queued' : ''}` }, e.text, (e.images || []).map(src => h('img', { src: imageSrc(src), alt: 'Attachment' })), tag, rw);
     }
     case 'assistant': {
       const md = h('div', { class: 'md' });
@@ -739,7 +741,7 @@ function renderEntry(e) {
         const fill = () => {
           const args = toolArgs(e);
           if (args) d.append(args);
-          if (e.images) d.append(...e.images.map(src => h('img', { class: 'seen', src, alt: 'The image the agent looked at' })));
+          if (e.images) d.append(...e.images.map(src => h('img', { class: 'seen', src: imageSrc(src), alt: 'The image the agent looked at' })));
           else if (e.status === 'running' || e.output) d.append(h('div', { class: 'out live' }, e.output || ''));
         };
         if (d.open) fill(); else d.addEventListener('toggle', fill, { once: true });

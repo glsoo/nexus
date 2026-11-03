@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -146,6 +147,21 @@ export function trash(name) {
   fs.renameSync(projectDir(name), path.join(bin, `${name}-${Date.now()}`));
 }
 
+// Images in the chat log are files named by their content in .nexus/images, so the log keeps a short name,
+// saves and reconnects don't carry megabytes of base64, and the browser caches each image for good.
+// The model's own copy (items) keeps the data URL, since the API needs it; compaction drops those.
+const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+export const IMAGE_FILE = /^[a-f0-9]{32}\.(png|jpg|gif|webp)$/;
+export function storeImage(name, url) {
+  const m = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(url));
+  if (!m) return url; // a web link or anything else stays as it is
+  const data = Buffer.from(m[2], 'base64');
+  const file = `${createHash('sha256').update(data).digest('hex').slice(0, 32)}.${IMAGE_EXT[m[1]]}`;
+  const full = path.join(projectDir(name), '.nexus', 'images', file);
+  if (!fs.existsSync(full)) writeAtomic(full, data, 0o644);
+  return `images/${file}`;
+}
+
 export function load(name) {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(stateFile(name), 'utf8')); } catch (err) {
@@ -155,6 +171,8 @@ export function load(name) {
   const state = { ...blank(), ...saved };
   // Anything mid-flight when the server last stopped can never finish.
   for (const e of state.log) if (['running', 'awaiting'].includes(e.status)) e.status = 'interrupted';
+  // Chats saved before images became files move theirs out on the way in.
+  for (const e of state.log) if (e.images?.some(u => String(u).startsWith('data:'))) e.images = e.images.map(u => storeImage(name, u));
   repairItems(state.items);
   return state;
 }

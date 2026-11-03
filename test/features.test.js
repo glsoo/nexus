@@ -472,6 +472,60 @@ test('a long chat sends its newest entries and pages back; closed chats are sear
   assert.ok(!fs.existsSync(bad) && fs.readdirSync(path.dirname(bad)).some(f => f.startsWith('conversation.json.broken-')), 'set aside, not overwritten by the next save');
 });
 
+test('images in the log are files named by content; idle chats past a handful are let go; finished subagents keep only a summary', { timeout: 30000 }, async () => {
+  projects.create('pics');
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  const url = `data:image/png;base64,${png.toString('base64')}`;
+  const ref = projects.storeImage('pics', url);
+  assert.match(ref, /^images\/[a-f0-9]{32}\.png$/);
+  assert.deepEqual(fs.readFileSync(path.join(projects.projectDir('pics'), '.nexus', ref)), png);
+  assert.equal(projects.storeImage('pics', url), ref, 'the same image is one file');
+  assert.equal(projects.storeImage('pics', 'https://example.com/a.png'), 'https://example.com/a.png');
+  const s = agent.getSession('pics');
+  const model = fakeModel();
+  try {
+    await agent.submit('pics', 'look at this', [url]);
+    await idle(s);
+  } finally { model.restore(); }
+  assert.deepEqual(s.state.log.find(e => e.type === 'user').images, [ref], 'the log keeps the file name');
+  assert.ok(JSON.stringify(model.sent[0].input).includes(url), 'the model still gets the image itself');
+  projects.create('oldpics');
+  const old = path.join(projects.projectDir('oldpics'), '.nexus', 'conversation.json');
+  fs.mkdirSync(path.dirname(old), { recursive: true });
+  fs.writeFileSync(old, JSON.stringify({ log: [{ id: 'u1', type: 'user', text: 'hi', images: [url] }] }));
+  assert.deepEqual(projects.load('oldpics').log[0].images, [projects.storeImage('oldpics', url)], 'older chats move their images out');
+
+  // sessions: the least recently used idle chats are let go past six, saved first, and load again as they were
+  const names = Array.from({ length: 8 }, (_, i) => `lru${i}`);
+  for (const n of names) projects.create(n);
+  const busy = agent.getSession('lru0');
+  busy.running = true;
+  agent.setOption(agent.getSession('lru1'), 'effort', 'high');
+  agent.getSession('lru1').state.log.push({ id: 'x1', type: 'system', text: 'unsaved note' });
+  for (const n of names.slice(2)) agent.getSession(n);
+  const loaded = agent.loadedSessions();
+  assert.ok(loaded.length <= 6 || loaded.every(n => n === 'lru0' || names.includes(n)), loaded.join(','));
+  assert.ok(loaded.includes('lru0'), 'a running chat is never let go');
+  assert.ok(!loaded.includes('lru1') && loaded.includes('lru7'), 'the least recently used idle one goes first');
+  const back = agent.getSession('lru1');
+  assert.equal(back.state.effort, 'high');
+  assert.equal(back.state.log.at(-1).text, 'unsaved note', 'it was saved before it was let go');
+  busy.running = false;
+
+  // a finished subagent's log is read from its file
+  projects.create('subs');
+  const sub = agent.getSession('subs');
+  agent.setOption(sub, 'mode', 'bypass');
+  const m2 = fakeModel(n => (n === 1 ? ['Task', { description: 'helper', prompt: 'look around' }] : n === 2 ? ['Glob', { pattern: '*' }] : null));
+  try {
+    await agent.submit('subs', 'delegate');
+    await idle(sub, 15000);
+  } finally { m2.restore(); }
+  const done = agent.agents.size && [...agent.agents.values()].find(a => a.project === 'subs');
+  assert.ok(done && done.status === 'completed' && !done.log && !done.items, 'memory keeps only the summary');
+  assert.ok(agent.getAgent(done.id).log.length > 0, 'the log comes back from its file');
+});
+
 test('/create-agent asks for a description, then hands the model the format and where to write it', async () => {
   projects.create('maker');
   const s = agent.getSession('maker');
@@ -805,7 +859,9 @@ test('images the agent looks at show up in its tool entry', async () => {
     await idle(s);
   } finally { model.restore(); }
   const read = s.state.log.find(e => e.type === 'tool' && e.name === 'Read');
-  assert.deepEqual(read.images, [`data:image/png;base64,${png.toString('base64')}`]);
+  assert.equal(read.images.length, 1);
+  assert.match(read.images[0], /^images\/[a-f0-9]{32}\.png$/, 'kept as a file, not base64 in the log');
+  assert.deepEqual(fs.readFileSync(path.join(projects.projectDir('looks'), '.nexus', read.images[0])), png);
   assert.equal(read.output, '');
 });
 
