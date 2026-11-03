@@ -123,7 +123,7 @@ route('GET', '/api/projects/:name/tree', ({ p, q }) => {
     .map(d => ({ name: d.name, dir: d.isDirectory() }))
     .sort((a, b) => b.dir - a.dir || a.name.localeCompare(b.name));
 });
-route('GET', '/api/projects/:name/files', ({ p, q }) => findFiles(projectPath(p.name), q.get('q') || ''));
+route('GET', '/api/projects/:name/files', ({ p, q }) => findFiles(projectPath(p.name), q.get('q') || '', agent.folders(p.name).dirs));
 route('GET', '/api/projects/:name/file', ({ p, q }) => {
   const file = projectPath(p.name, q.get('path'));
   const { size } = fs.statSync(file);
@@ -422,7 +422,7 @@ async function handle(req, res) {
     serveStatic(res, path.join(NM, file), true);
     return;
   }
-  const rel = { '/app.js': 'app.js', '/sw.js': 'sw.js', '/style.css': 'style.css', '/icon.svg': 'icon.svg', '/icon-180.png': 'icon-180.png', '/manifest.webmanifest': 'manifest.webmanifest' }[url.pathname] || 'index.html';
+  const rel = { '/app.js': 'app.js', '/sw.js': 'sw.js', '/hljs-worker.js': 'hljs-worker.js', '/style.css': 'style.css', '/icon.svg': 'icon.svg', '/icon-180.png': 'icon-180.png', '/manifest.webmanifest': 'manifest.webmanifest' }[url.pathname] || 'index.html';
   if (rel !== 'index.html') return serveStatic(res, path.join(PUBLIC, rel));
   // Cloudflare gives static files a 4h browser TTL whatever we send, so each build needs its own URLs.
   const html = fs.readFileSync(path.join(PUBLIC, rel), 'utf8').replace(/"\/(app\.js|style\.css)"/g, `"/$1?v=${BUILD}"`);

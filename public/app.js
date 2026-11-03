@@ -478,13 +478,14 @@ function onEvent(m) {
       const i = S.state.log.findIndex(x => x.id === m.entry.id);
       if (i >= 0) S.state.log[i] = m.entry; else S.state.log.push(m.entry);
       upsertEntry(m.entry);
+      if (m.entry.type === 'tool' && !['running', 'awaiting'].includes(m.entry.status)) filesChanged();
       break;
     }
     case 'delta': delta(m); break;
     case 'status': {
       const was = S.state?.running;
       if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt, dirs: m.dirs });
-      if (was && !m.running) { finished(); refreshReview(); }
+      if (was && !m.running) { finished(); refreshReview(); filesChanged(); }
       if (m.running && $review) $review.hidden = true;
       syncTitle();
       syncComposer();
@@ -1456,9 +1457,28 @@ const langOf = file => {
   const base = file.split(/[\\/]/).pop().toLowerCase(), ext = base.includes('.') ? base.split('.').pop() : base;
   return [EXT_LANG[ext], ext, base].find(l => l && hljs.getLanguage(l)) || null;
 };
+// Big files are colored by a worker, since highlighting takes about a millisecond per KB and would stall typing.
+const SMALL = 30_000;
+let hlWorker = null, hlSeq = 0;
+const highlightAway = (text, lang) => new Promise(resolve => {
+  hlWorker ||= new Worker('/hljs-worker.js');
+  const id = ++hlSeq;
+  const done = e => { if (e.data.id === id) { hlWorker.removeEventListener('message', done); resolve(e.data.html); } };
+  hlWorker.addEventListener('message', done);
+  hlWorker.postMessage({ id, text, lang });
+});
+// The Files tab looks again at its tree and open file whenever they may have changed:
+// after each tool call, at the end of a turn, and when you come back to the page from another app.
+let filesWatch = null, watchTimer = 0;
+const filesChanged = () => { clearTimeout(watchTimer); watchTimer = setTimeout(() => filesWatch?.(), 300); };
+addEventListener('focus', filesChanged);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) filesChanged(); });
+
 let pendingOpen = null, current = null;
 function filesView(view) {
   current = null;
+  const expanded = new Set();
+  let loaded = '', disk = ''; // the open file as last loaded or saved, and the newest version seen on disk
   const tree = h('div', { class: 'tree', 'aria-label': 'Project files' });
   const pathEl = h('span', { class: 'path muted' }, 'Select a file');
   const langEl = h('span', { class: 'small muted' });
@@ -1466,23 +1486,43 @@ function filesView(view) {
   // so typing, undo, selection and phone keyboards all stay the browser's own.
   const code = h('code', { class: 'hljs' }), nums = h('div', { class: 'nums' });
   const layer = h('pre', { class: 'hl', 'aria-hidden': 'true' }, code);
-  let lines = 0, frame = 0;
+  let lines = 0, frame = 0, slow = 0;
   const sync = () => {
     layer.style.transform = `translate(${-area.scrollLeft}px, ${-area.scrollTop}px)`;
     nums.style.transform = `translateY(${-area.scrollTop}px)`;
   };
-  const paint = () => {
+  // wait: how long a big file's colors hold off, so they come once typing pauses rather than on every key.
+  const paint = (wait = 600) => {
     frame = 0;
-    const text = area.value, lang = current && text.length < 300_000 ? langOf(current) : null;
+    clearTimeout(slow);
+    const text = area.value, file = current, lang = file ? langOf(file) : null;
     // The copy ends with a newline so a last empty line takes up room, as it does in the textarea.
-    if (lang) code.innerHTML = `${hljs.highlight(text, { language: lang, ignoreIllegals: true }).value}\n`;
-    else code.textContent = `${text}\n`;
+    if (lang && text.length < SMALL) code.innerHTML = `${hljs.highlight(text, { language: lang, ignoreIllegals: true }).value}\n`;
+    else {
+      code.textContent = `${text}\n`;
+      if (lang) slow = setTimeout(async () => { const html = await highlightAway(text, lang); if (area.value === text && current === file) code.innerHTML = `${html}\n`; }, wait);
+    }
     langEl.textContent = lang ? hljs.getLanguage(lang).name : '';
     const n = text.split('\n').length;
     if (n !== lines) { lines = n; nums.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); }
     sync();
   };
-  const changed = () => { saveBtn.disabled = false; frame ||= requestAnimationFrame(paint); };
+  const changed = () => { saveBtn.disabled = false; frame ||= requestAnimationFrame(() => paint()); };
+  // New text from disk, keeping your place in the file.
+  const setText = text => {
+    const { scrollTop, scrollLeft, selectionStart, selectionEnd } = area;
+    area.value = loaded = disk = text;
+    area.setSelectionRange(Math.min(selectionStart, text.length), Math.min(selectionEnd, text.length));
+    saveBtn.disabled = true;
+    banner.hidden = true;
+    paint(0);
+    area.scrollTop = scrollTop;
+    area.scrollLeft = scrollLeft;
+    sync();
+  };
+  const banner = h('div', { class: 'ondisk', hidden: true, role: 'status' }, h('span', { class: 'grow' }, 'This file changed on disk while you were editing it.'),
+    h('button', { class: 'btn small', type: 'button', onclick: () => setText(disk) }, 'Load the new version'),
+    h('button', { class: 'btn small', type: 'button', onclick: () => { loaded = disk; banner.hidden = true; } }, 'Keep mine'));
   const area = h('textarea', { spellcheck: false, autocapitalize: 'off', autocomplete: 'off', disabled: true, 'aria-label': 'File contents', wrap: 'off', oninput: changed, onscroll: sync,
     onkeydown: e => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
@@ -1492,7 +1532,9 @@ function filesView(view) {
   const save = guard(async () => {
     if (!current) return;
     await api('PUT', `${P(S.project)}/file`, { path: current, content: area.value });
+    loaded = disk = area.value;
     saveBtn.disabled = true;
+    banner.hidden = true;
     toast('Saved.');
   });
   const newBtn = h('button', { class: 'btn small', onclick: () => newFile(open) }, 'New file');
@@ -1510,54 +1552,68 @@ function filesView(view) {
   const open = guard(async rel => {
     if (!saveBtn.disabled && !await confirmBox('Discard unsaved changes?', `${current} has changes that aren't saved.`, 'Discard', 'danger')) return;
     try {
-      const { content } = await api('GET', `${P(S.project)}/file?path=${encodeURIComponent(rel)}`);
-      area.value = content;
-      area.disabled = false;
+      area.value = (await api('GET', `${P(S.project)}/file?path=${encodeURIComponent(rel)}`)).content;
     } catch (e) {
       // A missing file opens empty, ready to be created on save.
       if (!/no such file/i.test(e.message)) throw e;
-      area.value = ''; area.disabled = false;
+      area.value = '';
     }
+    area.disabled = false;
+    loaded = disk = area.value;
+    banner.hidden = true;
     current = rel; pathEl.textContent = rel; pathEl.classList.remove('muted'); saveBtn.disabled = true; askBtn.disabled = false;
-    paint();
+    paint(0);
     area.scrollTop = area.scrollLeft = 0;
+    sync();
     tree.querySelectorAll('.on').forEach(b => b.classList.remove('on'));
     tree.querySelector(`[data-path="${CSS.escape(rel)}"]`)?.classList.add('on');
   });
-  // Folders added to the chat come after the project's own files, by full path.
-  const folder = (full, label) => {
+  // A folder in the tree. Folders you opened open again when the tree is listed anew.
+  const branch = (full, label, title) => {
     const sub = h('ul', { hidden: true });
-    const btn = h('button', { class: 'd', title: full, 'aria-expanded': 'false', onclick: guard(async () => {
+    const btn = h('button', { class: 'd', title, 'aria-expanded': 'false', onclick: guard(async () => {
       sub.hidden = !sub.hidden;
       btn.setAttribute('aria-expanded', String(!sub.hidden));
-      if (!sub.hidden && !sub.children.length) await list(full, sub);
+      if (sub.hidden) expanded.delete(full);
+      else { expanded.add(full); await list(full, sub); }
     }) }, label);
     btn.dataset.path = full;
-    return h('li', {}, btn, sub);
+    const reopen = () => expanded.has(full) && (sub.hidden = false, btn.setAttribute('aria-expanded', 'true'), list(full, sub));
+    return [h('li', {}, btn, sub), reopen];
   };
   async function list(rel, into) {
     // Asked of the server, since a page opened straight on this tab may not have the chat's state yet.
     const [items, dirs] = await Promise.all([api('GET', `${P(S.project)}/tree?path=${encodeURIComponent(rel)}`), rel === '.' ? api('GET', `${P(S.project)}/folders`).then(r => r.dirs) : []]);
-    const extra = dirs.map(d => folder(d, `${d.split(/[\\/]/).pop()}/ (added)`));
-    if (rel === '.' && !items.length && !extra.length) { into.replaceChildren(h('li', { class: 'muted', style: 'padding:4px 6px' }, 'Empty folder')); return; }
+    if (rel === '.' && !items.length && !dirs.length) { into.replaceChildren(h('li', { class: 'muted', style: 'padding:4px 6px' }, 'Empty folder')); return; }
     const sep = /^[a-zA-Z]:\\|^\\\\/.test(rel) ? '\\' : '/'; // a Windows path in an added folder keeps its own separator
+    const reopen = [];
+    const folder = (...args) => { const [li, again] = branch(...args); reopen.push(again); return li; };
     into.replaceChildren(...items.map(it => {
       const full = rel === '.' ? it.name : `${rel}${sep}${it.name}`;
-      const sub = h('ul', { hidden: true });
-      const btn = h('button', { class: it.dir ? 'd' : '', onclick: guard(async () => {
-        if (!it.dir) return open(full);
-        sub.hidden = !sub.hidden;
-        btn.setAttribute('aria-expanded', String(!sub.hidden));
-        if (!sub.hidden && !sub.children.length) await list(full, sub);
-      }) }, it.dir ? `${it.name}/` : it.name);
+      if (it.dir) return folder(full, `${it.name}/`);
+      const btn = h('button', { class: full === current ? 'on' : '', onclick: () => open(full) }, it.name);
       btn.dataset.path = full;
-      return h('li', {}, btn, it.dir ? sub : null);
-    }), ...extra);
+      return h('li', {}, btn);
+    }), ...dirs.map(d => folder(d, `${d.split(/[\\/]/).pop()}/ (added)`, d)));
+    await Promise.all(reopen.map(again => again()));
   }
   const root = h('ul');
   tree.append(root);
-  view.append(h('div', { class: 'files' }, tree, h('div', { class: 'editor' }, h('div', { class: 'ebar' }, pathEl, langEl, askBtn, newBtn, saveBtn),
+  view.append(h('div', { class: 'files' }, tree, h('div', { class: 'editor' }, h('div', { class: 'ebar' }, pathEl, langEl, askBtn, newBtn, saveBtn), banner,
     h('div', { class: 'code' }, h('div', { class: 'gutter', 'aria-hidden': 'true' }, nums), h('div', { class: 'pane' }, layer, area)))));
+  filesWatch = guard(async () => {
+    if (!view.isConnected) return;
+    const top = tree.scrollTop;
+    await list('.', root);
+    tree.scrollTop = top;
+    if (!current) return;
+    const now = await api('GET', `${P(S.project)}/file?path=${encodeURIComponent(current)}`).then(r => r.content, () => null);
+    if (now === null || now === disk || !view.isConnected) return; // gone or unreadable: the editor keeps what it has
+    disk = now;
+    if (now === loaded) banner.hidden = true;
+    else if (saveBtn.disabled) setText(now);
+    else banner.hidden = false;
+  });
   guard(list)('.', root);
   if (pendingOpen) { open(pendingOpen); pendingOpen = null; }
 }

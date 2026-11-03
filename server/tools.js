@@ -163,12 +163,14 @@ export async function findAIComments(cwd) {
 }
 
 // For @-mentions: project files whose name starts with q, then whose name or path contains it, shortest first.
-export async function findFiles(cwd, q) {
+// dirs: other folders in the chat. Their files come back as full paths, ranked by the path inside their folder.
+export async function findFiles(cwd, q, dirs = []) {
   const t = q.toLowerCase();
   const rank = f => { const l = f.toLowerCase(), name = l.slice(l.lastIndexOf('/') + 1); return name.startsWith(t) ? 0 : name.includes(t) ? 1 : l.includes(t) ? 2 : 3; };
-  return (await rg(['--files', '--hidden', '--no-messages', '-g', '!.git', '-g', '!.nexus', '-g', '!node_modules'], cwd))
-    .split('\n').filter(Boolean).map(f => f.replaceAll('\\', '/')).map(f => [rank(f), f]).filter(([r]) => r < 3)
-    .sort((a, b) => a[0] - b[0] || a[1].length - b[1].length || a[1].localeCompare(b[1])).slice(0, 20).map(([, f]) => f);
+  const files = async (dir, prefix) => (await rg(['--files', '--hidden', '--no-messages', '-g', '!.git', '-g', '!.nexus', '-g', '!node_modules'], dir).catch(err => (prefix ? '' : Promise.reject(err))))
+    .split('\n').filter(Boolean).map(f => f.replaceAll('\\', '/')).map(f => [rank(f), prefix + f, f]);
+  const all = (await Promise.all([files(cwd, ''), ...dirs.map(d => files(d, `${d.replaceAll('\\', '/')}/`))])).flat();
+  return all.filter(([r]) => r < 3).sort((a, b) => a[0] - b[0] || a[2].length - b[2].length || a[1].localeCompare(b[1])).slice(0, 20).map(([, f]) => f);
 }
 
 async function glob({ pattern, path: dir = '.' }, { cwd, signal }) {

@@ -264,9 +264,16 @@ async function skillAt(repo, dir, source) {
     description: meta.description || '', url: `https://github.com/${repo}/tree/HEAD/${dir}`, installable: true };
 }
 
+// Every SKILL.md is its own download, so big collections are read 16 at a time. ponytail: capped at 400 skills per repo.
+async function batched(items, fn, size = 16) {
+  const out = [];
+  for (let i = 0; i < items.length; i += size) out.push(...await Promise.all(items.slice(i, i + size).map(fn)));
+  return out;
+}
+
 async function repoSkills(repo, under, terms, source) {
   const dirs = skillDirs(await repoFiles(repo)).filter(d => !under || d === under || d.startsWith(`${under}/`));
-  const found = await Promise.all(dirs.slice(0, 60).map(d => skillAt(repo, d, source)));
+  const found = await batched(dirs.slice(0, 400), d => skillAt(repo, d, source));
   return found.filter(i => matches(terms, i.name, i.description));
 }
 
@@ -303,7 +310,7 @@ async function skillItem(source, id) {
     repo = `${owner}/${name}`;
     const want = rest.join('/'), dirs = skillDirs(await repoFiles(repo));
     dir = dirs.find(d => d.split('/').pop() === want);
-    if (dir === undefined) dir = (await Promise.all(dirs.slice(0, 80).map(async d => [d, (await skillAt(repo, d)).name]))).find(([, n]) => n === want)?.[0];
+    if (dir === undefined) dir = (await batched(dirs.slice(0, 400), async d => [d, (await skillAt(repo, d)).name])).find(([, n]) => n === want)?.[0];
     if (dir === undefined) throw fail(404, `Couldn't find the skill ${want} in ${repo}.`);
   }
   if (!REPO.test(repo) || dir.split('/').includes('..')) throw fail(400, 'Bad skill location.');

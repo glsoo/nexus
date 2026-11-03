@@ -184,6 +184,8 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .editor { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .ebar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); min-height: 44px; }
 .ebar .path { font: 13px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.ondisk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px; border-bottom: 1px solid var(--line); background: #42200655; color: var(--warn); font-size: 13px; }
+.ondisk .grow { flex: 1; min-width: 160px; }
 .code { flex: 1; display: flex; min-height: 0; background: var(--bg); }
 .code .gutter { flex: none; min-width: 3.2em; overflow: hidden; border-right: 1px solid var(--line); color: #6b7280; text-align: right; user-select: none; }
 .code .nums { padding: 12px 10px 12px 8px; white-space: pre; font: 13px/1.55 var(--mono); }

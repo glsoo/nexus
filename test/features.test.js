@@ -346,6 +346,10 @@ test('a chat works in added folders: tools treat them as the project, and rewind
   assert.throws(() => agent.addFolder('multi', path.join(main, 'sub')), /overlaps/);
   assert.throws(() => agent.addFolder('multi', os.homedir()), /not a whole drive, your home folder/);
   assert.ok(agent.previewPrompt('multi').includes(real), 'the model is told about it');
+  const { findFiles } = await import('../server/tools.js');
+  fs.writeFileSync(path.join(main, 'app-notes.md'), 'x');
+  assert.deepEqual(await findFiles(main, 'app', [real]), [`${real.replaceAll('\\', '/')}/src/app.js`, 'app-notes.md'], '@ finds files in added folders, by full path, shortest path in its folder first');
+  assert.deepEqual(await findFiles(main, 'side', [real]), [], "a folder's own path doesn't count as a match");
 
   const st = { ...s.state, mode: 'acceptEdits', allow: [] };
   const file = path.join(api, 'src', 'app.js');
@@ -1158,6 +1162,7 @@ test('skills marketplace: lists from GitHub and skills.sh, installs a folder, re
     'acme/kit': [{ path: 'README.md', type: 'blob', size: 10 }, { path: 'skills/lint-fix/SKILL.md', type: 'blob', size: 80 }, { path: 'skills/lint-fix/scripts/run.sh', type: 'blob', size: 20 },
       { path: 'skills/lint-fix/assets/logo.png', type: 'blob', size: png.length }, { path: 'skills/other/SKILL.md', type: 'blob', size: 80 }],
     'acme/huge': [{ path: 'SKILL.md', type: 'blob', size: 80 }, ...Array.from({ length: 201 }, (_, i) => ({ path: `f${i}.txt`, type: 'blob', size: 1 }))],
+    'acme/many': Array.from({ length: 70 }, (_, i) => ({ path: `skills/s${i}/SKILL.md`, type: 'blob', size: 40 })),
   };
   const raw = {
     'acme/kit/skills/lint-fix/SKILL.md': md('lint-fix', 'Fixes lint errors'), 'acme/kit/skills/lint-fix/scripts/run.sh': 'echo hi\n',
@@ -1177,6 +1182,7 @@ test('skills marketplace: lists from GitHub and skills.sh, installs a folder, re
     assert.equal(parseFrontmatter(md('a', 'Folded')).meta.description, 'Folded on two lines.', 'YAML folded descriptions are read whole');
     const linked = await market.search('skills', 'anthropic', 'https://github.com/acme/kit/tree/main/skills');
     assert.deepEqual(linked.map(i => [i.id, i.name, i.description]), [['acme/kit:skills/lint-fix', 'lint-fix', 'Fixes lint errors on two lines.'], ['acme/kit:skills/other', 'other-skill', 'Something else on two lines.']]);
+    assert.equal((await market.search('skills', 'collections', 'https://github.com/acme/many')).length, 70, 'a big collection lists every skill');
     const found = await market.search('skills', 'skillssh', 'other');
     assert.deepEqual(found.map(i => [i.id, i.stats]), [['acme/kit/other-skill', '↓ 1.2k']], 'only skills that live on GitHub');
     await assert.rejects(market.search('skills', 'skillssh', 'o'), /at least two letters/);
