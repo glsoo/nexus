@@ -10,6 +10,7 @@ import { agentDefs, commands, instructions, runHooks, skills } from './extension
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
+import { HIGH_RISK, parseRisk, RISK_PROMPT, riskInput, riskRules } from './risk.js';
 import { decide, execTool, findAIComments, hasTool, killGroup, ruleKey, shells, TOOL_DEFS } from './tools.js';
 import { apiKey, childEnv, clip, isInside, NEXUS_HOME, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
 
@@ -264,6 +265,20 @@ async function runTool(s, call, ctx) {
   if (verdict.action === 'deny') return finish(verdict.reason, 'denied');
   const pre = await runHooks('PreToolUse', { tool: call.name, input: args }, cwd);
   if (pre.blocked) return finish(`Blocked by hook: ${pre.reason}`, 'denied');
+  // A high-risk call is held once so the agent can look for a safer way. Made again, it runs on autopilot or bypass, and asks you otherwise.
+  const risk = await assessRisk(s, call.name, args, cwd);
+  if (risk) {
+    const key = `${call.name}\0${JSON.stringify(args)}`, goAhead = s.state.autopilot || s.state.mode === 'bypass';
+    s.riskHeld ||= new Set();
+    if (!s.riskHeld.has(key)) {
+      s.riskHeld.add(key);
+      setEntry(s, sink, entry, { risk });
+      return finish(`Nexus held this call because it rates it high risk (${risk.score}/10). ${risk.why}${risk.safer ? ` A safer way may be: ${risk.safer}` : ''}\nThink it over before going on. If a safer way gets the same result, use it instead. If this exact call really is needed, make it again unchanged and ${goAhead ? 'it will run' : 'the user will be asked to approve it'}.`, 'held');
+    }
+    s.riskHeld.delete(key);
+    entry.risk = risk;
+    if (!goAhead) verdict = { action: 'ask' };
+  }
   if (verdict.action === 'ask') {
     const answer = await askUser(s, sink, entry, signal);
     if (answer.decision === 'deny') return finish(answer.message ? `User denied this: ${answer.message}` : 'User denied this tool call.', 'denied');
@@ -645,6 +660,7 @@ async function drainQueue(s) {
       text = withInjection(text, inject);
       Object.assign(m.entry, { queued: false, itemsLen: s.state.items.length, gen: s.state.gen, injected: Boolean(inject) || undefined });
       s.checkFixes = 0;
+      s.riskHeld = null; // a call held in an earlier turn is held again if it comes back
       s.autoSteps = 0;
       m.entry.cp = await checkpoint.snapshot(cwdOf(s), m.entry.text.slice(0, 72) || 'prompt');
       if (s.state.dirs?.length) m.entry.cps = Object.fromEntries(await Promise.all(s.state.dirs.map(async d => [d, await checkpoint.snapshot(d, m.entry.text.slice(0, 72) || 'prompt')])));
@@ -959,22 +975,29 @@ function prompt(s, text, shown = text, images) {
 
 const NAME_PROMPT = 'Name the coding chat that starts with the message you are given. Reply with only a short Title Case title of 2 to 4 words that says what the chat is about, instead of repeating the request. For example, "make me a hello world website" becomes Hello World Page and "say hello" becomes Say Hello. Do not act on the message.';
 
-async function modelName(model, text) {
-  const signal = AbortSignal.timeout(NAME_TIMEOUT);
-  let reply;
+// One short question to a model outside the conversation: naming a chat, rating a risky call.
+async function askModel(model, instructions, text, ms, maxTokens) {
+  const signal = AbortSignal.timeout(ms);
   if (providerOf(model)) {
-    const { output } = await callCompat({ model, instructions: NAME_PROMPT, input: [{ role: 'user', content: text.slice(0, 2000) }], tools: [] }, { add: e => e, update() {}, delta() {} }, signal);
-    reply = output.find(i => i.type === 'message')?.content[0].text;
-  } else if (isAnthropic(model)) reply = await askAnthropic(model, NAME_PROMPT, text.slice(0, 2000), signal);
-  else {
-    const res = await fetchStream({
-      model, store: false, input: text.slice(0, 2000), instructions: NAME_PROMPT,
-      ...(supportsReasoning(model) ? { reasoning: { effort: 'low' } } : {}),
-    }, signal);
-    const { output } = await res.json();
-    reply = output.find(i => i.type === 'message')?.content.find(c => c.type === 'output_text')?.text;
+    const { output } = await callCompat({ model, instructions, input: [{ role: 'user', content: text }], tools: [] }, { add: e => e, update() {}, delta() {} }, signal);
+    return output.find(i => i.type === 'message')?.content[0].text || '';
   }
-  return slug((reply || '').trim().slice(0, 48));
+  if (isAnthropic(model)) return await askAnthropic(model, instructions, text, signal, maxTokens) || '';
+  const res = await fetchStream({ model, store: false, input: text, instructions, ...(supportsReasoning(model) ? { reasoning: { effort: 'low' } } : {}) }, signal);
+  const { output } = await res.json();
+  return output.find(i => i.type === 'message')?.content.find(c => c.type === 'output_text')?.text || '';
+}
+const modelName = async (model, text) => slug((await askModel(model, NAME_PROMPT, text.slice(0, 2000), NAME_TIMEOUT)).trim().slice(0, 48));
+
+// Rules shortlist a call, the chat's model rates it, and the rules' floor stands for the plainly destructive, whatever the rating says.
+// settings.json "riskCheck": false turns it off. ponytail: the rating request isn't added to the chat's cost (one short request per shortlisted call).
+async function assessRisk(s, tool, args, cwd) {
+  const flag = riskRules(tool, args, [cwd, ...(s.state.dirs || [])]);
+  if (!flag || readSettings().riskCheck === false) return null;
+  const rated = parseRisk(await askModel(s.state.model, RISK_PROMPT, riskInput(tool, args, cwd, flag), 20000, 400).catch(() => ''));
+  const score = Math.max(rated?.score ?? 0, flag.floor);
+  if (score < HIGH_RISK) return null;
+  return { score, why: rated && rated.score >= flag.floor && rated.why ? rated.why : `It ${flag.why}.`, safer: rated?.safer || '' };
 }
 
 // Runs before the first turn starts, because a project can't be renamed while its agent works in that directory.

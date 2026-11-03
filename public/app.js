@@ -702,9 +702,11 @@ function askBox(e) {
   }
   const why = h('input', { class: 'field', placeholder: 'Tell the agent why, or what to do instead (optional)', 'aria-label': 'Reason for denying' });
   return h('div', { class: 'ask' }, e.agent ? h('div', { class: 'q small muted' }, `Requested by subagent: ${e.agent}`) : null,
+    // A risky call asks every time, so it has no "always allow".
+    e.risk && h('div', { class: 'q note' }, `High risk (${e.risk.score}/10): ${e.risk.why} The agent looked for a safer way and found none.`),
     h('div', { class: 'q' }, `Allow ${e.name}?`), toolArgs(e), why, h('div', { class: 'row' },
       h('button', { class: 'btn small primary', onclick: () => reply({ decision: 'allow' }) }, 'Allow once'),
-      h('button', { class: 'btn small', onclick: () => reply({ decision: 'always' }) }, e.name === 'Bash' ? 'Always allow this exact command' : 'Always allow'),
+      !e.risk && h('button', { class: 'btn small', onclick: () => reply({ decision: 'always' }) }, e.name === 'Bash' ? 'Always allow this exact command' : 'Always allow'),
       h('button', { class: 'btn small danger', onclick: () => reply({ decision: 'deny', message: why.value }) }, 'Deny')));
 }
 
@@ -729,10 +731,11 @@ function renderEntry(e) {
     }
     case 'tool': {
       const awaiting = e.status === 'awaiting';
-      const d = h('details', { class: 'e fold tool', open: awaiting || e.status === 'error' || e.direct || e.name === 'ExitPlanMode' || e.name === 'Screenshot' },
+      const d = h('details', { class: 'e fold tool', open: awaiting || e.status === 'error' || e.status === 'held' || e.direct || e.name === 'ExitPlanMode' || e.name === 'Screenshot' },
         h('summary', {}, h('span', { class: `dot ${e.status}`, title: e.status }),
           h('span', { class: 'tname' }, e.name), h('span', { class: 'targ muted' }, String(toolTarget(e.name, e.args || {})).split('\n')[0]),
           e.autopilot && h('span', { class: 'aptag', title: 'Autopilot answered this for you' }, 'autopilot'),
+          e.risk && h('span', { class: 'rtag', title: e.risk.why }, e.status === 'held' ? `held · risk ${e.risk.score}/10` : `risk ${e.risk.score}/10`),
           e.agent && h('span', { class: 'tagent muted' }, e.agent)));
       if (awaiting) d.append(askBox(e));
       else {
@@ -1940,6 +1943,7 @@ async function settingsPage(hamb) {
     notifyCard(),
     await spendCard(),
     autopilotCard(area),
+    riskCard(area),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact and Notification; a hook exiting with 2 blocks a tool call or prompt. MCP servers reconnect within seconds of saving.'),
     h('p', { class: 'small muted' }, 'Models: add any other OpenAI-compatible server under "providers", as in the example.'),
@@ -2004,6 +2008,22 @@ async function spendCard() {
     h('div', { class: 'card' }, h('div', { class: 'title' }, `About ${usd(sp.total)} across all chats`),
       h('div', { class: 'small muted' }, `Estimated from list prices, like each chat's meter.${sp.unpriced ? ` Not counting ${sp.unpriced} requests to models with no known price.` : ''}`),
       sp.chats.map(c => h('div', { class: 'rowline spend' }, h('button', { class: 'linkbtn grow', type: 'button', onclick: () => go(c.name, null, 'chat') }, pretty(c.name)), h('span', { class: 'mono' }, usd(c.cost)))))];
+}
+
+// On by default; settings.json "riskCheck": false turns it off.
+function riskCard(area) {
+  const box = h('input', { type: 'checkbox', id: 'riskon', 'aria-describedby': 'riskon-hint' });
+  guard(async () => { box.checked = JSON.parse((await api('GET', '/api/settings')).text).riskCheck !== false; })();
+  box.onchange = guard(async () => {
+    const { text } = await api('GET', '/api/settings');
+    const next = `${JSON.stringify({ ...JSON.parse(text), riskCheck: box.checked ? undefined : false }, null, 2)}\n`;
+    await api('PUT', '/api/settings', { text: next });
+    if (area.value === text.replace(/\r\n?/g, '\n')) area.value = next;
+    toast(box.checked ? 'Risky calls are checked first again.' : 'The risk check is off.');
+  });
+  return [h('h2', {}, 'Risk check'),
+    h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'riskon' }, box, h('span', { class: 'grow' }, 'Check risky commands and edits with the AI before they run')),
+      h('p', { class: 'small muted', id: 'riskon-hint' }, "Deleting folders, force-pushing, git resets, admin rights, deploys, database deletes and edits to secrets or CI files get a risk rating from the chat's model first. If it is high, the agent stops to look for a safer way. If there isn't one, you're asked, or on autopilot and in bypass it goes ahead. Each check is one short extra request, rarely needed."))];
 }
 
 // Writes one key of settings.json through the same endpoint as the editor below, keeping the editor in step.

@@ -122,6 +122,8 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .dot.awaiting { background: var(--warn); }
 .dot.error, .dot.denied { background: var(--danger); }
 .dot.interrupted { background: var(--line-strong); }
+.dot.held { background: var(--warn); }
+.rtag { font-size: 11px; color: var(--warn); border: 1px solid var(--warn); border-radius: 999px; padding: 0 6px; margin-left: 6px; white-space: nowrap; }
 .out { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; margin: 6px 0; max-height: 380px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 var(--mono); }
 .out .add, .diff .add { color: #86efac; background: #14532d55; display: block; }
 .out .del, .diff .del { color: #fca5a5; background: #7f1d1d55; display: block; }

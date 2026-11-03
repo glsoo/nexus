@@ -69,6 +69,7 @@
 | 🧑‍🦰 **Ponytail mode** | The [ponytail](https://github.com/DietrichGebert) "lazy senior dev" agents ship in the catalog: the smallest change that fully solves the task, plus review, audit and debt ledger agents. |
 | 📱 **Phone app and voice** | Install it from the browser's **Add to Home Screen** for a full-screen app. It has a layout built for small screens, a keyboard-aware composer, 44pt touch targets, and a mic button that turns speech into your message. |
 | ⏪ **Safe by default** | Permission modes, approval prompts, a checkpoint before every prompt so you can rewind files and conversation, an **Undo file** button for each file in the Changes tab, and a server that listens on localhost only. |
+| 🛡️ **Risk check** | Before a risky command or edit runs (deleting folders, force-pushing, git resets, admin rights, deploys, database deletes, secrets or CI files), the chat's model rates its risk. If it is high, the agent stops to look for a safer way first. If there isn't one, you're asked; on autopilot or in bypass it goes ahead. Turn it off in Settings. |
 | ✅ **Keep or undo each edit** | After a turn, the files it changed wait above the message box, like in VS Code: open a file to see its diff, then **Keep** or **Undo** it, or **Keep all** and **Undo all** at once. |
 | 🔁 **Self-improving** | Ask the built-in self-improvement bot for a feature and it edits Nexus itself and runs the tests. As a Linux service it also restarts, and rolls back if the server doesn't come back. |
 

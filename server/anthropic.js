@@ -165,7 +165,7 @@ export async function callAnthropic(params, sink, signal) {
   };
 }
 
-export async function askAnthropic(model, instructions, text, signal) {
-  const res = await post({ model, max_tokens: 64, system: instructions, messages: [{ role: 'user', content: text }] }, signal);
+export async function askAnthropic(model, instructions, text, signal, maxTokens = 64) {
+  const res = await post({ model, max_tokens: maxTokens, system: instructions, messages: [{ role: 'user', content: text }] }, signal);
   return (await res.json()).content.find(b => b.type === 'text')?.text;
 }
