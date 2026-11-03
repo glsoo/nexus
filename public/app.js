@@ -234,7 +234,7 @@ async function foldersDialog(name) {
     pick: async dir => { show(await api('POST', `${P(name)}/folders`, { path: dir })); toast('Added. The AI sees it from your next message.'); } });
   show(await api('GET', `${P(name)}/folders`));
   await dialog({ title: `Folders in ${pretty(name)}`, wide: true, body: h('div', {}, box,
-    h('p', { class: 'small muted' }, 'Add folders the AI should work in alongside this one, like a backend next to a frontend. The Files and Changes tabs show only the main folder.')),
+    h('p', { class: 'small muted' }, 'Add folders the AI should work in alongside this one, like a backend next to a frontend. They show in the Files and Changes tabs too.')),
   actions: [{ label: 'Add a folder', run: () => { add(); return false; } }, { label: 'Done', class: 'primary' }] });
   if (S.project === name && S.tab === 'chat' && !S.page) render(); // the new-chat screen lists the folders
 }
@@ -1491,11 +1491,24 @@ function filesView(view) {
     tree.querySelectorAll('.on').forEach(b => b.classList.remove('on'));
     tree.querySelector(`[data-path="${CSS.escape(rel)}"]`)?.classList.add('on');
   });
+  // Folders added to the chat come after the project's own files, by full path.
+  const folder = (full, label) => {
+    const sub = h('ul', { hidden: true });
+    const btn = h('button', { class: 'd', title: full, 'aria-expanded': 'false', onclick: guard(async () => {
+      sub.hidden = !sub.hidden;
+      btn.setAttribute('aria-expanded', String(!sub.hidden));
+      if (!sub.hidden && !sub.children.length) await list(full, sub);
+    }) }, label);
+    btn.dataset.path = full;
+    return h('li', {}, btn, sub);
+  };
   async function list(rel, into) {
     const items = await api('GET', `${P(S.project)}/tree?path=${encodeURIComponent(rel)}`);
-    if (rel === '.' && !items.length) { into.replaceChildren(h('li', { class: 'muted', style: 'padding:4px 6px' }, 'Empty folder')); return; }
+    const extra = rel === '.' ? (S.state?.dirs || []).map(d => folder(d, `${d.split(/[\\/]/).pop()}/ (added)`)) : [];
+    if (rel === '.' && !items.length && !extra.length) { into.replaceChildren(h('li', { class: 'muted', style: 'padding:4px 6px' }, 'Empty folder')); return; }
+    const sep = /^[a-zA-Z]:\\|^\\\\/.test(rel) ? '\\' : '/'; // a Windows path in an added folder keeps its own separator
     into.replaceChildren(...items.map(it => {
-      const full = rel === '.' ? it.name : `${rel}/${it.name}`;
+      const full = rel === '.' ? it.name : `${rel}${sep}${it.name}`;
       const sub = h('ul', { hidden: true });
       const btn = h('button', { class: it.dir ? 'd' : '', onclick: guard(async () => {
         if (!it.dir) return open(full);
@@ -1505,7 +1518,7 @@ function filesView(view) {
       }) }, it.dir ? `${it.name}/` : it.name);
       btn.dataset.path = full;
       return h('li', {}, btn, it.dir ? sub : null);
-    }));
+    }), ...extra);
   }
   const root = h('ul');
   tree.append(root);

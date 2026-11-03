@@ -77,10 +77,11 @@ function need(name) {
   if (!projects.exists(name)) throw fail(404, 'Project not found.');
   return name;
 }
+// A path in the project's folder, or in a folder added to its chat (those are given in full).
 function projectPath(name, rel = '.') {
-  const dir = projects.projectDir(need(name));
-  if (!isInside(dir, String(rel))) throw fail(403, 'That path is outside the project.');
-  return path.resolve(dir, String(rel));
+  const dir = projects.projectDir(need(name)), target = path.resolve(dir, String(rel));
+  if (![dir, ...agent.folders(name).dirs].some(d => isInside(d, target))) throw fail(403, 'That path is outside the project.');
+  return target;
 }
 
 // ---- REST ----
@@ -134,7 +135,7 @@ route('GET', '/api/projects/:name/file', ({ p, q }) => {
 route('PUT', '/api/projects/:name/file', async ({ req, p }) => {
   const { path: rel, content } = await body(req);
   const file = projectPath(p.name, rel);
-  if (isInside(path.join(projects.projectDir(p.name), '.nexus'), file)) throw fail(403, '.nexus is managed by Nexus.');
+  if ([projects.projectDir(p.name), ...agent.folders(p.name).dirs].some(d => isInside(path.join(d, '.nexus'), file))) throw fail(403, '.nexus is managed by Nexus.');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, String(content));
   return {};
@@ -142,9 +143,8 @@ route('PUT', '/api/projects/:name/file', async ({ req, p }) => {
 route('GET', '/api/projects/:name/changes', ({ p }) => agent.changes(need(p.name)));
 route('POST', '/api/projects/:name/changes/undo', async ({ req, p }) => {
   const raw = String((await body(req)).path || '');
-  const file = path.relative(projects.projectDir(p.name), projectPath(p.name, raw)).split(path.sep).join('/');
-  if (!raw || !file || /^\.nexus(\/|$)/.test(file)) throw fail(400, 'That file cannot be undone.');
-  await agent.undoFile(p.name, file);
+  if (!raw) throw fail(400, 'That file cannot be undone.');
+  await agent.undoFile(p.name, projectPath(p.name, raw));
   return {};
 });
 route('GET', '/api/projects/:name/export', ({ p }) => ({ markdown: agent.exportMarkdown(need(p.name)) }));

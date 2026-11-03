@@ -667,8 +667,8 @@ async function startTurn(s) {
 // /check: after a turn that changed files, run the user's command and hand failures back, a few rounds at most.
 const CHECK_FIXES = 3;
 async function autoCheck(s, signal) {
-  const cp = lastCheckpoint(s)?.cp;
-  if (!s.state.check || !cp || signal.aborted || !(await checkpoint.diff(cwdOf(s), cp))) return;
+  const last = lastCheckpoint(s);
+  if (!s.state.check || !last || signal.aborted || !(await diffSince(s, last))) return;
   const command = s.state.check;
   const entry = addEntry(s, { type: 'tool', name: 'Bash', args: { command }, status: 'running', output: '' });
   const output = await execTool('Bash', { command, timeout: 600000 }, { cwd: cwdOf(s), session: s, signal, progress: t => { entry.output += t; send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
@@ -1099,19 +1099,33 @@ export function exportMarkdown(name) {
 }
 
 const lastCheckpoint = s => [...s.state.log].reverse().find(e => e.type === 'user' && e.cp);
+// What changed since a prompt, in the main folder and in added folders. Their files are named by full path, so Undo file can find them.
+async function diffSince(s, last) {
+  const parts = [await checkpoint.diff(cwdOf(s), last.cp)];
+  for (const [d, cp] of Object.entries(last.cps || {})) if (cp && s.state.dirs?.includes(d)) parts.push(await checkpoint.diff(d, cp, d.split(path.sep).join('/')));
+  return parts.join('');
+}
+
 export async function changes(name) {
   const s = getSession(name);
   const last = lastCheckpoint(s);
   if (!last) return { since: null, diff: '' };
-  return { since: last.text.slice(0, 80), diff: await checkpoint.diff(cwdOf(s), last.cp) };
+  return { since: last.text.slice(0, 80), diff: await diffSince(s, last) };
 }
 
+// file: relative to the main folder, or a full path in it or in an added one.
 export async function undoFile(name, file) {
   const s = getSession(name);
+  file = path.resolve(cwdOf(s), file);
   if (s.running) throw projects.httpError(409, 'Stop the agent before undoing a file.');
   const last = lastCheckpoint(s);
   if (!last) throw projects.httpError(409, 'There is no checkpoint to go back to yet.');
-  await checkpoint.restoreFile(cwdOf(s), last.cp, file);
+  const root = [cwdOf(s), ...(s.state.dirs || [])].find(d => isInside(d, file));
+  const rel = root && path.relative(root, file).split(path.sep).join('/');
+  if (!rel || /^\.nexus(\/|$)/.test(rel)) throw projects.httpError(400, 'That file cannot be undone.');
+  const cp = root === cwdOf(s) ? last.cp : last.cps?.[root];
+  if (!cp) throw projects.httpError(409, 'That folder was added after your last prompt, so it has no checkpoint yet.');
+  await checkpoint.restoreFile(root, cp, rel);
 }
 
 // Finds what was said in any chat, newest first, plus chats whose name matches.

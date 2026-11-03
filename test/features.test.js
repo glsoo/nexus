@@ -330,6 +330,7 @@ test('any folder opens as a project: linked, not moved, and removing it leaves t
 
 test('a chat works in added folders: tools treat them as the project, and rewind restores them', async () => {
   const { decide, ruleKey } = await import('../server/tools.js');
+  const checkpoint = await import('../server/checkpoint.js');
   projects.create('multi');
   const main = projects.projectDir('multi');
   const api = path.join(tmp, 'side', 'api');
@@ -355,14 +356,33 @@ test('a chat works in added folders: tools treat them as the project, and rewind
   assert.equal(ruleKey('Edit', { file_path: file }, main, st.dirs), 'Edit:*');
 
   agent.setOption(s, 'mode', 'bypass');
+  await agent.submit('multi', '/check node -e "process.exit(0)"');
   const model = fakeModel(n => (n === 1 ? ['Write', { file_path: file, content: 'v2' }] : null));
   try {
     await agent.submit('multi', 'change the api');
     await idle(s);
   } finally { model.restore(); }
   assert.equal(fs.readFileSync(file, 'utf8'), 'v2');
-  const prompt = s.state.log.find(e => e.type === 'user');
+  assert.ok(s.state.log.some(e => e.type === 'tool' && e.name === 'Bash' && /process\.exit\(0\)/.test(e.args?.command || '')), '/check runs when only an added folder changed');
+  const prompt = s.state.log.find(e => e.type === 'user' && e.cp);
   assert.ok(prompt.cps?.[real], 'each prompt checkpoints added folders too');
+  const shown = `${real.split(path.sep).join('/')}/src/app.js`;
+  assert.ok((await agent.changes('multi')).diff.includes(`diff --git a/${shown} b/${shown}`), 'Changes names the added file in full');
+  await agent.undoFile('multi', file);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v1', 'Undo file works in an added folder');
+  fs.writeFileSync(path.join(api, 'lf.txt'), 'a\nb\n');
+  fs.writeFileSync(path.join(api, 'crlf.txt'), 'a\r\nb\r\n');
+  fs.writeFileSync(path.join(api, '.gitattributes'), '*.txt text eol=crlf\n');
+  const cp = await checkpoint.snapshot(api, 'eol');
+  fs.writeFileSync(path.join(api, 'lf.txt'), 'changed');
+  fs.writeFileSync(path.join(api, 'crlf.txt'), 'changed');
+  await checkpoint.restoreFile(api, cp, 'lf.txt');
+  await checkpoint.restoreFile(api, cp, 'crlf.txt');
+  assert.equal(fs.readFileSync(path.join(api, 'lf.txt'), 'utf8'), 'a\nb\n', 'line endings come back exactly, whatever git is set to convert');
+  assert.equal(fs.readFileSync(path.join(api, 'crlf.txt'), 'utf8'), 'a\r\nb\r\n');
+  fs.rmSync(path.join(api, '.gitattributes'));
+  await assert.rejects(agent.undoFile('multi', path.join(api, '.nexus', 'x')), /cannot be undone/);
+  fs.writeFileSync(file, 'v3');
   await agent.rewind('multi', prompt.id, { files: true, conversation: false });
   assert.equal(fs.readFileSync(file, 'utf8'), 'v1', 'rewind restores the added folder');
 
