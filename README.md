@@ -61,6 +61,7 @@
 | 🔔 **Push notifications** | Your phone hears when a chat finishes or waits for an approval, even with Nexus closed. This is standard Web Push, sent straight from your server. |
 | 🐙 **GitHub flow** | `/review` reviews your branch or a pull request, `/issue 42` fixes an issue with a test, and `/pr` commits, pushes and opens the pull request. All three use the GitHub CLI. |
 | 👀 **It can see** | A Screenshot tool lets the agent look at the page it just built in headless Edge or Chrome, at desktop or phone width. |
+| 🗂️ **Workspace viewer** | The Files tab shows every folder in the chat, and opens code with syntax colors and line numbers for the usual languages. You can still edit and save it there. |
 | 📎 **Point at code** | Type `@` to pick a project file, or select lines in the Files tab and press **Ask Nexus**. |
 | 🎭 **Swap agents per chat** | The **Agent** button next to the model turns a chat into any agent type, with its own instructions, tools and model. |
 | ✍️ **Create agents with AI** | Type `/create-agent reviews my PRs for security holes` and the AI writes a new agent type for you, tailored to your project. |

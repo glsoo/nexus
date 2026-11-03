@@ -184,7 +184,15 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .editor { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .ebar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); min-height: 44px; }
 .ebar .path { font: 13px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.editor textarea { flex: 1; background: var(--bg); border: 0; outline: 0; resize: none; padding: 12px; font: 13px/1.55 var(--mono); tab-size: 2; white-space: pre; overflow: auto; }
+.code { flex: 1; display: flex; min-height: 0; background: var(--bg); }
+.code .gutter { flex: none; min-width: 3.2em; overflow: hidden; border-right: 1px solid var(--line); color: #6b7280; text-align: right; user-select: none; }
+.code .nums { padding: 12px 10px 12px 8px; white-space: pre; font: 13px/1.55 var(--mono); }
+.code .pane { flex: 1; min-width: 0; position: relative; overflow: hidden; }
+.code .hl, .code textarea { position: absolute; inset: 0; margin: 0; padding: 12px; border: 0; font: 13px/1.55 var(--mono); tab-size: 2; white-space: pre; letter-spacing: 0; }
+.code .hl { pointer-events: none; overflow: visible; background: none; }
+.code .hl code { display: block; padding: 0; background: none; font: inherit; overflow: visible; }
+.code textarea { z-index: 1; width: 100%; height: 100%; color: transparent; caret-color: var(--fg); background: transparent; outline: 0; resize: none; overflow: auto; }
+.code textarea::selection { background: #3b82f666; color: transparent; }
 .diff { flex: 1; overflow: auto; padding: 12px 16px; font: 12.5px/1.5 var(--mono); white-space: pre; margin: 0; }
 .diff .hunk { color: var(--info); display: block; }
 .diff .head { color: var(--fg); font-weight: 600; display: block; margin-top: 8px; }
@@ -395,6 +403,7 @@ label.check input { width: 18px; height: 18px; accent-color: var(--accent); flex
 /* Every iPhone: under 16px iOS zooms the page on focus, and fingers need 44pt targets. */
 @media (pointer: coarse) {
   input, select, textarea { font-size: 16px !important; }
+  .code .hl, .code .nums { font-size: 16px; } /* the code view's colors and numbers follow its textarea */
   .icon-btn { width: 44px; height: 44px; }
   .btn, .btn.small, .tab, .cbar select, .mbtn, .seg button { min-height: 44px; }
   .newrow .btn { min-width: 44px; }

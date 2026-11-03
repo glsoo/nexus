@@ -1450,15 +1450,43 @@ const exportChat = guard(async name => {
 });
 
 // ---- files ----
+// The language highlight.js knows a file by: its extension, a few extra names, or its whole name (Makefile, Dockerfile).
+const EXT_LANG = { mjs: 'javascript', cjs: 'javascript', htm: 'xml', vue: 'xml', svelte: 'xml', toml: 'ini', jsonc: 'json', gitignore: 'bash' };
+const langOf = file => {
+  const base = file.split(/[\\/]/).pop().toLowerCase(), ext = base.includes('.') ? base.split('.').pop() : base;
+  return [EXT_LANG[ext], ext, base].find(l => l && hljs.getLanguage(l)) || null;
+};
 let pendingOpen = null, current = null;
 function filesView(view) {
   current = null;
   const tree = h('div', { class: 'tree', 'aria-label': 'Project files' });
   const pathEl = h('span', { class: 'path muted' }, 'Select a file');
-  const area = h('textarea', { spellcheck: false, disabled: true, 'aria-label': 'File contents', wrap: 'off', oninput: () => { saveBtn.disabled = false; },
+  const langEl = h('span', { class: 'small muted' });
+  // Code shows in color with line numbers: the textarea you type in is see-through, over a highlighted copy of its text,
+  // so typing, undo, selection and phone keyboards all stay the browser's own.
+  const code = h('code', { class: 'hljs' }), nums = h('div', { class: 'nums' });
+  const layer = h('pre', { class: 'hl', 'aria-hidden': 'true' }, code);
+  let lines = 0, frame = 0;
+  const sync = () => {
+    layer.style.transform = `translate(${-area.scrollLeft}px, ${-area.scrollTop}px)`;
+    nums.style.transform = `translateY(${-area.scrollTop}px)`;
+  };
+  const paint = () => {
+    frame = 0;
+    const text = area.value, lang = current && text.length < 300_000 ? langOf(current) : null;
+    // The copy ends with a newline so a last empty line takes up room, as it does in the textarea.
+    if (lang) code.innerHTML = `${hljs.highlight(text, { language: lang, ignoreIllegals: true }).value}\n`;
+    else code.textContent = `${text}\n`;
+    langEl.textContent = lang ? hljs.getLanguage(lang).name : '';
+    const n = text.split('\n').length;
+    if (n !== lines) { lines = n; nums.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); }
+    sync();
+  };
+  const changed = () => { saveBtn.disabled = false; frame ||= requestAnimationFrame(paint); };
+  const area = h('textarea', { spellcheck: false, autocapitalize: 'off', autocomplete: 'off', disabled: true, 'aria-label': 'File contents', wrap: 'off', oninput: changed, onscroll: sync,
     onkeydown: e => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
-      if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); area.setRangeText('  ', area.selectionStart, area.selectionEnd, 'end'); saveBtn.disabled = false; }
+      if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); area.setRangeText('  ', area.selectionStart, area.selectionEnd, 'end'); changed(); }
     } });
   const saveBtn = h('button', { class: 'btn small primary', disabled: true, onclick: () => save() }, 'Save');
   const save = guard(async () => {
@@ -1491,6 +1519,8 @@ function filesView(view) {
       area.value = ''; area.disabled = false;
     }
     current = rel; pathEl.textContent = rel; pathEl.classList.remove('muted'); saveBtn.disabled = true; askBtn.disabled = false;
+    paint();
+    area.scrollTop = area.scrollLeft = 0;
     tree.querySelectorAll('.on').forEach(b => b.classList.remove('on'));
     tree.querySelector(`[data-path="${CSS.escape(rel)}"]`)?.classList.add('on');
   });
@@ -1506,8 +1536,9 @@ function filesView(view) {
     return h('li', {}, btn, sub);
   };
   async function list(rel, into) {
-    const items = await api('GET', `${P(S.project)}/tree?path=${encodeURIComponent(rel)}`);
-    const extra = rel === '.' ? (S.state?.dirs || []).map(d => folder(d, `${d.split(/[\\/]/).pop()}/ (added)`)) : [];
+    // Asked of the server, since a page opened straight on this tab may not have the chat's state yet.
+    const [items, dirs] = await Promise.all([api('GET', `${P(S.project)}/tree?path=${encodeURIComponent(rel)}`), rel === '.' ? api('GET', `${P(S.project)}/folders`).then(r => r.dirs) : []]);
+    const extra = dirs.map(d => folder(d, `${d.split(/[\\/]/).pop()}/ (added)`));
     if (rel === '.' && !items.length && !extra.length) { into.replaceChildren(h('li', { class: 'muted', style: 'padding:4px 6px' }, 'Empty folder')); return; }
     const sep = /^[a-zA-Z]:\\|^\\\\/.test(rel) ? '\\' : '/'; // a Windows path in an added folder keeps its own separator
     into.replaceChildren(...items.map(it => {
@@ -1525,7 +1556,8 @@ function filesView(view) {
   }
   const root = h('ul');
   tree.append(root);
-  view.append(h('div', { class: 'files' }, tree, h('div', { class: 'editor' }, h('div', { class: 'ebar' }, pathEl, askBtn, newBtn, saveBtn), area)));
+  view.append(h('div', { class: 'files' }, tree, h('div', { class: 'editor' }, h('div', { class: 'ebar' }, pathEl, langEl, askBtn, newBtn, saveBtn),
+    h('div', { class: 'code' }, h('div', { class: 'gutter', 'aria-hidden': 'true' }, nums), h('div', { class: 'pane' }, layer, area)))));
   guard(list)('.', root);
   if (pendingOpen) { open(pendingOpen); pendingOpen = null; }
 }
