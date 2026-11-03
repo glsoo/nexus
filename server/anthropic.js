@@ -1,4 +1,4 @@
-import { postWithRetry, sseEvents } from './util.js';
+import { apiKey, postWithRetry, sseEvents } from './util.js';
 
 // Conversations stay in Responses format so a chat can switch provider at any time.
 // An Anthropic turn is stored twice: raw (thinking and signatures must replay verbatim) and as flagged Responses items.
@@ -9,11 +9,11 @@ const CACHE_MS = 3600_000;
 export const isAnthropic = model => !/^(gpt-|o\d)/.test(model);
 export const anthropicContext = model => cache.list.find(m => m.id === model)?.context;
 
-const headers = () => ({ 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' });
+const headers = () => ({ 'x-api-key': apiKey('ANTHROPIC_API_KEY'), 'anthropic-version': '2023-06-01', 'content-type': 'application/json' });
 
 let cache = { at: 0, list: [] };
 export async function anthropicModels() {
-  if (!process.env.ANTHROPIC_API_KEY || Date.now() - cache.at < CACHE_MS) return cache.list;
+  if (!apiKey('ANTHROPIC_API_KEY') || Date.now() - cache.at < CACHE_MS) return cache.list;
   const res = await fetch('https://api.anthropic.com/v1/models?limit=100', { headers: headers() });
   if (!res.ok) throw new Error(`Anthropic returned ${res.status} when listing models.`);
   const list = (await res.json()).data.map(m => ({

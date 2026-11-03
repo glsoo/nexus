@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isAnthropic } from './anthropic.js';
-import { postWithRetry, readSettings, sseEvents } from './util.js';
+import { apiKey, postWithRetry, readSettings, sseEvents } from './util.js';
 
 // Any OpenAI-compatible Chat Completions server: OpenRouter, Ollama, LM Studio, or one added under "providers" in settings.json.
 // Model ids are "<provider>:<model>", so "ollama:qwen3-coder:30b" is the model "qwen3-coder:30b" on Ollama.
@@ -17,7 +17,7 @@ const PRESETS = {
 
 export function providers() {
   const out = {};
-  for (const [id, p] of Object.entries(PRESETS)) out[id] = { ...p, apiKey: process.env[p.keyEnv] };
+  for (const [id, p] of Object.entries(PRESETS)) out[id] = { ...p, apiKey: p.keyEnv && apiKey(p.keyEnv) };
   const custom = readSettings().providers;
   for (const [id, c] of Object.entries(custom && typeof custom === 'object' ? custom : {})) {
     if (!/^[a-z][a-z0-9-]*$/.test(id) || !c || typeof c !== 'object') continue;

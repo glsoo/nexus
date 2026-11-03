@@ -293,6 +293,30 @@ test('any OpenAI-compatible server: its models are listed and a chat runs tools 
   }
 });
 
+test('API keys pasted in Settings are used, the environment wins, and child processes get neither', async () => {
+  const { apiKey, childEnv, keysPath, saveKey } = await import('../server/util.js');
+  const { providers } = await import('../server/compat.js');
+  const before = process.env.GROQ_API_KEY;
+  delete process.env.GROQ_API_KEY;
+  try {
+    assert.equal(apiKey('GROQ_API_KEY'), '');
+    saveKey('GROQ_API_KEY', '  gsk_file ');
+    assert.equal(apiKey('GROQ_API_KEY'), 'gsk_file');
+    assert.equal(providers().groq.apiKey, 'gsk_file', 'a pasted key turns its provider on');
+    if (process.platform !== 'win32') assert.equal(fs.statSync(keysPath()).mode & 0o777, 0o600);
+    assert.throws(() => saveKey('PATH', 'x'), /Unknown key/);
+    assert.throws(() => saveKey('GROQ_API_KEY', 'two words'), /doesn't look like an API key/);
+    process.env.GROQ_API_KEY = 'gsk_env';
+    assert.equal(apiKey('GROQ_API_KEY'), 'gsk_env');
+    assert.equal(childEnv().GROQ_API_KEY, undefined);
+    saveKey('GROQ_API_KEY', '');
+    assert.deepEqual(JSON.parse(fs.readFileSync(keysPath(), 'utf8')), {}, 'an empty value removes it');
+  } finally {
+    fs.rmSync(keysPath(), { force: true });
+    if (before === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = before;
+  }
+});
+
 test('/create-agent asks for a description, then hands the model the format and where to write it', async () => {
   projects.create('maker');
   const s = agent.getSession('maker');

@@ -89,7 +89,7 @@ cp .env.example .env
 npm run set-password -- <user> <password>   # writes the login to .env
 ```
 
-Add your API keys to `.env`:
+Add your API keys to `.env`, or skip this and paste them into **Settings → Models** once Nexus is running:
 
 ```sh
 OPENAI_API_KEY=sk-...
@@ -112,7 +112,7 @@ There is no build step. Never commit `.env`; it is already in `.gitignore`.
 
 ## 🧠 Models
 
-The model picker lists every model your keys unlock, grouped by provider, with prices and a **Free** tag.
+The model picker lists every model your keys unlock, grouped by provider, with prices and a **Free** tag. Paste a key into **Settings → Models**, and Nexus checks it and shows how many models it unlocks. Pasted keys are saved in `~/.nexus/keys.json`, readable only by you; a key in the environment wins over one pasted there.
 
 | Provider | How to turn it on |
 | --- | --- |

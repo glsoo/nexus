@@ -509,6 +509,11 @@ function hello() {
   const el = h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'), h('p', { class: 'mono' }, `~/projects/${S.project}`), starters,
     h('p', { class: 'small' }, 'Type a request. / runs a command, @ points at a file and ! runs a shell command.'));
   const project = S.project;
+  S.modelsReady?.then(() => {
+    if (!el.isConnected || project !== S.project || !S.state || S.models.some(m => m.id === S.state.model)) return;
+    el.append(h('p', { class: 'small note' }, S.models.length ? `${S.state.model} isn't one of the models your keys can use. ` : 'No model is connected yet. ',
+      S.models.length ? h('button', { class: 'linkbtn', type: 'button', onclick: modelPicker }, 'Pick a model') : h('button', { class: 'linkbtn', type: 'button', onclick: () => go(null, 'settings') }, 'Add an API key in Settings')));
+  });
   api('GET', `${P(project)}/files?q=`).catch(() => []).then(files => {
     if (project !== S.project || !el.isConnected) return;
     starters.replaceChildren(...STARTERS[files.length ? 'code' : 'empty'].map(([label, text]) => h('button', { class: 'starter', type: 'button', onclick: () => {
@@ -1652,6 +1657,7 @@ async function settingsPage(hamb) {
     render();
   });
   page.append(...[
+    await modelsCard(),
     selfBot(),
     await versionCard(),
     h('div', { class: 'rowline', style: 'margin:22px auto 10px' }, h('h2', { style: 'margin:0', class: 'grow' }, 'MCP servers'),
@@ -1666,7 +1672,7 @@ async function settingsPage(hamb) {
     autopilotCard(area),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact and Notification; a hook exiting with 2 blocks a tool call or prompt. MCP servers reconnect within seconds of saving.'),
-    h('p', { class: 'small muted' }, 'Models: Ollama and LM Studio appear in the model picker while they run on this computer. Set OPENROUTER_API_KEY (hundreds of models, some free), GEMINI_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY, MISTRAL_API_KEY or XAI_API_KEY in Nexus\'s environment, or add any OpenAI-compatible server under "providers", as in the example.'),
+    h('p', { class: 'small muted' }, 'Models: add any other OpenAI-compatible server under "providers", as in the example.'),
     area, err,
     h('div', { style: 'margin-top:8px' }, h('button', { class: 'btn primary', onclick: async () => {
       err.textContent = '';
@@ -1675,6 +1681,49 @@ async function settingsPage(hamb) {
     h('h2', {}, 'Example'),
     h('pre', { class: 'out' }, JSON.stringify({ autoCompactTokens: 300000, providers: { openrouter: { apiKey: 'sk-or-…' }, groq: { name: 'Groq', baseURL: 'https://api.groq.com/openai/v1', apiKey: 'gsk_…' } }, hooks: { PreToolUse: [{ matcher: 'Bash', command: 'jq -r .input.command >> ~/.nexus/bash.log' }] }, mcpServers: { memory: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] } } }, null, 2)),
   ].flat());
+}
+
+// Keys for the model providers, pasted here on a first run instead of into an environment file. The page only learns whether each is set.
+const KEY_INFO = {
+  ANTHROPIC_API_KEY: ['Anthropic', 'anthropic', 'Claude models', 'https://console.anthropic.com/settings/keys'],
+  OPENAI_API_KEY: ['OpenAI', 'openai', 'GPT models', 'https://platform.openai.com/api-keys'],
+  OPENROUTER_API_KEY: ['OpenRouter', 'openrouter', 'Hundreds of models from every lab, some free', 'https://openrouter.ai/keys'],
+  GEMINI_API_KEY: ['Google Gemini', 'gemini', 'Gemini models, with a free tier', 'https://aistudio.google.com/apikey'],
+  GROQ_API_KEY: ['Groq', 'groq', 'Fast open models', 'https://console.groq.com/keys'],
+  DEEPSEEK_API_KEY: ['DeepSeek', 'deepseek', 'Low-cost DeepSeek models', 'https://platform.deepseek.com/api_keys'],
+  MISTRAL_API_KEY: ['Mistral', 'mistral', 'Mistral and Codestral', 'https://console.mistral.ai/api-keys'],
+  XAI_API_KEY: ['xAI', 'xai', 'Grok models', 'https://console.x.ai'],
+};
+async function modelsCard() {
+  const [keys, models] = await Promise.all([guard(() => api('GET', '/api/keys'))(), api('GET', '/api/models').catch(() => [])]);
+  if (!keys) return [];
+  S.models = models;
+  const local = [...new Set(models.filter(m => /this computer/.test(m.providerName || '')).map(m => m.providerName.split(' · ')[0]))];
+  const row = k => {
+    const [label, provider, what, url] = KEY_INFO[k.name] || [k.name, '', '', ''];
+    const n = models.filter(m => m.provider === provider).length, id = uid();
+    const input = h('input', { class: 'field', id, type: 'password', autocomplete: 'off', spellcheck: false, placeholder: k.saved ? 'Paste a new key to replace it' : 'Paste an API key' });
+    const put = guard(async value => {
+      await api('PUT', `/api/keys/${k.name}`, { value });
+      S.models = await api('GET', '/api/models').catch(() => []);
+      syncComposer();
+      const got = S.models.filter(m => m.provider === provider).length;
+      toast(!value ? `Removed the ${label} key.` : got ? `${label} is connected: ${got} models are in the model picker.` : `Saved, but ${label} sent back no models. Check the key.`);
+      render();
+    });
+    const save = () => (input.value.trim() ? put(input.value.trim()) : toast('Paste a key first.'));
+    const status = k.env || k.saved ? (n ? `Connected · ${n} models` : 'Key set, but no models came back. Check it.') : 'Not set';
+    return h('div', { class: 'keyrow' },
+      h('div', { class: 'rowline' }, h('span', { class: `dot ${n ? 'done' : k.env || k.saved ? 'error' : 'idle'}`, 'aria-hidden': 'true' }),
+        h('div', { class: 'grow' }, h('label', { class: 'title', htmlFor: id }, label), h('div', { class: 'small muted' }, `${status} · ${what} · `, extLink('Get a key', url))),
+        k.saved && !k.env && h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove the ${label} key`, onclick: () => put('') }, 'Remove')),
+      k.env ? h('div', { class: 'small muted' }, `Set in Nexus's environment as ${k.name}.`)
+        : h('div', { class: 'rowline' }, input, h('button', { class: 'btn', type: 'button', onclick: save }, 'Save')));
+  };
+  return [h('h2', {}, 'Models'),
+    h('p', { class: 'small muted' }, models.length ? '' : 'Add a key for at least one provider to start chatting. ',
+      `Keys stay on this machine in ~/.nexus/keys.json, and the agent's shell commands never get them. Ollama and LM Studio models appear by themselves while they run on this computer${local.length ? ` (running now: ${local.join(', ')})` : ''}.`),
+    h('div', { class: 'card' }, keys.map(row))];
 }
 
 async function spendCard() {
@@ -1769,7 +1818,7 @@ async function boot() {
   else if (name && S.projects.some(p => p.name === name)) go(name, null, ['chat', 'files', 'changes', 'terminal'].includes(m[2]) ? m[2] : 'chat');
   else if (S.projects[0]) go(S.projects[0].name);
   else go(null);
-  api('GET', '/api/models').then(list => { S.models = list; syncComposer(); }).catch(() => {});
+  S.modelsReady = api('GET', '/api/models').then(list => { S.models = list; syncComposer(); }).catch(() => {});
 }
 
 // Let CSS fill the screen normally; only constrain it to the visual viewport for a keyboard.

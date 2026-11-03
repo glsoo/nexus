@@ -11,7 +11,7 @@ import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
 import { decide, execTool, findAIComments, hasTool, killGroup, ruleKey, shells, TOOL_DEFS } from './tools.js';
-import { childEnv, clip, NEXUS_HOME, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
+import { apiKey, childEnv, clip, NEXUS_HOME, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
 
 export const hub = new EventEmitter();
 hub.setMaxListeners(0);
@@ -94,7 +94,7 @@ export function requestBody({ model, effort, instructions: sys, input, tools, to
   };
 }
 
-const fetchStream = (body, signal) => postWithRetry('OpenAI', 'https://api.openai.com/v1/responses', { authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'content-type': 'application/json' }, body, signal);
+const fetchStream = (body, signal) => postWithRetry('OpenAI', 'https://api.openai.com/v1/responses', { authorization: `Bearer ${apiKey('OPENAI_API_KEY')}`, 'content-type': 'application/json' }, body, signal);
 
 // Each request's estimated cost rides on its usage, so conversations, subagents and compaction all count it.
 async function callModel(params, sink, signal) {

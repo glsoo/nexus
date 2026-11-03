@@ -197,6 +197,9 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .rowline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .rowline .grow { flex: 1; min-width: 180px; overflow-wrap: anywhere; }
 .rowline .title { font-weight: 600; }
+.keyrow + .keyrow { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
+.keyrow > .rowline + * { margin-top: 8px; }
+.keyrow input.field { flex: 1; width: auto; min-width: 0; }
 .small { font-size: 12.5px; }
 .form { display: grid; gap: 10px; }
 .form .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -334,6 +337,7 @@ label.check input { width: 18px; height: 18px; accent-color: var(--accent); flex
 .mlinks svg.i { width: 13px; height: 13px; }
 .mside > .mlinks { padding: 10px 16px calc(12px + var(--sab)); border-top: 1px solid var(--line); }
 .note { color: var(--warn); border-left: 2px solid var(--warn); padding-left: 10px; }
+#hello .note { border-left: 0; padding-left: 0; }
 @media (hover: hover) {
   .tile:hover { border-color: var(--line-strong); }
   .mchip:hover, .seg2 button:hover { color: var(--fg); }

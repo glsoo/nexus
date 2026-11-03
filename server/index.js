@@ -17,7 +17,7 @@ import * as projects from './projects.js';
 import { findFiles } from './tools.js';
 import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
 import * as push from './push.js';
-import { childEnv, isInside, NEXUS_HOME, presentSocket, readJson, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
+import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -249,6 +249,12 @@ route('POST', '/api/shells/:id/kill', ({ p }) => {
 });
 
 route('GET', '/api/spending', () => agent.spending());
+// API keys pasted into Settings. Only whether each one is set goes back to the page, never the key.
+route('GET', '/api/keys', () => {
+  const saved = readJson(keysPath(), {});
+  return KEY_NAMES.map(name => ({ name, env: Boolean(process.env[name]), saved: Boolean(saved[name]) }));
+});
+route('PUT', '/api/keys/:key', async ({ req, p }) => { saveKey(p.key, (await body(req)).value); return {}; });
 route('GET', '/api/settings', () => ({
   text: fs.existsSync(settingsPath()) ? fs.readFileSync(settingsPath(), 'utf8') : '{\n  "hooks": {},\n  "mcpServers": {}\n}\n',
   mcp: mcp.status(),
@@ -293,8 +299,9 @@ route('POST', '/api/self-improve', async ({ req }) => {
 
 let modelCache = { at: 0, list: [] };
 async function openaiModels() {
+  if (!apiKey('OPENAI_API_KEY')) return [];
   if (Date.now() - modelCache.at > 3600_000) {
-    const res = await fetch('https://api.openai.com/v1/models', { headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` } });
+    const res = await fetch('https://api.openai.com/v1/models', { headers: { authorization: `Bearer ${apiKey('OPENAI_API_KEY')}` } });
     if (!res.ok) throw fail(502, `OpenAI returned ${res.status} when listing models.`);
     const list = (await res.json()).data.map(m => m.id)
       .filter(id => /^(gpt-[4-9]|o\d)/.test(id) && !/audio|realtime|image|tts|transcribe|search|embed|moderation|-\d{4}-\d\d-\d\d$/.test(id))
