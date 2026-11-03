@@ -328,6 +328,31 @@ test('any folder opens as a project: linked, not moved, and removing it leaves t
   projects.trash('My-App-2');
 });
 
+test('a DashScope key finds its own region, and chats go there', async () => {
+  const { compatModels, callCompat } = await import('../server/compat.js');
+  const before = process.env.DASHSCOPE_API_KEY;
+  process.env.DASHSCOPE_API_KEY = 'sk-beijing';
+  const realFetch = globalThis.fetch, asked = [];
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    if (!u.includes('aliyuncs.com')) return realFetch(url, opts);
+    asked.push(u);
+    if (!u.startsWith('https://dashscope.aliyuncs.com/')) return new Response('{"error":{"message":"Incorrect API key provided."}}', { status: 401 });
+    if (u.endsWith('/models')) return Response.json({ data: [{ id: 'qwen3-coder-plus' }, { id: 'wanx2.1-t2i-turbo' }, { id: 'text-embedding-v4' }] });
+    return new Response('{"error":{"message":"stop here"}}', { status: 400 });
+  };
+  try {
+    const qwen = (await compatModels()).filter(m => m.provider === 'dashscope');
+    assert.deepEqual(qwen.map(m => m.id), ['dashscope:qwen3-coder-plus'], 'image and embedding models are left out');
+    assert.ok(asked.some(u => u.startsWith('https://dashscope-intl.')) && asked.some(u => u.startsWith('https://dashscope.aliyuncs.com/')), asked.join(' '));
+    await assert.rejects(callCompat({ model: 'dashscope:qwen3-coder-plus', instructions: '', input: [{ role: 'user', content: 'hi' }], tools: [] }, { delta() {}, item() {} }), /stop here/);
+    assert.equal(asked.at(-1), 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions');
+  } finally {
+    globalThis.fetch = realFetch;
+    if (before === undefined) delete process.env.DASHSCOPE_API_KEY; else process.env.DASHSCOPE_API_KEY = before;
+  }
+});
+
 test('API keys pasted in Settings are used, the environment wins, and child processes get neither', async () => {
   const { apiKey, childEnv, keysPath, saveKey } = await import('../server/util.js');
   const { providers } = await import('../server/compat.js');

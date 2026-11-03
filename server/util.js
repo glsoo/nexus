@@ -31,7 +31,7 @@ export function slug(text) {
 
 export const newId = (prefix = 'e') => `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
-export const KEY_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY', 'XAI_API_KEY'];
+export const KEY_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY', 'XAI_API_KEY', 'DASHSCOPE_API_KEY'];
 // Keys pasted into Settings live in their own file, so the settings.json editor never shows them. Nexus's environment wins over them.
 export const keysPath = () => path.join(NEXUS_HOME, 'keys.json');
 export const apiKey = name => process.env[name] || readJson(keysPath(), {})[name] || '';

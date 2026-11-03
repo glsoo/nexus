@@ -1734,6 +1734,7 @@ const KEY_INFO = {
   DEEPSEEK_API_KEY: ['DeepSeek', 'deepseek', 'Low-cost DeepSeek models', 'https://platform.deepseek.com/api_keys'],
   MISTRAL_API_KEY: ['Mistral', 'mistral', 'Mistral and Codestral', 'https://console.mistral.ai/api-keys'],
   XAI_API_KEY: ['xAI', 'xai', 'Grok models', 'https://console.x.ai'],
+  DASHSCOPE_API_KEY: ['Alibaba Qwen (DashScope)', 'dashscope', 'Qwen models, with a key from any region', 'https://www.alibabacloud.com/help/en/model-studio/get-api-key'],
 };
 async function modelsCard() {
   const [keys, models] = await Promise.all([guard(() => api('GET', '/api/keys'))(), api('GET', '/api/models').catch(() => [])]);

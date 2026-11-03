@@ -120,6 +120,7 @@ The model picker lists every model your keys unlock, grouped by provider, with p
 | OpenAI, Anthropic | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` |
 | OpenRouter (hundreds of models, some free) | `OPENROUTER_API_KEY` |
 | Google Gemini, Groq, DeepSeek, Mistral, xAI | `GEMINI_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY` |
+| Alibaba Qwen (DashScope / Model Studio) | `DASHSCOPE_API_KEY`. A key from any region works: Nexus finds the region that issued it. |
 | Ollama, LM Studio | Nothing: their models appear while they run on this computer |
 | Any OpenAI-compatible server | A `providers` entry in `~/.nexus/settings.json` |
 
