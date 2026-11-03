@@ -92,6 +92,13 @@ const route = (method, pattern, fn) => routes.push({ method, re: new RegExp(`^${
 
 route('GET', '/api/projects', () => projects.list().map(p => ({ ...p, busy: agent.isBusy(p.name), waiting: agent.isWaiting(p.name) })));
 route('GET', '/api/folders', ({ q }) => projects.folders(q.get('path')));
+route('POST', '/api/folders/pick', async ({ req, res }) => {
+  if (!projects.canPickNatively(req.headers)) throw fail(409, 'The Windows folder dialog opens only for a browser on this PC.');
+  const { title, button, start } = await body(req);
+  const pick = projects.pickFolder({ title: String(title || '').slice(0, 200), button: String(button || '').slice(0, 40), start: String(start || '').slice(0, 1000) });
+  res.on('close', () => { if (!res.writableEnded) pick.stop(); }); // the page stopped waiting
+  return { path: await pick.done };
+});
 route('POST', '/api/projects/open', async ({ req }) => ({ name: projects.open((await body(req)).path) }));
 route('GET', '/api/search', ({ q }) => agent.search(q.get('q') || ''));
 route('POST', '/api/projects', async ({ req }) => {
@@ -366,7 +373,7 @@ async function api(req, res, url) {
     res.writeHead(200, { 'content-type': IMAGE_TYPES[path.extname(file)], 'cache-control': 'private, max-age=31536000, immutable' }).end(data);
     return RAW;
   }
-  if (url.pathname === '/api/me') return { build: BUILD, user: process.env.NEXUS_USER, defaultModel: projects.DEFAULT_MODEL, autoCompact: readSettings().autoCompactTokens || 300000 };
+  if (url.pathname === '/api/me') return { build: BUILD, user: process.env.NEXUS_USER, defaultModel: projects.DEFAULT_MODEL, autoCompact: readSettings().autoCompactTokens || 300000, pickFolder: projects.canPickNatively(req.headers) };
   for (const r of routes) {
     if (r.method !== req.method) continue;
     const m = r.re.exec(url.pathname);

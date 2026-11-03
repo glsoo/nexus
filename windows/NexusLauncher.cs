@@ -22,10 +22,17 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        // The server runs "Nexus.exe --pick-folder" for the web app's Open a folder, when the browser is on this PC.
+        if (args.Length > 0 && args[0] == "--pick-folder")
+        {
+            try { Environment.ExitCode = FolderPicker.Run(args.Length > 1 ? args[1] : null, args.Length > 2 ? args[2] : null, args.Length > 3 ? args[3] : null); }
+            catch (Exception error) { Console.Error.Write(error.Message); Environment.ExitCode = 2; }
+            return;
+        }
         string root = Path.GetFullPath(Path.Combine(Application.StartupPath, ".."));
         string key;
         using (SHA256 hash = SHA256.Create())
@@ -43,6 +50,98 @@ internal static class Program
             try { Application.Run(new Launcher(root, key)); }
             catch (Exception error) { MessageBox.Show(error.Message, "Nexus", MessageBoxButtons.OK, MessageBoxIcon.Error); }
             finally { mutex.ReleaseMutex(); }
+        }
+    }
+}
+
+// Windows' own Select Folder dialog (the Explorer-style one). Prints the chosen folder as UTF-8 and returns 0, or returns 1 when cancelled.
+internal static class FolderPicker
+{
+    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")] private class FileOpenDialog { }
+
+    [ComImport, Guid("42f85136-db7e-439c-85f1-e4075d135fc8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IFileOpenDialog
+    {
+        [PreserveSig] int Show(IntPtr parent);
+        void SetFileTypes(uint count, IntPtr specs);
+        void SetFileTypeIndex(uint index);
+        void GetFileTypeIndex(out uint index);
+        void Advise(IntPtr events, out uint cookie);
+        void Unadvise(uint cookie);
+        void SetOptions(uint options);
+        void GetOptions(out uint options);
+        void SetDefaultFolder(IShellItem item);
+        void SetFolder(IShellItem item);
+        void GetFolder(out IShellItem item);
+        void GetCurrentSelection(out IShellItem item);
+        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name);
+        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title);
+        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void GetResult(out IShellItem item);
+        void AddPlace(IShellItem item, int where);
+        void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string extension);
+        void Close(int result);
+        void SetClientGuid(ref Guid guid);
+        void ClearClientData();
+        void SetFilter(IntPtr filter);
+    }
+
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItem
+    {
+        void BindToHandler(IntPtr context, ref Guid handler, ref Guid iid, out IntPtr result);
+        void GetParent(out IShellItem parent);
+        void GetDisplayName(uint kind, [MarshalAs(UnmanagedType.LPWStr)] out string name);
+        void GetAttributes(uint mask, out uint attributes);
+        void Compare(IShellItem other, uint hint, out int order);
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    private static extern void SHCreateItemFromParsingName(string path, IntPtr context, [MarshalAs(UnmanagedType.LPStruct)] Guid iid, out IShellItem item);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, IntPtr process);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint attach, uint to, bool on);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+
+    private const uint NoChangeDir = 0x8, PickFolders = 0x20, ForceFileSystem = 0x40, PathMustExist = 0x800, FileSystemPath = 0x80058000;
+    // Windows remembers the last folder chosen under this id, so the dialog opens where you left off.
+    private static readonly Guid Remember = new Guid("5d1b6f0e-6c0b-4c39-9a3e-0f7e1c2b9a41");
+
+    public static int Run(string title, string button, string start)
+    {
+        // The dialog's owner is a hidden topmost window that takes the foreground from the browser that asked, so the dialog shows on top of it.
+        using (var owner = new Form { ShowInTaskbar = false, TopMost = true, FormBorderStyle = FormBorderStyle.None, StartPosition = FormStartPosition.CenterScreen, Size = new Size(1, 1), Opacity = 0 })
+        {
+            owner.Show();
+            uint theirs = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero), ours = GetCurrentThreadId();
+            AttachThreadInput(theirs, ours, true);
+            SetForegroundWindow(owner.Handle);
+            AttachThreadInput(theirs, ours, false);
+            var dialog = (IFileOpenDialog)new FileOpenDialog();
+            uint options;
+            dialog.GetOptions(out options);
+            dialog.SetOptions(options | PickFolders | ForceFileSystem | PathMustExist | NoChangeDir);
+            Guid remember = Remember;
+            dialog.SetClientGuid(ref remember);
+            if (!string.IsNullOrEmpty(title)) dialog.SetTitle(title);
+            if (!string.IsNullOrEmpty(button)) dialog.SetOkButtonLabel(button);
+            if (!string.IsNullOrEmpty(start) && Directory.Exists(start))
+            {
+                IShellItem folder;
+                SHCreateItemFromParsingName(start, IntPtr.Zero, typeof(IShellItem).GUID, out folder);
+                dialog.SetFolder(folder);
+            }
+            if (dialog.Show(owner.Handle) != 0) return 1;
+            IShellItem picked;
+            dialog.GetResult(out picked);
+            string path;
+            picked.GetDisplayName(FileSystemPath, out path);
+            byte[] bytes = Encoding.UTF8.GetBytes(path);
+            using (Stream output = Console.OpenStandardOutput()) output.Write(bytes, 0, bytes.Length);
+            return 0;
         }
     }
 }

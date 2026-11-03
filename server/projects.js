@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { childEnv, HOME, isInside, PROJECTS, readJson, validName, writeAtomic } from './util.js';
 
@@ -63,6 +64,29 @@ export function excludeNexus(dir) {
   if (!fs.existsSync(path.join(dir, '.git', 'HEAD')) || readText(exclude).split(/\r?\n/).includes('.nexus/')) return;
   fs.mkdirSync(path.dirname(exclude), { recursive: true });
   fs.appendFileSync(exclude, '\n.nexus/\n');
+}
+
+// Windows' own Select Folder dialog, which the launcher shows (windows/Nexus.exe --pick-folder) for a browser on this same PC.
+const PICKER = fileURLToPath(new URL('../windows/Nexus.exe', import.meta.url));
+// The browser reached Nexus by its loopback name with no tunnel or proxy headers, so it is at this computer's screen.
+export const localBrowser = h => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(h.host || '')
+  && !['cf-connecting-ip', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip', 'forwarded'].some(k => h[k]);
+export const canPickNatively = headers => process.platform === 'win32' && localBrowser(headers) && fs.existsSync(PICKER);
+let picking = false;
+// done: the chosen folder, or null when cancelled. stop() closes the dialog, for when the page stops waiting.
+export function pickFolder({ title = '', button = '', start = '' } = {}, command = [PICKER]) {
+  if (picking) throw httpError(409, 'A Windows folder dialog is already open. Choose a folder in it or cancel it first.');
+  picking = true;
+  let child;
+  const done = new Promise((resolve, reject) => {
+    child = execFile(command[0], [...command.slice(1), '--pick-folder', title, button, start], { encoding: 'utf8', timeout: 15 * 60_000 }, (err, out, errOut) => {
+      picking = false;
+      if (!err) return resolve(out.trim() || null);
+      if (err.code === 1 || err.killed || err.signal) return resolve(null); // cancelled, or closed because the page stopped waiting
+      reject(httpError(500, `The Windows folder dialog failed: ${String(errOut || err.message).trim()}`));
+    });
+  });
+  return { done, stop: () => child.kill() };
 }
 
 // Opens a folder from anywhere as a project, or returns the project that already has it. The chat's files go in its .nexus.

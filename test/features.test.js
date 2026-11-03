@@ -328,6 +328,35 @@ test('any folder opens as a project: linked, not moved, and removing it leaves t
   projects.trash('My-App-2');
 });
 
+test('the Windows folder dialog: only for a browser on this PC, one at a time, and closed when the page stops waiting', async () => {
+  const local = { host: '127.0.0.1:7711' };
+  assert.equal(projects.localBrowser(local), true);
+  assert.equal(projects.localBrowser({ host: 'localhost:7711' }), true);
+  assert.equal(projects.localBrowser({ host: '[::1]:7711' }), true);
+  assert.equal(projects.localBrowser({ host: 'nexus.example.com' }), false, 'a tunnel keeps its own host name');
+  assert.equal(projects.localBrowser({ ...local, 'cf-connecting-ip': '203.0.113.9' }), false, 'or adds a header naming the real client');
+  assert.equal(projects.localBrowser({ ...local, 'x-forwarded-for': '203.0.113.9' }), false);
+  assert.equal(projects.localBrowser({}), false);
+
+  // A stand-in for Nexus.exe --pick-folder: it does what its title says, so nothing opens on the screen.
+  const fake = path.join(tmp, 'fake-picker.js');
+  fs.writeFileSync(fake, `const [, , flag, title, button, start] = process.argv;
+if (flag !== '--pick-folder') process.exit(9);
+if (title === 'pick') process.stdout.write(start + '\\\\Ünï folder');
+else if (title === 'cancel') process.exit(1);
+else if (title === 'wait') setTimeout(() => {}, 60000);
+else { process.stderr.write('no shell here'); process.exit(2); }`);
+  const fakeCommand = [process.execPath, fake];
+  assert.equal(await projects.pickFolder({ title: 'pick', button: 'Open', start: 'C:\\code' }, fakeCommand).done, 'C:\\code\\Ünï folder', 'the chosen folder, in UTF-8');
+  assert.equal(await projects.pickFolder({ title: 'cancel' }, fakeCommand).done, null, 'cancelled');
+  const open = projects.pickFolder({ title: 'wait' }, fakeCommand);
+  assert.throws(() => projects.pickFolder({ title: 'pick' }, fakeCommand), /already open/, 'one dialog at a time');
+  open.stop();
+  assert.equal(await open.done, null, 'closed when the page stops waiting');
+  await assert.rejects(projects.pickFolder({ title: 'broken' }, fakeCommand).done, /no shell here/);
+  if (process.platform !== 'win32') assert.equal(projects.canPickNatively(local), false, 'only on Windows');
+});
+
 test('a chat works in added folders: tools treat them as the project, and rewind restores them', async () => {
   const { decide, ruleKey } = await import('../server/tools.js');
   const checkpoint = await import('../server/checkpoint.js');

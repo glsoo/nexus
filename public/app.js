@@ -81,13 +81,15 @@ const usd = n => `$${(n || 0).toFixed(2)}`;
 const fmt = n => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? 'just now' : s < 3600 ? `${s / 60 | 0}m ago` : s < 86400 ? `${s / 3600 | 0}h ago` : `${s / 86400 | 0}d ago`; };
 
-function dialog({ title, body, wide, actions }) {
+// ref(shut): for a dialog that closes itself, such as one waiting on something else.
+function dialog({ title, body, wide, actions, ref }) {
   return new Promise(resolve => {
     const shut = value => {
       resolve(value);
       d.classList.add('closing');
       exit(d, { opacity: 0, transform: 'scale(.97)' }).then(() => d.close());
     };
+    ref?.(shut);
     const d = h('dialog', { class: wide ? 'wide' : '' }, h('h2', {}, title), body,
       h('div', { class: 'acts' }, actions.map(a => h('button', { class: `btn ${a.class || ''}`, type: 'button', onclick: async () => {
         if (a.run && (await a.run()) === false) return;
@@ -138,7 +140,7 @@ function shell() {
   $side = h('aside', { class: 'side' },
     h('div', { class: 'side-head' }, h('img', { src: '/icon.svg?v=purple', alt: '' }), 'Nexus'),
     h('div', { class: 'newrow' }, h('button', { class: 'btn new', onclick: guard(newProject) }, icon('plus'), 'New project'),
-      h('button', { class: 'btn', 'aria-label': 'Open a folder', title: 'Open a folder', onclick: () => folderDialog() }, icon('folder')),
+      h('button', { class: 'btn', 'aria-label': 'Open a folder', title: 'Open a folder', onclick: () => chooseFolder() }, icon('folder')),
       h('button', { class: 'btn', 'aria-label': 'Clone a git repository', title: 'Clone a git repository', onclick: cloneDialog }, icon('download'))),
     $find, $list,
     h('div', { class: 'side-foot' },
@@ -204,10 +206,7 @@ function folderDialog({ title = 'Open a folder', action = 'Open this folder', hi
     if (busy) return false;
     busy = true; err.textContent = '';
     try {
-      if (pick) { await pick(input.value.trim()); return true; }
-      const { name } = await api('POST', '/api/projects/open', { path: input.value.trim() });
-      await refreshProjects();
-      go(name, null, 'chat');
+      await (pick || openFolderAt)(input.value.trim());
       return true;
     } catch (e) { err.textContent = e.message; return false; } finally { busy = false; }
   };
@@ -217,6 +216,34 @@ function folderDialog({ title = 'Open a folder', action = 'Open this folder', hi
   actions: [{ label: 'Cancel' }, { label: action, class: 'primary', run }] });
   show(start);
   input.focus();
+}
+async function openFolderAt(dir) {
+  const { name } = await api('POST', '/api/projects/open', { path: dir });
+  await refreshProjects();
+  go(name, null, 'chat');
+}
+
+// With the browser on the Windows PC Nexus runs on, Windows' own Select Folder dialog; on a phone or another computer, the folder browser above.
+// While the Windows dialog is open, a small box here says where it is and offers the folder browser instead.
+async function chooseFolder(opts = {}) {
+  if (!S.me?.pickFolder) return folderDialog(opts);
+  const { title = 'Open a folder', button = 'Open', start = '', pick = openFolderAt } = opts;
+  const stop = new AbortController();
+  let shut;
+  dialog({ title, ref: s => { shut = s; }, body: h('p', { class: 'muted' }, "Choose a folder in the Windows window that opened. If you can't see it, it's in the taskbar."),
+    actions: [{ label: 'Browse here instead', value: 'here' }, { label: 'Cancel' }] })
+    .then(choice => { if (choice === 'done') return; stop.abort(); if (choice === 'here') folderDialog(opts); });
+  try {
+    const res = await fetch('/api/folders/pick', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: `${title} in Nexus`, button, start }), signal: stop.signal });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
+    shut('done');
+    if (json.path) await pick(json.path);
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    shut('done');
+    toast(e.message);
+  }
 }
 const projectDir = name => S.projects.find(p => p.name === name)?.dir;
 
@@ -231,7 +258,7 @@ async function foldersDialog(name) {
       ...dirs.map(d => h('div', { class: 'frow' }, icon('folder'), h('span', { class: 'grow mono' }, d),
         h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove ${d}`, onclick: guard(async () => show(await api('DELETE', `${P(name)}/folders`, { path: d }))) }, 'Remove'))));
   };
-  const add = () => folderDialog({ title: 'Add a folder', action: 'Add this folder', start: home,
+  const add = () => chooseFolder({ title: 'Add a folder', action: 'Add this folder', button: 'Add', start: home,
     hint: 'Type or paste a path and press Enter to go there. The AI can then read and edit this folder like the project, and rewinding a prompt rewinds it too. It keeps its rewind data in a .nexus folder inside it.',
     pick: async dir => { show(await api('POST', `${P(name)}/folders`, { path: dir })); toast('Added. The AI sees it from your next message.'); } });
   show(await api('GET', `${P(name)}/folders`));
@@ -367,7 +394,7 @@ function render() {
     return $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', {}, 'Nexus')),
       h('div', { class: 'empty' }, h('h2', {}, 'Start a project'), h('p', {}, 'Each conversation gets its own folder in ~/projects, or works in a folder you already have.'),
         h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: guard(newProject) }, icon('plus'), 'New project'),
-          h('button', { class: 'btn', onclick: () => folderDialog() }, icon('folder'), 'Open a folder'),
+          h('button', { class: 'btn', onclick: () => chooseFolder() }, icon('folder'), 'Open a folder'),
           h('button', { class: 'btn', onclick: cloneDialog }, icon('download'), 'Clone a repo'))));
   }
   const view = h('div', { class: 'view' });
