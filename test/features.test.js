@@ -385,6 +385,15 @@ test('a chat works in added folders: tools treat them as the project, and rewind
   assert.equal(fs.readFileSync(path.join(api, 'lf.txt'), 'utf8'), 'a\nb\n', 'line endings come back exactly, whatever git is set to convert');
   assert.equal(fs.readFileSync(path.join(api, 'crlf.txt'), 'utf8'), 'a\r\nb\r\n');
   fs.rmSync(path.join(api, '.gitattributes'));
+  // The same file reached through a link (as macOS reaches /var through /private/var): still one folder to approvals, and Undo file restores it
+  const link = path.join(tmp, 'sidelink');
+  fs.symlinkSync(path.join(tmp, 'side'), link, process.platform === 'win32' ? 'junction' : 'dir');
+  const viaLink = path.join(link, 'api', 'src', 'app.js');
+  assert.equal(decide(st, 'Edit', { file_path: viaLink }, main).action, 'allow');
+  fs.writeFileSync(file, 'v9');
+  await agent.undoFile('multi', viaLink);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v1', 'restored through the link, not deleted');
+  await assert.rejects(agent.undoFile('multi', path.join(tmp, 'side', 'other.txt')), /cannot be undone/, 'nothing outside the folders');
   await assert.rejects(agent.undoFile('multi', path.join(api, '.nexus', 'x')), /cannot be undone/);
   fs.writeFileSync(file, 'v3');
   await agent.rewind('multi', prompt.id, { files: true, conversation: false });

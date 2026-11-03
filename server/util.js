@@ -65,11 +65,13 @@ export function readJson(file, fallback) {
 }
 
 // realpath that also works for paths that don't exist yet (resolves the nearest existing ancestor).
+// The native one, like everywhere else paths are compared: it also expands Windows short names (RUNNER~1) and fixes letter case,
+// which the JS one leaves alone, so two spellings of one folder always compare equal.
 export function realish(p) {
   const rest = [];
   let cur = path.resolve(p);
   for (;;) {
-    try { return path.join(fs.realpathSync(cur), ...rest); } catch {
+    try { return path.join(fs.realpathSync.native(cur), ...rest); } catch {
       const up = path.dirname(cur);
       if (up === cur) return path.resolve(p);
       rest.unshift(path.basename(cur));

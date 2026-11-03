@@ -12,7 +12,7 @@ import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
 import { HIGH_RISK, parseRisk, RISK_PROMPT, riskInput, riskRules } from './risk.js';
 import { decide, execTool, findAIComments, hasTool, killGroup, ruleKey, shells, TOOL_DEFS } from './tools.js';
-import { apiKey, childEnv, clip, isInside, NEXUS_HOME, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
+import { apiKey, childEnv, clip, isInside, NEXUS_HOME, realish, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
 
 export const hub = new EventEmitter();
 hub.setMaxListeners(0);
@@ -1188,8 +1188,9 @@ export async function undoFile(name, file) {
   const last = lastCheckpoint(s);
   if (!last) throw projects.httpError(409, 'There is no checkpoint to go back to yet.');
   const root = [cwdOf(s), ...(s.state.dirs || [])].find(d => isInside(d, file));
-  const rel = root && path.relative(root, file).split(path.sep).join('/');
-  if (!rel || /^\.nexus(\/|$)/.test(rel)) throw projects.httpError(400, 'That file cannot be undone.');
+  // From real paths on both sides: a folder reached through a link (macOS /var is /private/var) would otherwise give ../ paths.
+  const rel = root && path.relative(realish(root), realish(file)).split(path.sep).join('/');
+  if (!rel || rel === '..' || rel.startsWith('../') || path.isAbsolute(rel) || /^\.nexus(\/|$)/.test(rel)) throw projects.httpError(400, 'That file cannot be undone.');
   const cp = root === cwdOf(s) ? last.cp : last.cps?.[root];
   if (!cp) throw projects.httpError(409, 'That folder was added after your last prompt, so it has no checkpoint yet.');
   await checkpoint.restoreFile(root, cp, rel);
