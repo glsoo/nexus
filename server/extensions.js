@@ -40,10 +40,12 @@ function mdFiles(dir) {
 // NEXUS_COMPAT=name also reads .name/{agents,skills,commands} and NAME.md, for folders shared with another tool.
 const compat = (root, sub) => process.env.NEXUS_COMPAT ? [path.join(root, `.${process.env.NEXUS_COMPAT}`, sub)] : [];
 const parseTools = s => s ? s.split(',').map(t => t.trim()).filter(Boolean) : null;
+// Official agent types that come with Nexus. Unlike the built-in subagent types a chat can work as one, and a user or project file of the same name replaces it.
+const SHIPPED_AGENTS = fileURLToPath(new URL('../agents', import.meta.url));
 
 export function agentDefs(cwd) {
   const defs = new Map(BUILTIN_AGENTS.map(a => [a.name, a]));
-  const scopes = [...compat(HOME, 'agents').map(d => ['user', d]), ['user', path.join(NEXUS_HOME, 'agents')],
+  const scopes = [['nexus', SHIPPED_AGENTS], ...compat(HOME, 'agents').map(d => ['user', d]), ['user', path.join(NEXUS_HOME, 'agents')],
     ...compat(cwd, 'agents').map(d => ['project', d]), ['project', path.join(cwd, '.nexus/agents')]];
   for (const [scope, dir] of scopes) for (const file of mdFiles(dir)) {
     const { meta, body } = parseFrontmatter(fs.readFileSync(file, 'utf8'));

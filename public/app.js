@@ -1293,6 +1293,7 @@ const projectForInstall = () => S.project || S.projects[0]?.name;
 const extLink = (label, url) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, label, icon('ext'));
 
 // ---- the chat's agent ----
+const AGENT_SCOPE = { nexus: 'Official', user: 'All projects', project: 'This project' };
 // Like the model picker: the default, every custom agent type, and ways to get more.
 async function agentPicker() {
   if (!S.project || !S.state) return toast('Open a project first.');
@@ -1306,7 +1307,7 @@ async function agentPicker() {
     const facts = def ? [def.description || 'No description', def.tools ? `tools: ${def.tools.join(', ')}` : '', def.model].filter(Boolean).join(' · ') : 'The built-in coding agent, with every tool.';
     return h('button', { class: `mrow${current ? ' current' : ''}`, type: 'button', 'aria-current': current ? 'true' : null, onclick: () => pick(def) },
       h('span', { class: 'mtext' },
-        h('span', { class: 'mname' }, def ? def.name : 'Nexus', !def && h('span', { class: 'mtag' }, 'Default'), def && h('span', { class: 'mtag dim' }, def.scope === 'user' ? 'All projects' : 'This project')),
+        h('span', { class: 'mname' }, def ? def.name : 'Nexus', !def && h('span', { class: 'mtag' }, 'Default'), def && h('span', { class: `mtag${def.scope === 'nexus' ? '' : ' dim'}` }, AGENT_SCOPE[def.scope])),
         h('span', { class: 'mfacts' }, facts)),
       current && icon('check'));
   };
@@ -1531,7 +1532,7 @@ async function installedItems(kind, q) {
   }
   const project = projectForInstall();
   const { agents } = project ? await api('GET', `${P(project)}/meta`) : { agents: [] };
-  return agents.filter(a => !a.builtin).map(a => ({ id: a.name, name: a.name, description: a.description, category: a.scope === 'user' ? 'All projects' : 'This project', def: a })).filter(match);
+  return agents.filter(a => !a.builtin).map(a => ({ id: a.name, name: a.name, description: a.description, category: AGENT_SCOPE[a.scope], def: a })).filter(match);
 }
 
 async function installedDetail(it, kind, back, reload) {
@@ -1573,7 +1574,7 @@ async function installedDetail(it, kind, back, reload) {
   return [...head, h('div', { class: 'small muted' }, `Tools: ${d.tools?.join(', ') || 'every tool'}${d.model ? ` · ${d.model}` : ''}`),
     h('details', { class: 'fold' }, h('summary', {}, 'Read its instructions', icon('down')), h('div', { class: 'out' }, d.prompt)),
     h('div', { class: 'acts' },
-      remove('This removes the agent type from Nexus folders. Types in other folders stay.', () => api('DELETE', `${P(project)}/agent-defs/${encodeURIComponent(d.name)}`)),
+      d.scope !== 'nexus' && remove('This removes the agent type from Nexus folders. Types in other folders stay.', () => api('DELETE', `${P(project)}/agent-defs/${encodeURIComponent(d.name)}`)),
       h('button', { class: 'btn', type: 'button', onclick: () => editDef(project, d) }, 'Edit'),
       S.project === project && S.state && h('button', { class: 'btn primary', type: 'button', onclick: use }, 'Use in this chat'))];
 }
@@ -2048,9 +2049,9 @@ async function fillAgents() {
       h('button', { class: 'btn small primary', onclick: () => openMarket('agents') }, icon('grid'), 'Marketplace')),
     meta.agents.map(d => h('div', { class: 'card rowline' },
       h('div', { class: 'grow' }, h('div', { class: 'title mono' }, d.name), h('div', { class: 'small muted' }, d.description),
-        h('div', { class: 'small muted' }, `${d.builtin ? 'Built in' : d.scope} · tools: ${d.tools?.join(', ') || 'all'}${d.model ? ` · ${d.model}` : ''}`)),
+        h('div', { class: 'small muted' }, `${d.builtin ? 'Built in' : AGENT_SCOPE[d.scope] || d.scope} · tools: ${d.tools?.join(', ') || 'all'}${d.model ? ` · ${d.model}` : ''}`)),
       !d.builtin && h('button', { class: 'btn small', onclick: () => editDef(project, d) }, 'Edit'),
-      !d.builtin && h('button', { class: 'btn small danger', 'aria-label': `Delete ${d.name}`, onclick: guard(async () => {
+      !d.builtin && d.scope !== 'nexus' && h('button', { class: 'btn small danger', 'aria-label': `Delete ${d.name}`, onclick: guard(async () => {
         if (await confirmBox(`Delete ${d.name}?`, 'This removes the agent type from Nexus folders. Types in other folders stay.', 'Delete', 'danger')) { await api('DELETE', `${P(project)}/agent-defs/${encodeURIComponent(d.name)}`); refreshAgentsSoon(); }
       }) }, 'Delete'))),
     h('div', { class: 'rowline', style: 'margin:22px auto 10px' }, h('h2', { style: 'margin:0', class: 'grow' }, `Skills (${meta.skills.length})`),

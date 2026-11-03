@@ -128,6 +128,35 @@ test('read-only mode can be chosen but not left by the agent, and the page can o
   assert.equal(s.state.mode, 'readonly');
 });
 
+test('the official agents come with Nexus: a chat can work as nexus-coder, its workflow skill is there, and a file of the same name replaces it', async () => {
+  const { agentDefs, skills } = await import('../server/extensions.js');
+  const { TOOL_DEFS } = await import('../server/tools.js');
+  projects.create('official');
+  const s = agent.getSession('official');
+  const cwd = projects.projectDir('official');
+  const coder = agentDefs(cwd).find(d => d.name === 'nexus-coder');
+  const verifier = agentDefs(cwd).find(d => d.name === 'nexus-verifier');
+  assert.equal(coder.scope, 'nexus');
+  assert.equal(coder.tools, null, 'the coder has every tool');
+  assert.ok(!coder.builtin && !verifier.builtin, 'not built-in subagent types, so a chat can take them');
+  // A misspelled tool name would silently take the tool away, and the checker must not be able to edit.
+  const real = new Set([...TOOL_DEFS.map(t => t.name), 'web_search']);
+  assert.deepEqual(verifier.tools.filter(t => !real.has(t)), []);
+  assert.ok(!verifier.tools.some(t => ['Edit', 'Write', 'NotebookEdit'].includes(t)));
+  // The coder hands bigger tasks to its workflow skill, and the workflow to the checker, by name, so both must exist.
+  const workflow = skills(cwd).find(k => k.name === 'nexus-workflow');
+  assert.ok(workflow && coder.prompt.includes('nexus-workflow') && workflow.body.includes('nexus-verifier'));
+  for (const stage of ['Understand', 'Plan', 'Build', 'Verify', 'Report']) assert.match(workflow.body, new RegExp(`## \\d\\. ${stage}`));
+
+  agent.setOption(s, 'agent', 'nexus-coder');
+  assert.match(agent.previewPrompt('official'), /# Your role: nexus-coder[\s\S]*You are Nexus Coder/);
+  fs.mkdirSync(path.join(cwd, '.nexus/agents'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.nexus/agents/nexus-coder.md'), '---\nname: nexus-coder\ndescription: Mine\n---\nMy own rules.\n');
+  assert.equal(agentDefs(cwd).find(d => d.name === 'nexus-coder').scope, 'project');
+  assert.match(agent.previewPrompt('official'), /# Your role: nexus-coder\n[\s\S]*My own rules\./);
+  agent.setOption(s, 'agent', '');
+});
+
 test('autopilot in plan mode: plan stays read-only, then the plan approves itself and the work gets done', async () => {
   projects.create('pilot');
   const s = agent.getSession('pilot');

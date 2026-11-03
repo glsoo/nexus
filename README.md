@@ -45,6 +45,7 @@
 | | |
 | --- | --- |
 | 🤖 **A real coding agent** | Reads, searches and edits your code, runs shell commands and tests, spins up subagents for side quests, and keeps a task list. Plan mode researches first and proposes a plan before touching anything. |
+| 🏅 **Official coding agent** | Pick **nexus-coder** in the Agent button. It sizes each task, then runs bigger ones through its own five-stage workflow (Understand, Plan, Build, Verify, Report) shown as the task list. It checks that every API and flag it uses really exists, keeps secrets out of output and commits, asks before destructive commands, keeps token use low, and proves its work with test output before calling it done. Its partner **nexus-verifier** rechecks large or risky changes with fresh eyes. Run the workflow with any agent as `/nexus-workflow <task>`. |
 | 🛒 **Agent marketplace** | 120+ hand-picked agents ship with Nexus, from security reviewers and vulnerability patchers to test writers, DevOps and frontend specialists. You can also browse [aiagentslist.com](https://aiagentslist.com/agents) and [Hugging Face](https://huggingface.co/datasets/tiny-agents/tiny-agents). Install any of them in one click. |
 | 🧰 **Skills** | The marketplace's **Skills** tab installs Agent Skills, the `SKILL.md` folders Claude Code, Codex and VS Code use, from [Anthropic's collection](https://github.com/anthropics/skills), popular collections such as Superpowers, Vercel, OpenAI, Hugging Face and Trail of Bits, [skills.sh](https://skills.sh), or any GitHub link you paste. Read, update, turn off or remove what you have from **Installed**, and `/create-skill` has the AI write a new one. Skills you already set up for those tools (`.claude/skills`, `.agents/skills`, `.github/skills`) work as they are. Nexus reads a skill when a task fits, and every skill is also a `/command`. |
 | 🔌 **MCP marketplace** | One-click [MCP](https://modelcontextprotocol.io) servers: Hugging Face, GitHub, Playwright, Context7, Brave Search and more, plus hundreds of community servers and Hugging Face Spaces. Both local (stdio) and remote (streamable HTTP) servers work. |
@@ -152,7 +153,7 @@ flowchart LR
   prompts["Your prompts: global, project, chat, plus injection"] --> nexus
 ```
 
-- **Agent button** (next to the model): switch this chat to any agent type, go back to the default **Nexus**, create a new one with AI, or open the marketplace.
+- **Agent button** (next to the model): switch this chat to any agent type, go back to the default **Nexus**, create a new one with AI, or open the marketplace. The official agents, **nexus-coder** and **nexus-verifier**, come with Nexus and are marked **Official**. **Edit** saves your own copy (in `.nexus/agents/` or `~/.nexus/agents/`), which replaces the official one until you delete it.
 - **Prompts button** (the sliders): three tabs.
   - **This chat** adds to the system prompt for this conversation only.
   - **Project** adds to it for every chat in this folder.
