@@ -68,6 +68,8 @@ function distrustCommitted(s) {
   st.log.push({ id: newId(), type: 'system', text: "This project's git repository tracks Nexus chat data in .nexus, so the mode, approvals, autopilot, /check and added folders saved there were reset. Stop tracking .nexus (keep only agents, skills and commands) to keep your settings." });
 }
 const cwdOf = s => projects.projectDir(s.name);
+// Waiting on the user: a question, a plan or a tool call to approve.
+export const isWaiting = name => Boolean(sessions.get(name)?.pending.size);
 export const isBusy = name => {
   const s = sessions.get(name);
   return Boolean(s?.running)

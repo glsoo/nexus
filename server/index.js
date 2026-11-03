@@ -90,7 +90,7 @@ function projectPath(name, rel = '.') {
 const routes = [];
 const route = (method, pattern, fn) => routes.push({ method, re: new RegExp(`^${pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)')}$`), fn });
 
-route('GET', '/api/projects', () => projects.list().map(p => ({ ...p, busy: agent.isBusy(p.name) })));
+route('GET', '/api/projects', () => projects.list().map(p => ({ ...p, busy: agent.isBusy(p.name), waiting: agent.isWaiting(p.name) })));
 route('GET', '/api/folders', ({ q }) => projects.folders(q.get('path')));
 route('POST', '/api/projects/open', async ({ req }) => ({ name: projects.open((await body(req)).path) }));
 route('GET', '/api/search', ({ q }) => agent.search(q.get('q') || ''));
@@ -509,10 +509,14 @@ agent.hub.on('project', (name, ev) => {
   if (ev.t === 'status' && ev.running) busy.add(name);
   else if (ev.t === 'status' && busy.delete(name)) {
     const reply = agent.getSession(name).state.log.findLast(e => e.type === 'assistant')?.text || '';
-    ping(`${name} finished`, reply.replace(/\s+/g, ' ').slice(0, 140) || 'The agent is done.', name);
+    const body = reply.replace(/\s+/g, ' ').slice(0, 140) || 'The agent is done.';
+    ping(`${name} finished`, body, name);
+    broadcast({ t: 'alert', project: name, kind: 'finished', body }); // every open page, which shows it unless you're watching that chat
   } else if (ev.t === 'entry' && ev.entry.status === 'awaiting' && !pinged.has(ev.entry)) {
     pinged.add(ev.entry);
-    ping(`${name} needs you`, `The agent ${asks[ev.entry.name] || `wants to run ${ev.entry.name}`}.`, name);
+    const body = `The agent ${asks[ev.entry.name] || `wants to run ${ev.entry.name}`}.`;
+    ping(`${name} needs you`, body, name);
+    broadcast({ t: 'alert', project: name, kind: 'waiting', body });
   }
 });
 agent.hub.on('agent', ({ agent: a }) => broadcast({ t: 'agent', agent: a }));

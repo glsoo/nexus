@@ -48,11 +48,13 @@ const FADE = [{ opacity: 0 }, { opacity: 1 }];
 const motion = (el, frames, ms = 260, fill = 'none') => (calm.matches || !el?.animate ? { finished: Promise.resolve() } : el.animate(frames, { duration: ms, easing: 'cubic-bezier(.22,1,.36,1)', fill }));
 const exit = (el, to, ms = 160) => motion(el, [{}, to], ms, 'forwards').finished.catch(() => {});
 
-function toast(text) {
+// action: [label, run], a button in the toast.
+function toast(text, action, ms = 5000) {
   document.querySelector('.toast')?.remove();
-  const el = h('div', { class: 'toast', role: 'status' }, text);
+  const el = h('div', { class: 'toast', role: 'status' }, text,
+    action && h('button', { class: 'btn small', type: 'button', onclick: () => { el.remove(); action[1](); } }, action[0]));
   document.body.append(el);
-  setTimeout(() => exit(el, { opacity: 0, transform: 'translate(-50%, 12px)' }, 220).then(() => el.remove()), 5000);
+  setTimeout(() => exit(el, { opacity: 0, transform: 'translate(-50%, 12px)' }, 220).then(() => el.remove()), ms);
 }
 const guard = fn => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message); } };
 
@@ -100,7 +102,7 @@ function dialog({ title, body, wide, actions }) {
 const confirmBox = (title, text, label = 'Confirm', cls = 'primary') => dialog({ title, body: h('p', { class: 'muted' }, text), actions: [{ label: 'Cancel' }, { label, class: cls, value: true }] });
 
 // ---- app state ----
-const S = { project: null, tab: 'chat', page: null, state: null, ws: null, projects: [], models: [], meta: { commands: [], skills: [], agents: [] }, prompts: null, me: null, images: [] };
+const S = { project: null, tab: 'chat', page: null, state: null, ws: null, projects: [], models: [], meta: { commands: [], skills: [], agents: [] }, prompts: null, me: null, images: [], alerts: {} };
 const entries = new Map();
 
 // ---- login ----
@@ -242,10 +244,17 @@ async function foldersDialog(name) {
 async function refreshProjects() {
   S.projects = await api('GET', '/api/projects');
   if ($find.value.trim()) return; // search results stay until the box is cleared
-  $list.replaceChildren(...S.projects.map(p => h('div', { class: `pitem ${p.name === S.project && !S.page ? 'on' : ''}` },
+  // A question answered on another device clears its mark here.
+  for (const p of S.projects) if (S.alerts[p.name] === 'waiting' && !p.waiting) delete S.alerts[p.name];
+  syncTitle();
+  $list.replaceChildren(...S.projects.map(p => {
+    const mark = p.waiting ? 'waiting' : S.alerts[p.name];
+    return h('div', { class: `pitem ${p.name === S.project && !S.page ? 'on' : ''} ${mark ? 'unseen' : ''}` },
     h('button', { class: 'open', title: p.dir || pretty(p.name), 'aria-current': p.name === S.project ? 'true' : undefined, onclick: () => go(p.name, null, 'chat') },
-      h('span', { class: `dot ${p.busy ? 'busy' : ''}` }), h('span', { class: 'nm' }, pretty(p.name))),
-    h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(p.name)}`, 'aria-haspopup': 'menu', onclick: e => projectMenu(e.currentTarget, p.name) }, icon('dots')))));
+      h('span', { class: `dot ${p.busy && !p.waiting ? 'busy' : mark === 'waiting' ? 'awaiting' : mark === 'finished' ? 'done' : ''}` }), h('span', { class: 'nm' }, pretty(p.name)),
+      mark === 'waiting' && h('span', { class: 'need' }, 'needs you'), mark === 'finished' && h('span', { class: 'sr' }, ', finished')),
+    h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(p.name)}`, 'aria-haspopup': 'menu', onclick: e => projectMenu(e.currentTarget, p.name) }, icon('dots')));
+  }));
 }
 // Each hit opens its chat scrolled to the message.
 let findSeq = 0;
@@ -329,6 +338,7 @@ function go(project, page = null, tab = 'chat') {
   const changed = project !== S.project;
   const moved = changed || page !== S.page;
   S.project = project; S.page = page; S.tab = tab;
+  if (project && !page && tab === 'chat' && S.alerts[project]) { delete S.alerts[project]; syncTitle(); }
   history.replaceState(null, '', page ? `#/${page}` : project ? `#/p/${encodeURIComponent(project)}/${tab}` : '#/');
   if (changed && project) { S.state = null; sendWs({ t: 'open', name: project }); guard(loadMeta)(); }
   render();
@@ -383,16 +393,33 @@ const pref = (key, value) => { try { if (value === undefined) return localStorag
 let doneUnseen = false;
 function syncTitle() {
   const base = S.project && !S.page ? `${pretty(S.project)} · Nexus` : 'Nexus';
-  document.title = `${S.state?.running ? '● ' : doneUnseen ? '✓ ' : ''}${base}`;
+  const n = Object.keys(S.alerts).length;
+  document.title = `${n ? `(${n}) ` : ''}${S.state?.running ? '● ' : doneUnseen ? '✓ ' : ''}${base}`;
 }
 function finished() {
   if (!document.hidden) return;
   doneUnseen = true;
+}
+// The chat on screen counts as seen once you're looking at it again.
+const seen = () => {
+  if (!document.hidden && S.project && !S.page && S.tab === 'chat' && S.alerts[S.project]) { delete S.alerts[S.project]; refreshSoon(); }
+  syncTitle();
+};
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { doneUnseen = false; seen(); } });
+
+// A chat that finishes or needs an answer while you look elsewhere: a mark in the sidebar, a toast that opens it, a count in the title,
+// and a system notification when Nexus is in the background and notifications are on in Settings.
+function notice({ project, kind, body }) {
+  if (project === S.project && !S.page && S.tab === 'chat' && !document.hidden) return; // you're watching it
+  if (kind === 'waiting' || S.alerts[project] !== 'waiting') S.alerts[project] = kind;
+  refreshSoon();
+  syncTitle();
+  const title = `${pretty(project)} ${kind === 'waiting' ? 'needs your answer' : 'finished'}`;
+  if (!document.hidden) return toast(`${title}. ${body}`, ['Open', () => go(project, null, 'chat')], kind === 'waiting' ? 12000 : 6000);
   if (pref('nexus.notify') === '1' && window.Notification?.permission === 'granted') {
-    new Notification('Nexus finished', { body: pretty(S.project), icon: '/icon-180.png', tag: `nexus-${S.project}` });
+    new Notification(title, { body, icon: '/icon-180.png', tag: `nexus-${project}` }).onclick = () => { focus(); go(project, null, 'chat'); };
   }
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden && doneUnseen) { doneUnseen = false; syncTitle(); } });
 
 // Web Push reaches the phone with Nexus closed: the server pings when a chat finishes or needs an answer.
 // Its notifications share finished()'s tag, so a browser that gets both shows one.
@@ -508,6 +535,7 @@ function onEvent(m) {
       if (S.tab === 'chat' && !S.page) render();
       break;
     case 'projects': refreshSoon(); break;
+    case 'alert': notice(m); break;
     case 'renamed':
       if (m.from in drafts) { drafts[m.to] = drafts[m.from]; delete drafts[m.from]; }
       if (S.project === m.from) {

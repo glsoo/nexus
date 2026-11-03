@@ -563,7 +563,7 @@ test('risk check: rules shortlist risky calls, a high rating holds one so the ag
       await agent.submit(name, 'clean up');
       for (let t = 0; t < 100 && !s.state.log.some(e => e.status === 'awaiting') && (s.running || s.queue.length); t++) await new Promise(r => setTimeout(r, 50));
       const waiting = s.state.log.find(e => e.status === 'awaiting');
-      if (waiting) agent.answer(name, waiting.id, answer);
+      if (waiting) { assert.ok(agent.isWaiting(name), 'the project list can say it needs you'); agent.answer(name, waiting.id, answer); }
       await idle(s, 15000);
     } finally { model.restore(); }
     return { s, model, tools: s.state.log.filter(e => e.type === 'tool') };
@@ -581,6 +581,8 @@ test('risk check: rules shortlist risky calls, a high rating holds one so the ag
   // ask mode: the second call asks, with no "always allow"; denying stops it
   r = await run('risky2', 'acceptEdits', [force, force], { decision: 'deny' });
   assert.deepEqual(r.tools.map(t => t.status), ['held', 'denied']);
+  assert.equal(agent.isWaiting('risky2'), false);
+  assert.match(DEFAULT_BASE, /ask with AskUserQuestion and offer options instead of guessing/);
   assert.match(r.model.sent[1].input.at(-1).output, /the user will be asked to approve it/);
 
   // a shortlisted call runs untouched when the model rates it low, and is held when it rates it high
