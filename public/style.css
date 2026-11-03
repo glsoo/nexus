@@ -94,7 +94,7 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .e { margin-bottom: 12px; }
 .e.user { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; position: relative; white-space: pre-wrap; overflow-wrap: anywhere; }
 .e.user.queued { border-style: dashed; opacity: .75; }
-.e.user img { max-width: 220px; max-height: 160px; border-radius: 6px; display: block; margin-top: 8px; }
+.e.user img { height: 160px; width: auto; max-width: 220px; object-fit: contain; object-position: left; border-radius: 6px; display: block; margin-top: 8px; } /* a fixed height, so the log doesn't shift when one loads */
 .diff .undo { float: right; margin: -2px 0 2px 8px; font-family: var(--sans); }
 .e.tool img.seen { display: block; max-width: min(100%, 640px); max-height: 480px; border: 1px solid var(--line); border-radius: 6px; margin: 8px 0 4px; }
 .e.user .rw { position: absolute; top: 5px; right: 5px; opacity: 0; }
@@ -130,6 +130,7 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .ask .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ask input.field { margin: 8px 0; }
 
+.log > .older { display: block; margin: 0 auto 14px; }
 .todos { max-width: 860px; margin: 0 auto 6px; width: calc(100% - 32px); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 12px; font-size: 13px; max-height: 150px; overflow: auto; }
 .todos div { display: flex; gap: 8px; }
 .todos .completed { color: var(--muted); text-decoration: line-through; }

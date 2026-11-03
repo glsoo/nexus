@@ -443,6 +443,35 @@ test('API keys pasted in Settings are used, the environment wins, and child proc
   }
 });
 
+test('a long chat sends its newest entries and pages back; closed chats are searched from a cache; a broken chat file is kept', async () => {
+  projects.create('longchat');
+  const s = agent.getSession('longchat');
+  s.state.log = Array.from({ length: 700 }, (_, i) => ({ id: `e${i}`, type: 'assistant', text: `message ${i}` }));
+  const st = agent.publicState(s);
+  assert.deepEqual([st.log.length, st.older, st.log[0].id], [agent.LOG_WINDOW, 400, 'e400'], 'the page gets the newest 300');
+  const page = agent.olderEntries('longchat', 'e400');
+  assert.deepEqual([page.entries.length, page.entries[0].id, page.entries.at(-1).id, page.older], [300, 'e100', 'e399', 100]);
+  assert.deepEqual(agent.olderEntries('longchat', 'e100'), { entries: s.state.log.slice(0, 100), older: 0 });
+  assert.throws(() => agent.olderEntries('longchat', 'gone'), /no longer in this chat/);
+
+  projects.create('closedchat'); // never opened, so search and spending read its file
+  const file = path.join(projects.projectDir('closedchat'), '.nexus', 'conversation.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ log: [{ id: 'c1', type: 'user', text: 'find the zebra bug' }, { id: 'c2', type: 'tool', output: 'zebra in output' }], usage: { cost: 1.25 } }));
+  assert.deepEqual(agent.search('zebra').find(r => r.name === 'closedchat').hits.map(h => h.id), ['c1'], 'only messages, not tool output');
+  assert.equal(agent.spending().chats.find(c => c.name === 'closedchat').cost, 1.25);
+  fs.writeFileSync(file, JSON.stringify({ log: [{ id: 'c3', type: 'assistant', text: 'the zebra is fixed' }], usage: { cost: 2 } }));
+  fs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
+  assert.deepEqual(agent.search('zebra').find(r => r.name === 'closedchat').hits.map(h => h.id), ['c3'], 'a changed file is read again');
+
+  projects.create('brokenchat');
+  const bad = path.join(projects.projectDir('brokenchat'), '.nexus', 'conversation.json');
+  fs.mkdirSync(path.dirname(bad), { recursive: true });
+  fs.writeFileSync(bad, '{"log": [ cut off');
+  assert.deepEqual(projects.load('brokenchat').log, []);
+  assert.ok(!fs.existsSync(bad) && fs.readdirSync(path.dirname(bad)).some(f => f.startsWith('conversation.json.broken-')), 'set aside, not overwritten by the next save');
+});
+
 test('/create-agent asks for a description, then hands the model the format and where to write it', async () => {
   projects.create('maker');
   const s = agent.getSession('maker');

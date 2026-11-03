@@ -259,7 +259,8 @@ async function findChats() {
     h('div', { class: 'pitem' }, h('button', { class: 'open', onclick: () => open(r.name) }, h('span', { class: 'nm' }, pretty(r.name)))),
     ...r.hits.map(x => h('button', { class: 'snip', onclick: () => open(r.name, x.id) }, x.text)))) : [h('p', { class: 'small muted nohit' }, `No chats mention "${q}".`)]));
 }
-function jumpTo(id) {
+async function jumpTo(id) {
+  while (id && !entries.get(id) && await loadOlder().catch(() => false)) { /* keep loading */ }
   const el = id && entries.get(id)?.el;
   if (!el) return;
   el.scrollIntoView({ block: 'center' });
@@ -469,14 +470,25 @@ function onEvent(m) {
   switch (m.t) {
     case 'state':
       { const first = !S.state;
+        const prev = S.state?.name === m.state.name && $log?.isConnected && S.tab === 'chat' && !S.page
+          ? { log: S.state.log, top: $log.scrollTop, bottom: nearBottom(), open: [...entries].filter(([, r]) => r.el.open).map(([id]) => id) } : null;
         S.state = m.state;
+        const i = prev ? prev.log.findIndex(e => e.id === m.state.log[0]?.id) : -1;
+        if (i > 0) { S.state.log = [...prev.log.slice(0, i), ...m.state.log]; S.state.older = Math.max(0, m.state.older - i); }
         if (m.state.name !== S.project) return;
-        if (S.tab === 'chat' && !S.page) { render(); if (first) motion($log, FADE); if (S.jump) { jumpTo(S.jump); S.jump = null; } } }
+        if (S.tab === 'chat' && !S.page) {
+          render();
+          if (first) motion($log, FADE);
+          if (prev) { for (const id of prev.open) { const r = entries.get(id); if (r) r.el.open = true; } if (!prev.bottom) $log.scrollTop = prev.top; }
+          if (S.jump) { jumpTo(S.jump); S.jump = null; }
+        } }
       break;
     case 'entry': {
       if (!S.state) return;
-      const i = S.state.log.findIndex(x => x.id === m.entry.id);
-      if (i >= 0) S.state.log[i] = m.entry; else S.state.log.push(m.entry);
+      const i = S.state.log.findLastIndex(x => x.id === m.entry.id);
+      if (i >= 0) S.state.log[i] = m.entry;
+      else if (m.added || !S.state.older) S.state.log.push(m.entry);
+      else break; // an update to an older entry the page hasn't loaded
       upsertEntry(m.entry);
       if (m.entry.type === 'tool' && !['running', 'awaiting'].includes(m.entry.status)) filesChanged();
       break;
@@ -492,7 +504,7 @@ function onEvent(m) {
       break;
     }
     case 'reset':
-      if (m.state) S.state = m.state; else if (S.state) S.state.log = [];
+      if (m.state) S.state = m.state; else if (S.state) Object.assign(S.state, { log: [], older: 0 });
       if (S.tab === 'chat' && !S.page) render();
       break;
     case 'projects': refreshSoon(); break;
@@ -521,8 +533,13 @@ function chatView(view) {
   $log = h('div', { class: 'log', role: 'log', 'aria-live': 'polite', 'aria-relevant': 'additions' });
   $log.addEventListener('touchstart', stopFollow, { passive: true });
   $log.addEventListener('wheel', stopFollow, { passive: true });
+  // Pasted images finish loading after the first scroll to the bottom, so the log stays there while you haven't scrolled up.
+  let atBottom = true;
+  $log.addEventListener('scroll', () => { atBottom = nearBottom(); }, { passive: true });
+  for (const type of ['load', 'error']) $log.addEventListener(type, () => { if (atBottom) $log.scrollTop = $log.scrollHeight; }, true);
   $todos = h('div', { class: 'todos', hidden: true });
   if (S.state) {
+    if (S.state.older) $log.append(olderButton());
     if (!S.state.log.length) $log.append(hello());
     for (const e of S.state.log) upsertEntry(e, false);
   }
@@ -532,6 +549,25 @@ function chatView(view) {
   syncComposer();
   $log.scrollTop = $log.scrollHeight;
   if (matchMedia('(hover: hover)').matches) $input.focus();
+}
+
+// Older entries of a long chat load a page at a time, above what you are reading, without moving it.
+const olderButton = () => h('button', { class: 'btn small older', type: 'button', onclick: guard(loadOlder) }, `Show earlier messages (${S.state.older})`);
+async function loadOlder() {
+  const project = S.project, first = S.state?.log[0], btn = $log?.querySelector('.older');
+  if (!first || !S.state.older || !btn || btn.disabled) return false;
+  btn.disabled = true;
+  try {
+    const { entries: list, older } = await api('GET', `${P(project)}/log?before=${encodeURIComponent(first.id)}`);
+    if (project !== S.project || S.state.log[0] !== first) return false;
+    const height = $log.scrollHeight;
+    S.state.log.unshift(...list);
+    S.state.older = older;
+    btn.after(...list.map(e => { const el = renderEntry(e); entries.set(e.id, { el, e }); return el; }));
+    if (older) btn.textContent = `Show earlier messages (${older})`; else btn.remove();
+    $log.scrollTop += $log.scrollHeight - height;
+    return true;
+  } finally { btn.disabled = false; }
 }
 
 let following = 0;
@@ -602,10 +638,11 @@ let mdPending = new Set();
 function delta(m) {
   const rec = entries.get(m.id);
   const stick = $log?.isConnected && nearBottom();
-  const logged = S.state?.log.find(x => x.id === m.id);
+  const logged = S.state?.log.findLast(x => x.id === m.id);
   if (m.kind === 'output') {
-    if (logged) logged.output = (logged.output || '') + m.text;
-    rec?.el.querySelector('.live')?.append(m.text);
+    if (logged) logged.output = ((logged.output || '') + m.text).slice(-60000);
+    const live = rec?.el.querySelector('.live');
+    if (live) { live.append(m.text); if (live.textContent.length > 120000) live.textContent = logged?.output ?? live.textContent.slice(-60000); }
   } else if (logged) {
     logged.text += m.text;
     if (rec) {
@@ -697,11 +734,15 @@ function renderEntry(e) {
           e.agent && h('span', { class: 'tagent muted' }, e.agent)));
       if (awaiting) d.append(askBox(e));
       else {
-        const args = toolArgs(e);
-        if (args) d.append(args);
-        if (e.images) d.append(...e.images.map(src => h('img', { class: 'seen', src, alt: 'The image the agent looked at' })));
-        else if (e.status === 'running' || e.output) d.append(h('div', { class: 'out live' }, e.output || ''));
         if (e.status === 'denied') d.open = true;
+        // A closed fold gets its arguments and output only when opened: a long chat has thousands of them.
+        const fill = () => {
+          const args = toolArgs(e);
+          if (args) d.append(args);
+          if (e.images) d.append(...e.images.map(src => h('img', { class: 'seen', src, alt: 'The image the agent looked at' })));
+          else if (e.status === 'running' || e.output) d.append(h('div', { class: 'out live' }, e.output || ''));
+        };
+        if (d.open) fill(); else d.addEventListener('toggle', fill, { once: true });
       }
       return d;
     }

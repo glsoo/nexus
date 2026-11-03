@@ -147,7 +147,12 @@ export function trash(name) {
 }
 
 export function load(name) {
-  const state = { ...blank(), ...readJson(stateFile(name), {}) };
+  let saved = {};
+  try { saved = JSON.parse(fs.readFileSync(stateFile(name), 'utf8')); } catch (err) {
+    // A chat file that doesn't parse is moved aside rather than overwritten by the next save, so it can still be recovered by hand.
+    if (err.code !== 'ENOENT') fs.renameSync(stateFile(name), `${stateFile(name)}.broken-${Date.now()}`);
+  }
+  const state = { ...blank(), ...saved };
   // Anything mid-flight when the server last stopped can never finish.
   for (const e of state.log) if (['running', 'awaiting'].includes(e.status)) e.status = 'interrupted';
   repairItems(state.items);
@@ -174,6 +179,19 @@ export function dropImages(items) {
 }
 
 export const save = (name, state) => writeAtomic(stateFile(name), JSON.stringify(state));
+
+// What search and Settings need from a chat that isn't open: its messages and usage, kept until the file changes,
+// so they don't parse every chat in full each time.
+const peeks = new Map();
+export function peek(name) {
+  let mtime = 0;
+  try { mtime = fs.statSync(stateFile(name)).mtimeMs; } catch { /* no chat saved yet */ }
+  if (peeks.get(name)?.mtime === mtime) return peeks.get(name);
+  const { log = [], usage = {} } = mtime ? readJson(stateFile(name), {}) : {};
+  const out = { mtime, usage, log: log.filter(e => ['user', 'assistant'].includes(e.type) && typeof e.text === 'string').map(({ id, type, text }) => ({ id, type, text })) };
+  peeks.set(name, out);
+  return out;
+}
 
 export function httpError(status, message) {
   return Object.assign(new Error(message), { status });

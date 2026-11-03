@@ -148,6 +148,7 @@ route('POST', '/api/projects/:name/changes/undo', async ({ req, p }) => {
   await agent.undoFile(p.name, projectPath(p.name, raw));
   return {};
 });
+route('GET', '/api/projects/:name/log', ({ p, q }) => agent.olderEntries(need(p.name), q.get('before') || ''));
 route('GET', '/api/projects/:name/export', ({ p }) => ({ markdown: agent.exportMarkdown(need(p.name)) }));
 route('POST', '/api/projects/:name/rewind', async ({ req, p }) => {
   const { id, files, conversation } = await body(req);

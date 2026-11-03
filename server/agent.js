@@ -58,9 +58,19 @@ export const isBusy = name => {
     || [...shells.values()].some(sh => sh.project === name && sh.status === 'running');
 };
 
+// A long chat's whole log is megabytes on every open and reconnect, so the page gets the newest entries
+// and asks for older ones (olderEntries) when you scroll back.
+export const LOG_WINDOW = 300;
 export function publicState(s) {
-  const { items, ...rest } = s.state;
-  return { ...rest, name: s.name, running: s.running, compactAt: compactAt(s) };
+  const { items, log, ...rest } = s.state;
+  return { ...rest, log: log.slice(-LOG_WINDOW), older: Math.max(0, log.length - LOG_WINDOW), name: s.name, running: s.running, compactAt: compactAt(s) };
+}
+// The entries just before the one with this id.
+export function olderEntries(name, before) {
+  const { log } = getSession(name).state, end = log.findIndex(e => e.id === before);
+  if (end < 0) throw projects.httpError(404, 'That message is no longer in this chat. Reload the page.');
+  const start = Math.max(0, end - LOG_WINDOW);
+  return { entries: log.slice(start, end), older: start };
 }
 
 const persist = s => projects.save(s.name, s.state);
@@ -70,7 +80,7 @@ const send = (s, ev) => hub.emit('project', s.name, ev);
 function addEntry(s, entry) {
   entry.id ||= newId();
   s.state.log.push(entry);
-  send(s, { t: 'entry', entry });
+  send(s, { t: 'entry', entry, added: true });
   return entry;
 }
 const note = (s, text, type = 'system') => { addEntry(s, { type, text }); persist(s); };
@@ -671,7 +681,7 @@ async function autoCheck(s, signal) {
   if (!s.state.check || !last || signal.aborted || !(await diffSince(s, last))) return;
   const command = s.state.check;
   const entry = addEntry(s, { type: 'tool', name: 'Bash', args: { command }, status: 'running', output: '' });
-  const output = await execTool('Bash', { command, timeout: 600000 }, { cwd: cwdOf(s), session: s, signal, progress: t => { entry.output += t; send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
+  const output = await execTool('Bash', { command, timeout: 600000 }, { cwd: cwdOf(s), session: s, signal, progress: t => { entry.output = (entry.output + t).slice(-60000); send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
   const failed = /^Failed to start|\n\[(exit code \d+|Timed out after \d+ ms)\]$/.test(output);
   Object.assign(entry, { status: failed ? 'error' : 'done', output });
   send(s, { t: 'entry', entry });
@@ -1049,7 +1059,7 @@ async function direct(s, command) {
   if (s.running) return note(s, 'Stop the agent before running a shell command directly.', 'error');
   const cwd = cwdOf(s);
   const entry = addEntry(s, { type: 'tool', name: 'Bash', args: { command }, status: 'running', output: '', direct: true });
-  const output = await execTool('Bash', { command }, { cwd, session: s, progress: t => { entry.output += t; send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
+  const output = await execTool('Bash', { command }, { cwd, session: s, progress: t => { entry.output = (entry.output + t).slice(-60000); send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
   Object.assign(entry, { status: 'done', output });
   send(s, { t: 'entry', entry });
   s.state.items.push({ role: 'user', content: `I ran this shell command myself:\n$ ${command}\n${output}` });
@@ -1098,7 +1108,7 @@ export function exportMarkdown(name) {
   return `${out.join('\n\n')}\n`;
 }
 
-const lastCheckpoint = s => [...s.state.log].reverse().find(e => e.type === 'user' && e.cp);
+const lastCheckpoint = s => s.state.log.findLast(e => e.type === 'user' && e.cp);
 // What changed since a prompt, in the main folder and in added folders. Their files are named by full path, so Undo file can find them.
 async function diffSince(s, last) {
   const parts = [await checkpoint.diff(cwdOf(s), last.cp)];
@@ -1137,13 +1147,12 @@ export async function undoFile(name, file) {
 }
 
 // Finds what was said in any chat, newest first, plus chats whose name matches.
-// ponytail: reads every conversation.json per query; keep an index if that ever gets slow.
 export function search(q) {
   const terms = String(q).toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   const out = [];
   for (const { name } of projects.list()) {
-    const log = sessions.get(name)?.state.log ?? projects.load(name).log;
+    const log = sessions.get(name)?.state.log ?? projects.peek(name).log;
     const hits = [];
     for (let i = log.length - 1; i >= 0 && hits.length < 3; i--) {
       const e = log[i];
@@ -1161,7 +1170,7 @@ export function search(q) {
 // Settings shows what every chat has cost, from the same estimates as each chat's meter.
 export function spending() {
   const chats = projects.list().map(({ name }) => {
-    const { cost = 0, unpriced = 0 } = (sessions.get(name)?.state ?? projects.load(name)).usage;
+    const { cost = 0, unpriced = 0 } = (sessions.get(name)?.state ?? projects.peek(name)).usage;
     return { name, cost, unpriced };
   });
   const sum = key => chats.reduce((a, c) => a + c[key], 0);
