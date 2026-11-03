@@ -136,7 +136,7 @@ function shell() {
   $side = h('aside', { class: 'side' },
     h('div', { class: 'side-head' }, h('img', { src: '/icon.svg?v=purple', alt: '' }), 'Nexus'),
     h('div', { class: 'newrow' }, h('button', { class: 'btn new', onclick: guard(newProject) }, icon('plus'), 'New project'),
-      h('button', { class: 'btn', 'aria-label': 'Open a folder', title: 'Open a folder', onclick: folderDialog }, icon('folder')),
+      h('button', { class: 'btn', 'aria-label': 'Open a folder', title: 'Open a folder', onclick: () => folderDialog() }, icon('folder')),
       h('button', { class: 'btn', 'aria-label': 'Clone a git repository', title: 'Clone a git repository', onclick: cloneDialog }, icon('download'))),
     $find, $list,
     h('div', { class: 'side-foot' },
@@ -180,7 +180,9 @@ function cloneDialog() {
 }
 
 // Picks a folder on the computer Nexus runs on, which may not be the one showing this page, so the browser's own picker can't help.
-function folderDialog() {
+// By default the folder opens as a project; pick() does something else with it instead.
+const OPEN_HINT = 'Type or paste a path and press Enter to go there. Nexus works in the folder you open and keeps the chat in a .nexus folder inside it. Deleting the project later leaves the folder alone.';
+function folderDialog({ title = 'Open a folder', action = 'Open this folder', hint = OPEN_HINT, start = '~', pick } = {}) {
   const err = h('div', { class: 'err', role: 'alert' });
   const input = h('input', { class: 'field mono', id: 'fp', 'aria-describedby': 'fp-hint', spellcheck: false, autocapitalize: 'off', autocomplete: 'off' });
   const list = h('div', { class: 'folders', 'aria-label': 'Folders' });
@@ -200,6 +202,7 @@ function folderDialog() {
     if (busy) return false;
     busy = true; err.textContent = '';
     try {
+      if (pick) { await pick(input.value.trim()); return true; }
       const { name } = await api('POST', '/api/projects/open', { path: input.value.trim() });
       await refreshProjects();
       go(name, null, 'chat');
@@ -207,13 +210,34 @@ function folderDialog() {
     } catch (e) { err.textContent = e.message; return false; } finally { busy = false; }
   };
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); show(input.value); } });
-  dialog({ title: 'Open a folder', wide: true, body: h('div', {}, h('label', { class: 'lbl', htmlFor: 'fp' }, 'Folder'), input, list,
-    h('p', { class: 'small muted', id: 'fp-hint' }, 'Type or paste a path and press Enter to go there. Nexus works in the folder you open and keeps the chat in a .nexus folder inside it. Deleting the project later leaves the folder alone.'), err),
-  actions: [{ label: 'Cancel' }, { label: 'Open this folder', class: 'primary', run }] });
-  show('~');
+  dialog({ title, wide: true, body: h('div', {}, h('label', { class: 'lbl', htmlFor: 'fp' }, 'Folder'), input, list,
+    h('p', { class: 'small muted', id: 'fp-hint' }, hint), err),
+  actions: [{ label: 'Cancel' }, { label: action, class: 'primary', run }] });
+  show(start);
   input.focus();
 }
 const projectDir = name => S.projects.find(p => p.name === name)?.dir;
+
+// The folders a chat works in: its own, plus any added. Added ones get the same tools, approvals and rewind, but not the Files and Changes tabs.
+async function foldersDialog(name) {
+  const box = h('div', { class: 'folders' });
+  let home = '~';
+  const show = ({ main, dirs }) => {
+    home = main;
+    if (S.project === name && S.state) S.state.dirs = dirs;
+    box.replaceChildren(h('div', { class: 'frow' }, icon('folder'), h('span', { class: 'grow mono' }, main), h('span', { class: 'small muted' }, 'Main folder')),
+      ...dirs.map(d => h('div', { class: 'frow' }, icon('folder'), h('span', { class: 'grow mono' }, d),
+        h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove ${d}`, onclick: guard(async () => show(await api('DELETE', `${P(name)}/folders`, { path: d }))) }, 'Remove'))));
+  };
+  const add = () => folderDialog({ title: 'Add a folder', action: 'Add this folder', start: home,
+    hint: 'Type or paste a path and press Enter to go there. The AI can then read and edit this folder like the project, and rewinding a prompt rewinds it too. It keeps its rewind data in a .nexus folder inside it.',
+    pick: async dir => { show(await api('POST', `${P(name)}/folders`, { path: dir })); toast('Added. The AI sees it from your next message.'); } });
+  show(await api('GET', `${P(name)}/folders`));
+  await dialog({ title: `Folders in ${pretty(name)}`, wide: true, body: h('div', {}, box,
+    h('p', { class: 'small muted' }, 'Add folders the AI should work in alongside this one, like a backend next to a frontend. The Files and Changes tabs show only the main folder.')),
+  actions: [{ label: 'Add a folder', run: () => { add(); return false; } }, { label: 'Done', class: 'primary' }] });
+  if (S.project === name && S.tab === 'chat' && !S.page) render(); // the new-chat screen lists the folders
+}
 
 async function refreshProjects() {
   S.projects = await api('GET', '/api/projects');
@@ -259,6 +283,7 @@ function projectMenu(anchor, name) {
     }
   } },
   h('button', { role: 'menuitem', onclick: () => { close(); renameDialog(name); } }, icon('pen'), 'Rename'),
+  h('button', { role: 'menuitem', onclick: () => { close(); guard(foldersDialog)(name); } }, icon('folder'), 'Folders'),
   h('button', { role: 'menuitem', onclick: () => { close(); exportChat(name); } }, icon('download'), 'Export chat'),
   h('button', { role: 'menuitem', class: 'danger', onclick: () => { close(); deleteDialog(name); } }, icon('trash'), 'Delete'));
   document.body.append(menu);
@@ -331,7 +356,7 @@ function render() {
     return $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', {}, 'Nexus')),
       h('div', { class: 'empty' }, h('h2', {}, 'Start a project'), h('p', {}, 'Each conversation gets its own folder in ~/projects, or works in a folder you already have.'),
         h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: guard(newProject) }, icon('plus'), 'New project'),
-          h('button', { class: 'btn', onclick: folderDialog }, icon('folder'), 'Open a folder'),
+          h('button', { class: 'btn', onclick: () => folderDialog() }, icon('folder'), 'Open a folder'),
           h('button', { class: 'btn', onclick: cloneDialog }, icon('download'), 'Clone a repo'))));
   }
   const view = h('div', { class: 'view' });
@@ -458,7 +483,7 @@ function onEvent(m) {
     case 'delta': delta(m); break;
     case 'status': {
       const was = S.state?.running;
-      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt });
+      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt, dirs: m.dirs });
       if (was && !m.running) finished();
       syncTitle();
       syncComposer();
@@ -547,7 +572,8 @@ const STARTERS = {
 };
 function hello() {
   const starters = h('div', { class: 'starters' });
-  const el = h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'), h('p', { class: 'mono' }, projectDir(S.project) || `~/projects/${S.project}`), starters,
+  const el = h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'), h('p', { class: 'mono' }, projectDir(S.project) || `~/projects/${S.project}`),
+    S.state?.dirs?.map(d => h('p', { class: 'mono small muted' }, `+ ${d}`)), starters,
     h('p', { class: 'small' }, 'Type a request. / runs a command, @ points at a file and ! runs a shell command.'));
   const project = S.project;
   S.modelsReady?.then(() => {

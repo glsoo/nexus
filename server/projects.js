@@ -44,18 +44,31 @@ export function folders(dir) {
   return { path: dir, parent: path.dirname(dir) === dir ? null : path.dirname(dir), folders: names.slice(0, 1000).map(name => ({ name, path: path.join(dir, name) })) };
 }
 
-// Opens a folder from anywhere as a project, or returns the project that already has it. The chat's files go in its .nexus.
-export function open(dir) {
+// The real path of a folder a chat may work in. Checkpoints snapshot it before each prompt, which would never finish on a drive or a home folder.
+export function folderPath(dir) {
   dir = String(dir || '').trim();
   let real = null;
   try { if (path.isAbsolute(dir) && fs.statSync(dir).isDirectory()) real = fs.realpathSync.native(dir); } catch { /* not there */ }
   if (!real) throw httpError(400, `There's no folder at ${dir || 'that path'}.`);
-  const known = list().find(p => (p.dir || fs.realpathSync.native(projectDir(p.name))) === real);
-  if (known) return known.name;
-  // Checkpoints snapshot the whole folder before each prompt, which would never finish on a drive or a home folder.
   if (path.parse(real).root === real || isInside(real, HOME) || isInside(real, PROJECTS)) {
     throw httpError(400, 'Pick a project folder, not a whole drive, your home folder or the folder that holds your projects. Nexus snapshots the folder before each prompt.');
   }
+  return real;
+}
+
+// As with a cloned repo, the chat's own files (.nexus) stay out of a git repo's commits.
+export function excludeNexus(dir) {
+  const exclude = path.join(dir, '.git', 'info', 'exclude');
+  if (!fs.existsSync(path.join(dir, '.git', 'HEAD')) || readText(exclude).split(/\r?\n/).includes('.nexus/')) return;
+  fs.mkdirSync(path.dirname(exclude), { recursive: true });
+  fs.appendFileSync(exclude, '\n.nexus/\n');
+}
+
+// Opens a folder from anywhere as a project, or returns the project that already has it. The chat's files go in its .nexus.
+export function open(dir) {
+  const real = folderPath(dir);
+  const known = list().find(p => (p.dir || fs.realpathSync.native(projectDir(p.name))) === real);
+  if (known) return known.name;
   const base = path.basename(real).replace(/[^\w.-]+/g, '-').replace(/^[^a-zA-Z0-9]+/, '').slice(0, 60) || 'folder';
   fs.mkdirSync(PROJECTS, { recursive: true });
   let name = base;
@@ -65,12 +78,7 @@ export function open(dir) {
       name = `${base}-${n}`;
     }
   }
-  // As with a cloned repo, the chat's own files stay out of the repo's commits.
-  const exclude = path.join(real, '.git', 'info', 'exclude');
-  if (fs.existsSync(path.join(real, '.git', 'HEAD')) && !readText(exclude).split(/\r?\n/).includes('.nexus/')) {
-    fs.mkdirSync(path.dirname(exclude), { recursive: true });
-    fs.appendFileSync(exclude, '\n.nexus/\n');
-  }
+  excludeNexus(real);
   return name;
 }
 const readText = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return ''; } };

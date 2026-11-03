@@ -209,9 +209,11 @@ textarea.field { resize: vertical; min-height: 110px; font-family: var(--mono); 
 dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--line-strong); border-radius: 12px; padding: 20px; width: min(440px, calc(100vw - 32px)); max-height: calc(var(--app-h, 100dvh) - 32px - var(--sat)); overflow-y: auto; }
 dialog.wide { width: min(800px, calc(100vw - 32px)); }
 .folders { display: grid; max-height: min(45vh, 420px); overflow: auto; margin-top: 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); }
-.folders button { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; background: none; border: 0; border-bottom: 1px solid var(--line); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
-.folders button:hover, .folders button:focus-visible { background: var(--raised); }
+.folders > button { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; background: none; border: 0; border-bottom: 1px solid var(--line); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.folders > button:hover, .folders > button:focus-visible { background: var(--raised); }
 .folders p { margin: 10px 12px; }
+.folders .frow { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.folders .frow .grow { flex: 1; min-width: 0; }
 dialog::backdrop { background: #000c; }
 dialog.picker { width: min(520px, calc(100vw - 32px)); height: min(640px, calc(var(--app-h, 100dvh) - 32px - var(--sat))); padding: 0; overflow: hidden; }
 dialog.picker[open] { display: flex; flex-direction: column; }

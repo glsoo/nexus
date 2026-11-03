@@ -11,7 +11,7 @@ import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
 import { decide, execTool, findAIComments, hasTool, killGroup, ruleKey, shells, TOOL_DEFS } from './tools.js';
-import { apiKey, childEnv, clip, NEXUS_HOME, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
+import { apiKey, childEnv, clip, isInside, NEXUS_HOME, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
 
 export const hub = new EventEmitter();
 hub.setMaxListeners(0);
@@ -46,9 +46,9 @@ function distrustCommitted(s) {
   } catch { return; } // not a git repository
   if (!tracked.split('\n').some(f => f && !projects.SHARED.some(d => f.startsWith(`.nexus/${d}/`)))) return;
   const st = s.state;
-  if (st.mode === 'default' && !st.autopilot && !st.allow?.length && !st.check) return;
-  Object.assign(st, { mode: 'default', autopilot: false, allow: [], check: '' });
-  st.log.push({ id: newId(), type: 'system', text: "This project's git repository tracks Nexus chat data in .nexus, so the mode, approvals, autopilot and /check saved there were reset. Stop tracking .nexus (keep only agents, skills and commands) to keep your settings." });
+  if (st.mode === 'default' && !st.autopilot && !st.allow?.length && !st.check && !st.dirs?.length) return;
+  Object.assign(st, { mode: 'default', autopilot: false, allow: [], check: '', dirs: [] });
+  st.log.push({ id: newId(), type: 'system', text: "This project's git repository tracks Nexus chat data in .nexus, so the mode, approvals, autopilot, /check and added folders saved there were reset. Stop tracking .nexus (keep only agents, skills and commands) to keep your settings." });
 }
 const cwdOf = s => projects.projectDir(s.name);
 export const isBusy = name => {
@@ -64,7 +64,7 @@ export function publicState(s) {
 }
 
 const persist = s => projects.save(s.name, s.state);
-const status = s => hub.emit('project', s.name, { t: 'status', running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), budget: s.state.budget || 0, compactAt: compactAt(s) });
+const status = s => hub.emit('project', s.name, { t: 'status', running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), budget: s.state.budget || 0, compactAt: compactAt(s), dirs: s.state.dirs || [] });
 const send = (s, ev) => hub.emit('project', s.name, ev);
 
 function addEntry(s, entry) {
@@ -166,7 +166,7 @@ function systemPrompt(s, extra = '', sub = false, dir = cwdOf(s)) {
 
 # Environment
 Project directory: ${dir}
-The conversation is stored in .nexus/ inside it. Leave that folder alone.
+The conversation is stored in .nexus/ inside it. Leave that folder alone.${s.state.dirs?.length ? `\nAlso part of this project, to read and edit the same way (each has a .nexus/ to leave alone): ${s.state.dirs.join(', ')}` : ''}
 Platform: ${process.platform}. Date: ${new Date().toISOString().slice(0, 10)}. Permission mode: ${s.state.mode}.
 
 # Available subagent types
@@ -241,7 +241,7 @@ async function runTool(s, call, ctx) {
   if (verdict.action === 'ask') {
     const answer = await askUser(s, sink, entry, signal);
     if (answer.decision === 'deny') return finish(answer.message ? `User denied this: ${answer.message}` : 'User denied this tool call.', 'denied');
-    if (answer.decision === 'always') s.state.allow.push(ruleKey(call.name, args, cwd));
+    if (answer.decision === 'always') s.state.allow.push(ruleKey(call.name, args, cwd, s.state.dirs));
     setEntry(s, sink, entry, { status: 'running', autopilot: answer.decision === 'auto' || undefined });
     persist(s);
   }
@@ -613,6 +613,7 @@ async function drainQueue(s) {
       s.checkFixes = 0;
       s.autoSteps = 0;
       m.entry.cp = await checkpoint.snapshot(cwdOf(s), m.entry.text.slice(0, 72) || 'prompt');
+      if (s.state.dirs?.length) m.entry.cps = Object.fromEntries(await Promise.all(s.state.dirs.map(async d => [d, await checkpoint.snapshot(d, m.entry.text.slice(0, 72) || 'prompt')])));
       send(s, { t: 'entry', entry: m.entry });
       if (s.state.agentSwitch !== undefined) {
         const to = s.state.agentSwitch;
@@ -736,6 +737,29 @@ export function setOption(s, key, value) {
   if (key === 'autopilot' && value) { s.autoSteps = 0; for (const resolve of s.pending.values()) resolve({ decision: 'auto' }); }
   persist(s);
   status(s);
+}
+
+// Other folders a chat works in besides its own: the tools treat them as the project, and each prompt checkpoints them for rewind.
+export function folders(name) {
+  const s = getSession(name);
+  return { main: fs.realpathSync.native(cwdOf(s)), dirs: s.state.dirs || [] };
+}
+export function addFolder(name, dir) {
+  const s = getSession(name), real = projects.folderPath(dir), { main, dirs } = folders(name);
+  const have = [main, ...dirs].find(d => isInside(d, real) || isInside(real, d));
+  if (have) throw projects.httpError(409, have === real ? 'That folder is already part of this chat.' : `That folder overlaps ${have}, which this chat already has.`);
+  projects.excludeNexus(real);
+  s.state.dirs = [...dirs, real];
+  persist(s);
+  status(s);
+  return folders(name);
+}
+export function removeFolder(name, dir) {
+  const s = getSession(name);
+  s.state.dirs = (s.state.dirs || []).filter(d => d !== dir);
+  persist(s);
+  status(s);
+  return folders(name);
 }
 
 // ---- prompts ----
@@ -1041,6 +1065,8 @@ export async function rewind(name, id, { files = true, conversation = true }) {
   if (files) {
     if (!entry.cp) throw projects.httpError(409, 'That prompt has no file checkpoint.');
     await checkpoint.restore(cwdOf(s), entry.cp);
+    // Added folders rewind too, unless they were taken out of the chat since.
+    for (const [d, cp] of Object.entries(entry.cps || {})) if (cp && s.state.dirs?.includes(d)) await checkpoint.restore(d, cp);
   }
   if (conversation) {
     if (entry.gen !== s.state.gen) throw projects.httpError(409, 'The conversation was compacted after this prompt, so only its files can be rewound.');

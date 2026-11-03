@@ -269,14 +269,15 @@ const EDITS = new Set(['Write', 'Edit', 'NotebookEdit']);
 const targetPath = (tool, a) => a.file_path ?? a.path ?? '.';
 
 // Writes into .nexus (conversation, agents, checkpoints) or any .git (config and hooks run commands) are never auto-approved.
-const inProject = (cwd, tool, a) => isInside(cwd, resolve(cwd, targetPath(tool, a)));
-const inNexus = (cwd, a) => {
+// dirs: other folders the chat works in, which count as the project too.
+const inProject = (cwd, tool, a, dirs = []) => [cwd, ...dirs].some(d => isInside(d, resolve(cwd, targetPath(tool, a))));
+const inNexus = (cwd, a, dirs = []) => {
   const file = resolve(cwd, targetPath('', a));
-  return isInside(path.join(cwd, '.nexus'), file) || path.relative(cwd, file).split(/[\\/]/).some(p => p.toLowerCase() === '.git');
+  return [cwd, ...dirs].some(d => isInside(path.join(d, '.nexus'), file)) || path.relative(cwd, file).split(/[\\/]/).some(p => p.toLowerCase() === '.git');
 };
 
 // "Always allow" rules are exact matches: a prefix rule like `npm test` would also pass `npm test; rm -rf ~`.
-export function ruleKey(tool, args, cwd) {
+export function ruleKey(tool, args, cwd, dirs) {
   if (tool === 'Bash') return `Bash:${args.command}`;
   if (tool === 'WebFetch') { try { return `WebFetch:${new URL(args.url).host}`; } catch { return `WebFetch:${args.url}`; } }
   // Like WebFetch per site, and like Read per file, so allowing one page never allows reading ~/.ssh.
@@ -285,7 +286,7 @@ export function ruleKey(tool, args, cwd) {
     try { return `Screenshot:${new URL(args.url).host}`; } catch { return `Screenshot:${args.url}`; }
   }
   if (EDITS.has(tool) || READS.has(tool)) {
-    return inProject(cwd, tool, args) && !inNexus(cwd, args) ? `${tool}:*` : `${tool}:${resolve(cwd, targetPath(tool, args))}`;
+    return inProject(cwd, tool, args, dirs) && !inNexus(cwd, args, dirs) ? `${tool}:*` : `${tool}:${resolve(cwd, targetPath(tool, args))}`;
   }
   return tool;
 }
@@ -293,11 +294,11 @@ export function ruleKey(tool, args, cwd) {
 export function decide(state, tool, args, cwd) {
   if (ALWAYS_OK.has(tool)) return { action: 'allow' };
   if (state.mode === 'bypass') return { action: 'allow' };
-  if (READS.has(tool) && inProject(cwd, tool, args)) return { action: 'allow' };
+  if (READS.has(tool) && inProject(cwd, tool, args, state.dirs)) return { action: 'allow' };
   if (state.mode === 'plan' && !READS.has(tool) && tool !== 'WebFetch' && tool !== 'Screenshot' && !tool.startsWith('mcp__')) {
     return { action: 'deny', reason: 'Plan mode is read-only. Finish the plan and call ExitPlanMode.' };
   }
-  if (state.allow.includes(ruleKey(tool, args, cwd))) return { action: 'allow' };
-  if (state.mode === 'acceptEdits' && EDITS.has(tool) && inProject(cwd, tool, args) && !inNexus(cwd, args)) return { action: 'allow' };
+  if (state.allow.includes(ruleKey(tool, args, cwd, state.dirs))) return { action: 'allow' };
+  if (state.mode === 'acceptEdits' && EDITS.has(tool) && inProject(cwd, tool, args, state.dirs) && !inNexus(cwd, args, state.dirs)) return { action: 'allow' };
   return { action: 'ask' };
 }

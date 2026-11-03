@@ -328,6 +328,48 @@ test('any folder opens as a project: linked, not moved, and removing it leaves t
   projects.trash('My-App-2');
 });
 
+test('a chat works in added folders: tools treat them as the project, and rewind restores them', async () => {
+  const { decide, ruleKey } = await import('../server/tools.js');
+  projects.create('multi');
+  const main = projects.projectDir('multi');
+  const api = path.join(tmp, 'side', 'api');
+  fs.mkdirSync(path.join(api, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(api, 'src', 'app.js'), 'v1');
+  const s = agent.getSession('multi');
+  const real = fs.realpathSync.native(api);
+  assert.deepEqual(agent.addFolder('multi', api).dirs, [real]);
+  assert.throws(() => agent.addFolder('multi', api), /already part of this chat/);
+  assert.throws(() => agent.addFolder('multi', path.join(api, 'src')), /overlaps/);
+  assert.throws(() => agent.addFolder('multi', path.dirname(api)), /overlaps/, 'a folder holding one the chat has');
+  fs.mkdirSync(path.join(main, 'sub'), { recursive: true });
+  assert.throws(() => agent.addFolder('multi', path.join(main, 'sub')), /overlaps/);
+  assert.throws(() => agent.addFolder('multi', os.homedir()), /not a whole drive, your home folder/);
+  assert.ok(agent.previewPrompt('multi').includes(real), 'the model is told about it');
+
+  const st = { ...s.state, mode: 'acceptEdits', allow: [] };
+  const file = path.join(api, 'src', 'app.js');
+  assert.equal(decide(st, 'Read', { file_path: file }, main).action, 'allow');
+  assert.equal(decide(st, 'Edit', { file_path: file }, main).action, 'allow', 'accept edits covers added folders');
+  assert.equal(decide(st, 'Edit', { file_path: path.join(api, '.nexus', 'x') }, main).action, 'ask', 'but never their .nexus');
+  assert.equal(decide(st, 'Read', { file_path: path.join(tmp, 'side', 'other.txt') }, main).action, 'ask');
+  assert.equal(ruleKey('Edit', { file_path: file }, main, st.dirs), 'Edit:*');
+
+  agent.setOption(s, 'mode', 'bypass');
+  const model = fakeModel(n => (n === 1 ? ['Write', { file_path: file, content: 'v2' }] : null));
+  try {
+    await agent.submit('multi', 'change the api');
+    await idle(s);
+  } finally { model.restore(); }
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v2');
+  const prompt = s.state.log.find(e => e.type === 'user');
+  assert.ok(prompt.cps?.[real], 'each prompt checkpoints added folders too');
+  await agent.rewind('multi', prompt.id, { files: true, conversation: false });
+  assert.equal(fs.readFileSync(file, 'utf8'), 'v1', 'rewind restores the added folder');
+
+  assert.deepEqual(agent.removeFolder('multi', real).dirs, []);
+  assert.equal(decide({ ...st, dirs: [] }, 'Edit', { file_path: file }, main).action, 'ask');
+});
+
 test('a DashScope key finds its own region, and chats go there', async () => {
   const { compatModels, callCompat } = await import('../server/compat.js');
   const before = process.env.DASHSCOPE_API_KEY;

@@ -101,6 +101,9 @@ route('POST', '/api/projects/clone', async ({ req }) => {
   broadcast({ t: 'projects' });
   return { name };
 });
+route('GET', '/api/projects/:name/folders', ({ p }) => agent.folders(need(p.name)));
+route('POST', '/api/projects/:name/folders', async ({ req, p }) => agent.addFolder(need(p.name), (await body(req)).path));
+route('DELETE', '/api/projects/:name/folders', async ({ req, p }) => agent.removeFolder(need(p.name), String((await body(req)).path || '')));
 route('POST', '/api/projects/:name/rename', async ({ req, p }) => {
   const { to } = await body(req);
   agent.renameProject(need(p.name), to);
