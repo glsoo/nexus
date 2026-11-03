@@ -38,7 +38,7 @@
 - **Any model, with the cost in plain sight.** Claude, GPT, Gemini, Groq, DeepSeek, Mistral, xAI, hundreds more through OpenRouter, or a free local model in Ollama or LM Studio. Each chat shows its cost in dollars, estimated from list prices.
 - **Several agents at once without collisions.** Agents can work in their own git worktrees and hand back a branch each, so you merge the one you like.
 - **Any screen.** The same agent on your desktop, a laptop or an installed phone app, with voice input.
-- **Bring your setup.** Your `AGENTS.md`, `CLAUDE.md` or `.cursorrules`, the skills and commands you made for Claude Code, Codex or VS Code, and your MCP servers all work as they are. Start from any GitHub repo with one paste.
+- **Bring your setup.** Your `AGENTS.md`, `CLAUDE.md` or `.cursorrules`, the skills and commands you made for Claude Code, Codex or VS Code, and your MCP servers all work as they are. Open a folder you already have, or start from any GitHub repo with one paste.
 
 ## ✨ What's inside
 
@@ -54,6 +54,7 @@
 | 🧪 **Tests that fix themselves** | `/check npm test` runs your command after every turn that changed files. When it fails, the agent gets the output and fixes it, up to three rounds. |
 | ✍️ **Works with your editor** | `/watch on`, then write a comment like `// handle empty input AI!` in VS Code, Vim or anything else and save. Nexus does it and removes the comment. |
 | 📥 **Clone and go** | Paste a GitHub (or any git) URL into the clone button next to **New project**, and the repo becomes a chat. |
+| 📂 **Open any folder** | The folder button next to **New project** opens a folder you already have, anywhere on the computer, as a project. Nexus works in it where it is, and removing the project leaves the folder alone. |
 | 🔎 **Search every chat** | The box above your chats searches what was said in all of them and jumps to the message. |
 | 📜 **Bring your rules** | Nexus reads `AGENTS.md` and `NEXUS.md`, and in a repo without `AGENTS.md` it follows `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`, Copilot instructions or Aider's `CONVENTIONS.md`. |
 | ⏰ **Schedules** | `/schedule <cron> <prompt>` runs a prompt on a timer in that chat: a morning review, a nightly dependency audit, a weekly cleanup. |

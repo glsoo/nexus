@@ -293,6 +293,41 @@ test('any OpenAI-compatible server: its models are listed and a chat runs tools 
   }
 });
 
+test('any folder opens as a project: linked, not moved, and removing it leaves the folder', async () => {
+  const { isInside } = await import('../server/util.js');
+  const outside = path.join(tmp, 'elsewhere', 'My App');
+  fs.mkdirSync(path.join(outside, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(outside, '.hidden'));
+  fs.writeFileSync(path.join(outside, 'readme.txt'), 'hi');
+  execFileSync('git', ['init', '-q', outside]);
+  const listing = projects.folders(outside);
+  assert.deepEqual(listing.folders.map(f => f.name), ['src'], 'files and dot-folders are left out');
+  assert.equal(listing.folders[0].path, path.join(outside, 'src'));
+  assert.equal(listing.parent, path.dirname(outside));
+  assert.throws(() => projects.folders(path.join(tmp, 'nope')), /Can't open/);
+
+  const name = projects.open(outside);
+  assert.equal(name, 'My-App');
+  assert.equal(projects.list().find(p => p.name === name).dir, fs.realpathSync.native(outside));
+  assert.ok(isInside(projects.projectDir(name), 'src/x.js') && !isInside(projects.projectDir(name), '../x.js'), 'tools stay inside the opened folder');
+  assert.equal(fs.readFileSync(path.join(projects.projectDir(name), 'readme.txt'), 'utf8'), 'hi');
+  assert.match(fs.readFileSync(path.join(outside, '.git', 'info', 'exclude'), 'utf8'), /^\.nexus\/$/m, "the chat's files stay out of the repo");
+  assert.equal(projects.open(outside + path.sep), name, 'opening it again finds the same project');
+  fs.mkdirSync(path.join(tmp, 'other', 'My App'), { recursive: true });
+  assert.equal(projects.open(path.join(tmp, 'other', 'My App')), 'My-App-2');
+
+  assert.throws(() => projects.open(path.join(tmp, 'missing')), /no folder at/);
+  assert.throws(() => projects.open('relative/path'), /no folder at/);
+  assert.throws(() => projects.open(os.homedir()), /not a whole drive, your home folder/);
+  assert.throws(() => projects.open(path.parse(tmp).root), /not a whole drive/);
+  assert.throws(() => projects.open(tmp), /holds your projects/);
+
+  projects.trash(name);
+  assert.ok(!projects.list().some(p => p.name === name));
+  assert.equal(fs.readFileSync(path.join(outside, 'readme.txt'), 'utf8'), 'hi', 'removing the project leaves the folder and its files');
+  projects.trash('My-App-2');
+});
+
 test('API keys pasted in Settings are used, the environment wins, and child processes get neither', async () => {
   const { apiKey, childEnv, keysPath, saveKey } = await import('../server/util.js');
   const { providers } = await import('../server/compat.js');

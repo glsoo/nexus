@@ -88,6 +88,8 @@ const routes = [];
 const route = (method, pattern, fn) => routes.push({ method, re: new RegExp(`^${pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)')}$`), fn });
 
 route('GET', '/api/projects', () => projects.list().map(p => ({ ...p, busy: agent.isBusy(p.name) })));
+route('GET', '/api/folders', ({ q }) => projects.folders(q.get('path')));
+route('POST', '/api/projects/open', async ({ req }) => ({ name: projects.open((await body(req)).path) }));
 route('GET', '/api/search', ({ q }) => agent.search(q.get('q') || ''));
 route('POST', '/api/projects', async ({ req }) => {
   const name = projects.create((await body(req)).name);

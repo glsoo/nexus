@@ -2,9 +2,10 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { childEnv, PROJECTS, readJson, validName, writeAtomic } from './util.js';
+import { childEnv, HOME, isInside, PROJECTS, readJson, validName, writeAtomic } from './util.js';
 
 // One project = one conversation = one directory: ~/projects/<name>, which is also the agent's cwd.
+// A folder opened from elsewhere is a link there (a junction on Windows), so every project still has a name in ~/projects.
 export const DEFAULT_MODEL = process.env.NEXUS_MODEL || 'gpt-6.1-sol';
 const blank = () => ({
   model: DEFAULT_MODEL, effort: 'medium', mode: 'default', gen: 0,
@@ -20,14 +21,59 @@ const stateFile = name => path.join(projectDir(name), '.nexus', 'conversation.js
 export function list() {
   fs.mkdirSync(PROJECTS, { recursive: true });
   return fs.readdirSync(PROJECTS, { withFileTypes: true })
-    .filter(d => (d.isDirectory() || d.name === SELF) && validName(d.name))
-    .map(d => {
+    .filter(d => (d.isDirectory() || d.isSymbolicLink()) && validName(d.name))
+    .flatMap(d => {
+      // A linked folder that has gone away (a drive unplugged, a folder moved) is left out until it is back.
+      let stat;
+      try { stat = fs.statSync(projectDir(d.name)); } catch { return []; }
+      if (!stat.isDirectory()) return [];
       const file = stateFile(d.name);
-      const mtime = fs.statSync(fs.existsSync(file) ? file : projectDir(d.name)).mtimeMs;
-      return { name: d.name, updated: mtime };
+      const mtime = fs.existsSync(file) ? fs.statSync(file).mtimeMs : stat.mtimeMs;
+      return [{ name: d.name, updated: mtime, ...(d.isSymbolicLink() ? { dir: fs.realpathSync.native(projectDir(d.name)) } : {}) }];
     })
     .sort((a, b) => b.updated - a.updated);
 }
+
+// The folders inside one folder, for picking a project folder anywhere on this computer. ~ is the home folder.
+export function folders(dir) {
+  dir = path.resolve(HOME, String(dir || '~').trim().replace(/^~(?=$|[\\/])/, HOME));
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (err) { throw httpError(400, `Can't open ${dir} (${err.code}).`); }
+  const isDir = d => d.isDirectory() || (d.isSymbolicLink() && (() => { try { return fs.statSync(path.join(dir, d.name)).isDirectory(); } catch { return false; } })());
+  const names = entries.filter(d => !/^[.$]/.test(d.name) && isDir(d)).map(d => d.name).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  return { path: dir, parent: path.dirname(dir) === dir ? null : path.dirname(dir), folders: names.slice(0, 1000).map(name => ({ name, path: path.join(dir, name) })) };
+}
+
+// Opens a folder from anywhere as a project, or returns the project that already has it. The chat's files go in its .nexus.
+export function open(dir) {
+  dir = String(dir || '').trim();
+  let real = null;
+  try { if (path.isAbsolute(dir) && fs.statSync(dir).isDirectory()) real = fs.realpathSync.native(dir); } catch { /* not there */ }
+  if (!real) throw httpError(400, `There's no folder at ${dir || 'that path'}.`);
+  const known = list().find(p => (p.dir || fs.realpathSync.native(projectDir(p.name))) === real);
+  if (known) return known.name;
+  // Checkpoints snapshot the whole folder before each prompt, which would never finish on a drive or a home folder.
+  if (path.parse(real).root === real || isInside(real, HOME) || isInside(real, PROJECTS)) {
+    throw httpError(400, 'Pick a project folder, not a whole drive, your home folder or the folder that holds your projects. Nexus snapshots the folder before each prompt.');
+  }
+  const base = path.basename(real).replace(/[^\w.-]+/g, '-').replace(/^[^a-zA-Z0-9]+/, '').slice(0, 60) || 'folder';
+  fs.mkdirSync(PROJECTS, { recursive: true });
+  let name = base;
+  for (let n = 2; ; n++) {
+    try { fs.symlinkSync(real, projectDir(name), process.platform === 'win32' ? 'junction' : 'dir'); break; } catch (err) {
+      if (err.code !== 'EEXIST') throw httpError(400, `Couldn't open that folder: ${err.message}`);
+      name = `${base}-${n}`;
+    }
+  }
+  // As with a cloned repo, the chat's own files stay out of the repo's commits.
+  const exclude = path.join(real, '.git', 'info', 'exclude');
+  if (fs.existsSync(path.join(real, '.git', 'HEAD')) && !readText(exclude).split(/\r?\n/).includes('.nexus/')) {
+    fs.mkdirSync(path.dirname(exclude), { recursive: true });
+    fs.appendFileSync(exclude, '\n.nexus/\n');
+  }
+  return name;
+}
+const readText = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return ''; } };
 
 export const exists = name => validName(name) && fs.existsSync(projectDir(name));
 
@@ -83,8 +129,10 @@ export function rename(from, to) {
 }
 
 // Deleting moves to ~/projects/.trash so a misclick can be undone by hand.
+// A folder opened from elsewhere only loses its link: the folder, and the chat in its .nexus, stay where they are.
 export function trash(name) {
   if (!exists(name)) throw httpError(404, 'Project not found.');
+  if (fs.lstatSync(projectDir(name)).isSymbolicLink()) return fs.unlinkSync(projectDir(name));
   const bin = path.join(PROJECTS, '.trash');
   fs.mkdirSync(bin, { recursive: true });
   fs.renameSync(projectDir(name), path.join(bin, `${name}-${Date.now()}`));

@@ -25,6 +25,7 @@ const ICONS = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>', back: '<path d="M15 18l-6-6 6-6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   plane: '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.3c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
 };
 const icon = name => { const t = document.createElement('template'); t.innerHTML = `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return t.content.firstChild; };
@@ -135,6 +136,7 @@ function shell() {
   $side = h('aside', { class: 'side' },
     h('div', { class: 'side-head' }, h('img', { src: '/icon.svg?v=purple', alt: '' }), 'Nexus'),
     h('div', { class: 'newrow' }, h('button', { class: 'btn new', onclick: guard(newProject) }, icon('plus'), 'New project'),
+      h('button', { class: 'btn', 'aria-label': 'Open a folder', title: 'Open a folder', onclick: folderDialog }, icon('folder')),
       h('button', { class: 'btn', 'aria-label': 'Clone a git repository', title: 'Clone a git repository', onclick: cloneDialog }, icon('download'))),
     $find, $list,
     h('div', { class: 'side-foot' },
@@ -177,11 +179,47 @@ function cloneDialog() {
   input.focus();
 }
 
+// Picks a folder on the computer Nexus runs on, which may not be the one showing this page, so the browser's own picker can't help.
+function folderDialog() {
+  const err = h('div', { class: 'err', role: 'alert' });
+  const input = h('input', { class: 'field mono', id: 'fp', 'aria-describedby': 'fp-hint', spellcheck: false, autocapitalize: 'off', autocomplete: 'off' });
+  const list = h('div', { class: 'folders', 'aria-label': 'Folders' });
+  const show = async dir => {
+    err.textContent = '';
+    try {
+      const r = await api('GET', `/api/folders?path=${encodeURIComponent(dir)}`);
+      input.value = r.path;
+      list.replaceChildren(...[r.parent && h('button', { type: 'button', onclick: () => show(r.parent) }, icon('back'), 'Up one folder'),
+        ...r.folders.map(f => h('button', { type: 'button', onclick: () => show(f.path) }, icon('folder'), f.name)),
+        !r.folders.length && h('p', { class: 'small muted' }, 'No folders in here.')].filter(Boolean));
+      list.scrollTop = 0;
+    } catch (e) { err.textContent = e.message; }
+  };
+  let busy = false;
+  const run = async () => {
+    if (busy) return false;
+    busy = true; err.textContent = '';
+    try {
+      const { name } = await api('POST', '/api/projects/open', { path: input.value.trim() });
+      await refreshProjects();
+      go(name, null, 'chat');
+      return true;
+    } catch (e) { err.textContent = e.message; return false; } finally { busy = false; }
+  };
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); show(input.value); } });
+  dialog({ title: 'Open a folder', wide: true, body: h('div', {}, h('label', { class: 'lbl', htmlFor: 'fp' }, 'Folder'), input, list,
+    h('p', { class: 'small muted', id: 'fp-hint' }, 'Type or paste a path and press Enter to go there. Nexus works in the folder you open and keeps the chat in a .nexus folder inside it. Deleting the project later leaves the folder alone.'), err),
+  actions: [{ label: 'Cancel' }, { label: 'Open this folder', class: 'primary', run }] });
+  show('~');
+  input.focus();
+}
+const projectDir = name => S.projects.find(p => p.name === name)?.dir;
+
 async function refreshProjects() {
   S.projects = await api('GET', '/api/projects');
   if ($find.value.trim()) return; // search results stay until the box is cleared
   $list.replaceChildren(...S.projects.map(p => h('div', { class: `pitem ${p.name === S.project && !S.page ? 'on' : ''}` },
-    h('button', { class: 'open', title: pretty(p.name), 'aria-current': p.name === S.project ? 'true' : undefined, onclick: () => go(p.name, null, 'chat') },
+    h('button', { class: 'open', title: p.dir || pretty(p.name), 'aria-current': p.name === S.project ? 'true' : undefined, onclick: () => go(p.name, null, 'chat') },
       h('span', { class: `dot ${p.busy ? 'busy' : ''}` }), h('span', { class: 'nm' }, pretty(p.name))),
     h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(p.name)}`, 'aria-haspopup': 'menu', onclick: e => projectMenu(e.currentTarget, p.name) }, icon('dots')))));
 }
@@ -241,13 +279,15 @@ function renameDialog(name) {
   };
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input.closest('dialog').querySelector('.primary').click(); } });
   dialog({ title: 'Rename project', body: h('div', {}, h('label', { class: 'lbl', htmlFor: 'rn' }, 'Name'), input,
-    h('p', { class: 'small muted', id: 'rn-hint' }, `Moves the folder to ~/projects/<name>. Spaces become dashes.`), err),
+    h('p', { class: 'small muted', id: 'rn-hint' }, projectDir(name) ? `Renames the chat. The folder stays at ${projectDir(name)}. Spaces become dashes.` : 'Moves the folder to ~/projects/<name>. Spaces become dashes.'), err),
   actions: [{ label: 'Cancel' }, { label: 'Rename', class: 'primary', run: save }] });
   input.select();
 }
 
 async function deleteDialog(name) {
-  if (!await confirmBox(`Delete ${pretty(name)}?`, `The folder moves to ~/projects/.trash, where you can still recover it by hand.`, 'Delete', 'danger')) return;
+  const where = projectDir(name);
+  if (!await confirmBox(where ? `Remove ${pretty(name)}?` : `Delete ${pretty(name)}?`, where ? `Nexus stops showing it. The folder, its files and the chat saved in its .nexus stay at ${where}; open the folder again to pick up where you left off.`
+    : 'The folder moves to ~/projects/.trash, where you can still recover it by hand.', where ? 'Remove' : 'Delete', 'danger')) return;
   await guard(async () => {
     await api('DELETE', P(name));
     if (S.project === name) go(null);
@@ -289,8 +329,9 @@ function render() {
   if (S.page === 'settings') return settingsPage(hamb);
   if (!S.project) {
     return $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', {}, 'Nexus')),
-      h('div', { class: 'empty' }, h('h2', {}, 'Start a project'), h('p', {}, 'Each conversation gets its own folder in ~/projects.'),
+      h('div', { class: 'empty' }, h('h2', {}, 'Start a project'), h('p', {}, 'Each conversation gets its own folder in ~/projects, or works in a folder you already have.'),
         h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: guard(newProject) }, icon('plus'), 'New project'),
+          h('button', { class: 'btn', onclick: folderDialog }, icon('folder'), 'Open a folder'),
           h('button', { class: 'btn', onclick: cloneDialog }, icon('download'), 'Clone a repo'))));
   }
   const view = h('div', { class: 'view' });
@@ -506,7 +547,7 @@ const STARTERS = {
 };
 function hello() {
   const starters = h('div', { class: 'starters' });
-  const el = h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'), h('p', { class: 'mono' }, `~/projects/${S.project}`), starters,
+  const el = h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'), h('p', { class: 'mono' }, projectDir(S.project) || `~/projects/${S.project}`), starters,
     h('p', { class: 'small' }, 'Type a request. / runs a command, @ points at a file and ! runs a shell command.'));
   const project = S.project;
   S.modelsReady?.then(() => {
