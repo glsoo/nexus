@@ -1110,7 +1110,15 @@ export async function changes(name) {
   const s = getSession(name);
   const last = lastCheckpoint(s);
   if (!last) return { since: null, diff: '' };
-  return { since: last.text.slice(0, 80), diff: await diffSince(s, last) };
+  return { since: last.text.slice(0, 80), id: last.id, kept: last.kept || [], diff: await diffSince(s, last) };
+}
+
+// Keep, in the review bar above the message box: these files stop asking for review and stay as they are.
+export function keepChanges(name, files) {
+  const s = getSession(name), last = lastCheckpoint(s);
+  if (!last || !Array.isArray(files)) return;
+  last.kept = [...new Set([...(last.kept || []), ...files.map(String)])];
+  persist(s);
 }
 
 // file: relative to the main folder, or a full path in it or in an added one.

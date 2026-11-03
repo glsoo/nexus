@@ -484,7 +484,8 @@ function onEvent(m) {
     case 'status': {
       const was = S.state?.running;
       if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt, dirs: m.dirs });
-      if (was && !m.running) finished();
+      if (was && !m.running) { finished(); refreshReview(); }
+      if (m.running && $review) $review.hidden = true;
       syncTitle();
       syncComposer();
       break;
@@ -524,7 +525,9 @@ function chatView(view) {
     if (!S.state.log.length) $log.append(hello());
     for (const e of S.state.log) upsertEntry(e, false);
   }
-  view.append($log, $todos, composer());
+  $review = h('div', { class: 'review', hidden: true, role: 'region', 'aria-label': 'Changes to review' });
+  view.append($log, $todos, $review, composer());
+  refreshReview();
   syncComposer();
   $log.scrollTop = $log.scrollHeight;
   if (matchMedia('(hover: hover)').matches) $input.focus();
@@ -1533,6 +1536,63 @@ function newFile(open) {
 }
 
 // ---- changes ----
+const diffLine = l => {
+  const cls = /^(\+\+\+|---|diff )/.test(l) ? 'head' : l.startsWith('@@') ? 'hunk' : l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : '';
+  return cls ? h('span', { class: cls }, l) : `${l}\n`;
+};
+// One entry per file: its path as Undo file takes it, its lines, and how many were added and removed.
+function splitDiff(diff) {
+  const files = [];
+  for (const l of diff.split('\n')) {
+    const file = /^diff --git a\/(.+) b\/\1$/.exec(l)?.[1];
+    if (file) { files.push({ path: file, lines: [], add: 0, del: 0 }); continue; }
+    const f = files.at(-1);
+    if (!f) continue;
+    f.lines.push(l);
+    if (l[0] === '+' && !l.startsWith('+++')) f.add++;
+    else if (l[0] === '-' && !l.startsWith('---')) f.del++;
+  }
+  return files;
+}
+
+// Like VS Code's Keep and Undo: after a turn, the files it changed wait above the message box until each is kept or undone.
+// Sending the next message keeps whatever is left, since changes are counted from your last prompt.
+let $review = null;
+async function refreshReview() {
+  const box = $review, project = S.project;
+  if (!box?.isConnected) return;
+  const ch = S.state && !S.state.running ? await api('GET', `${P(project)}/changes`).catch(() => null) : null;
+  if (box !== $review || project !== S.project || S.state?.running) return;
+  const files = ch?.id ? splitDiff(ch.diff).filter(f => !ch.kept.includes(f.path)) : [];
+  box.hidden = !files.length;
+  if (!files.length) return;
+  const after = fn => guard(async () => { await fn(); await refreshReview(); });
+  const keep = paths => after(() => api('POST', `${P(project)}/changes/keep`, { files: paths }));
+  const undo = paths => after(async () => { for (const path of paths) await api('POST', `${P(project)}/changes/undo`, { path }); });
+  const undoAll = guard(async () => {
+    if (!await confirmBox(`Undo ${files.length} file${files.length === 1 ? '' : 's'}?`, 'Each goes back to how it was before your last prompt, and files the AI created are deleted. Files you kept stay as they are.', 'Undo all', 'danger')) return;
+    await undo(files.map(f => f.path))();
+  });
+  box.replaceChildren(
+    h('div', { class: 'rrow rhead' }, h('b', { class: 'grow' }, `${files.length} file${files.length === 1 ? '' : 's'} changed`),
+      h('button', { class: 'btn small', type: 'button', onclick: keep(files.map(f => f.path)) }, icon('check'), 'Keep all'),
+      h('button', { class: 'btn small', type: 'button', onclick: undoAll }, icon('undo'), 'Undo all')),
+    ...files.map(f => {
+      const pre = h('pre', { class: 'diff', hidden: true }, f.lines.filter(l => !/^(index |--- |\+\+\+ |(new|deleted) file mode)/.test(l)).map(diffLine));
+      // A file in an added folder is shown from that folder's name, like api/src/app.js; the tooltip has the full path.
+      const root = (S.state?.dirs || []).map(d => d.split(/[\\/]/).join('/')).find(d => f.path.startsWith(`${d}/`));
+      const parts = (root ? `${root.split('/').pop()}${f.path.slice(root.length)}` : f.path).split('/');
+      return h('div', { class: 'rfile' },
+        h('div', { class: 'rrow' },
+          h('button', { class: 'linkbtn rname', type: 'button', title: f.path, 'aria-expanded': 'false', onclick: e => { pre.hidden = !pre.hidden; e.currentTarget.setAttribute('aria-expanded', String(!pre.hidden)); } },
+            h('span', { class: 'mono' }, parts.pop()), parts.length ? h('span', { class: 'small muted' }, ` ${parts.join('/')}`) : null),
+          h('span', { class: 'small radd' }, `+${f.add}`), h('span', { class: 'small rdel' }, `-${f.del}`),
+          h('button', { class: 'btn small', type: 'button', 'aria-label': `Keep ${f.path}`, onclick: keep([f.path]) }, 'Keep'),
+          h('button', { class: 'btn small', type: 'button', 'aria-label': `Undo ${f.path}`, onclick: undo([f.path]) }, 'Undo')),
+        pre);
+    }));
+}
+
 function changesView(view) {
   const box = h('pre', { class: 'diff', tabIndex: 0, 'aria-label': 'Changes' }, 'Loading…');
   const since = h('span', { class: 'path muted' });
@@ -1544,12 +1604,11 @@ function changesView(view) {
       box.replaceChildren(...(diff ? diff.split('\n').map(l => {
         const file = /^diff --git a\/(.+) b\/\1$/.exec(l)?.[1];
         if (file) return h('span', { class: 'head' }, l, h('button', { class: 'btn small undo', type: 'button', onclick: guard(async () => {
-          if (!await confirmBox(`Undo ${file}?`, 'It goes back to how it was before your last prompt. A checkpoint is saved first, so Rewind can bring the change back.', 'Undo file', 'danger')) return;
+          if (!await confirmBox(`Undo ${file}?`, 'It goes back to how it was before your last prompt, or is deleted if the AI created it.', 'Undo file', 'danger')) return;
           await api('POST', `${P(S.project)}/changes/undo`, { path: file });
           load();
         }) }, 'Undo file'));
-        const cls = /^(\+\+\+|---|diff )/.test(l) ? 'head' : l.startsWith('@@') ? 'hunk' : l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : '';
-        return cls ? h('span', { class: cls }, l) : `${l}\n`;
+        return diffLine(l);
       }) : ['No file changes.']));
     } catch (e) { box.textContent = e.message; }
   }

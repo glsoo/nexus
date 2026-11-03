@@ -135,6 +135,13 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .todos .completed { color: var(--muted); text-decoration: line-through; }
 .todos .in_progress { color: var(--accent); font-weight: 600; }
 
+.review { flex: none; max-width: 828px; width: calc(100% - 32px); margin: 0 auto 6px; background: var(--card); border: 1px solid var(--line-strong); border-radius: 12px; max-height: 38vh; overflow: auto; font-size: 13px; }
+.review .rrow { display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-wrap: wrap; }
+.review .rhead { position: sticky; top: 0; background: var(--card); border-bottom: 1px solid var(--line); z-index: 1; }
+.review .rfile + .rfile { border-top: 1px solid var(--line); }
+.review .rname { flex: 1; min-width: 120px; overflow-wrap: anywhere; color: var(--fg); }
+.review .radd { color: #86efac; } .review .rdel { color: #fca5a5; }
+.review .diff { max-height: 260px; padding: 6px 10px; border-top: 1px solid var(--line); }
 .composer { flex: none; max-width: 860px; width: 100%; margin: 0 auto; padding: 0 max(16px, var(--sar)) max(8px, var(--sab)) max(16px, var(--sal)); position: relative; }
 .kb .composer { padding-bottom: 8px; }
 .cbox { background: var(--card); border: 1px solid var(--line-strong); border-radius: 12px; }

@@ -141,6 +141,7 @@ route('PUT', '/api/projects/:name/file', async ({ req, p }) => {
   return {};
 });
 route('GET', '/api/projects/:name/changes', ({ p }) => agent.changes(need(p.name)));
+route('POST', '/api/projects/:name/changes/keep', async ({ req, p }) => { agent.keepChanges(need(p.name), (await body(req)).files); return {}; });
 route('POST', '/api/projects/:name/changes/undo', async ({ req, p }) => {
   const raw = String((await body(req)).path || '');
   if (!raw) throw fail(400, 'That file cannot be undone.');

@@ -790,6 +790,11 @@ test('Undo file puts one changed file back and deletes one the agent created', {
     await idle(s);
   } finally { model.restore(); }
   assert.match((await agent.changes('undo')).diff, /keep\.txt[\s\S]*new\.txt/);
+  agent.keepChanges('undo', ['other.txt']);
+  agent.keepChanges('undo', ['other.txt']);
+  const ch = await agent.changes('undo');
+  assert.deepEqual(ch.kept, ['other.txt'], 'Keep marks a file reviewed, once');
+  assert.equal(ch.id, s.state.log.find(e => e.type === 'user').id);
   await agent.undoFile('undo', 'keep.txt');
   await agent.undoFile('undo', 'new.txt');
   assert.equal(fs.readFileSync(path.join(dir, 'keep.txt'), 'utf8'), 'v1');
