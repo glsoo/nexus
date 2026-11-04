@@ -536,11 +536,15 @@ agent.hub.on('project', (name, ev) => {
   if (ev.t === 'status') broadcast({ t: 'projects' });
   if (ev.t === 'status' && ev.running) busy.add(name);
   else if (ev.t === 'status' && busy.delete(name)) {
-    const reply = agent.getSession(name).state.log.findLast(e => e.type === 'assistant')?.text || '';
+    const { log } = agent.getSession(name).state;
+    // settings.json "notifyErrors": a chat that stopped on an error says so, instead of just finished.
+    const failed = log.at(-1)?.type === 'error' && readSettings().notifyErrors ? log.at(-1) : null;
+    const reply = failed?.text || log.findLast(e => e.type === 'assistant')?.text || '';
     const body = reply.replace(/\s+/g, ' ').slice(0, 140) || 'The agent is done.';
-    ping(`${name} finished`, body, name);
-    pcNotify(`${name} finished`, body, name);
-    broadcast({ t: 'alert', project: name, kind: 'finished', body }); // every open page, which shows it unless you're watching that chat
+    const title = `${name} ${failed ? 'stopped on an error' : 'finished'}`;
+    ping(title, body, name);
+    pcNotify(title, body, name);
+    broadcast({ t: 'alert', project: name, kind: failed ? 'error' : 'finished', body }); // every open page, which shows it unless you're watching that chat
   } else if (ev.t === 'entry' && ev.entry.status === 'awaiting' && !pinged.has(ev.entry)) {
     pinged.add(ev.entry);
     const body = `The agent ${asks[ev.entry.name] || `wants to run ${ev.entry.name}`}.`;

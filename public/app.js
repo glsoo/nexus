@@ -311,8 +311,8 @@ async function refreshProjects() {
     const mark = p.waiting ? 'waiting' : S.alerts[p.name];
     return h('div', { class: `pitem ${p.name === S.project && !S.page ? 'on' : ''} ${mark ? 'unseen' : ''}` },
     h('button', { class: 'open', title: p.dir || pretty(p.name), 'aria-current': p.name === S.project ? 'true' : undefined, onclick: () => go(p.name, null, 'chat') },
-      h('span', { class: `dot ${p.busy && !p.waiting ? 'busy' : mark === 'waiting' ? 'awaiting' : mark === 'finished' ? 'done' : ''}` }), h('span', { class: 'nm' }, pretty(p.name)),
-      mark === 'waiting' && h('span', { class: 'need' }, 'needs you'), mark === 'finished' && h('span', { class: 'sr' }, ', finished')),
+      h('span', { class: `dot ${p.busy && !p.waiting ? 'busy' : mark === 'waiting' ? 'awaiting' : mark === 'finished' ? 'done' : mark === 'error' ? 'error' : ''}` }), h('span', { class: 'nm' }, pretty(p.name)),
+      mark === 'waiting' && h('span', { class: 'need' }, 'needs you'), mark === 'finished' && h('span', { class: 'sr' }, ', finished'), mark === 'error' && h('span', { class: 'sr' }, ', stopped on an error')),
     h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(p.name)}`, 'aria-haspopup': 'menu', onclick: e => projectMenu(e.currentTarget, p.name) }, icon('dots')));
   }));
 }
@@ -486,7 +486,7 @@ function notice({ project, kind, body }) {
   if (kind === 'waiting' || S.alerts[project] !== 'waiting') S.alerts[project] = kind;
   refreshSoon();
   syncTitle();
-  const title = `${pretty(project)} ${kind === 'waiting' ? 'needs your answer' : 'finished'}`;
+  const title = `${pretty(project)} ${kind === 'waiting' ? 'needs your answer' : kind === 'error' ? 'stopped on an error' : 'finished'}`;
   if (!document.hidden) return toast(`${title}. ${body}`, ['Open', () => go(project, null, 'chat')], kind === 'waiting' ? 12000 : 6000);
   // This computer shows its own notification for a browser on it, so the browser doesn't add a second one.
   if (!S.me?.desktopNotify && pref('nexus.notify') === '1' && window.Notification?.permission === 'granted') {
@@ -2145,6 +2145,7 @@ async function settingsPage(hamb) {
     await spendCard(),
     autopilotCard(area),
     riskCard(area),
+    reliabilityCard(area),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact and Notification; a hook exiting with 2 blocks a tool call or prompt. MCP servers reconnect within seconds of saving.'),
     h('p', { class: 'small muted' }, 'Models: add any other OpenAI-compatible server under "providers", as in the example.'),
@@ -2211,15 +2212,21 @@ async function spendCard() {
       sp.chats.map(c => h('div', { class: 'rowline spend' }, h('button', { class: 'linkbtn grow', type: 'button', onclick: () => go(c.name, null, 'chat') }, pretty(c.name)), h('span', { class: 'mono' }, usd(c.cost)))))];
 }
 
+// Writes some keys of settings.json (undefined removes one) through the same endpoint as the editor below, keeping the editor in step.
+async function putSettings(area, patch) {
+  const { text } = await api('GET', '/api/settings');
+  const next = `${JSON.stringify({ ...JSON.parse(text), ...patch }, null, 2)}\n`;
+  await api('PUT', '/api/settings', { text: next });
+  if (area.value === text.replace(/\r\n?/g, '\n')) area.value = next;
+  return JSON.parse(next);
+}
+
 // On by default; settings.json "riskCheck": false turns it off.
 function riskCard(area) {
   const box = h('input', { type: 'checkbox', id: 'riskon', 'aria-describedby': 'riskon-hint' });
   guard(async () => { box.checked = JSON.parse((await api('GET', '/api/settings')).text).riskCheck !== false; })();
   box.onchange = guard(async () => {
-    const { text } = await api('GET', '/api/settings');
-    const next = `${JSON.stringify({ ...JSON.parse(text), riskCheck: box.checked ? undefined : false }, null, 2)}\n`;
-    await api('PUT', '/api/settings', { text: next });
-    if (area.value === text.replace(/\r\n?/g, '\n')) area.value = next;
+    await putSettings(area, { riskCheck: box.checked ? undefined : false });
     toast(box.checked ? 'Risky calls are checked first again.' : 'The risk check is off.');
   });
   return [h('h2', {}, 'Risk check'),
@@ -2227,22 +2234,60 @@ function riskCard(area) {
       h('p', { class: 'small muted', id: 'riskon-hint' }, "Deleting folders, force-pushing, git resets, admin rights, deploys, database deletes and edits to secrets or CI files get a risk rating from the chat's model first. If it is high, the agent stops to look for a safer way. If there isn't one, you're asked, or on autopilot and in bypass it goes ahead. Each check is one short extra request, rarely needed."))];
 }
 
-// Writes one key of settings.json through the same endpoint as the editor below, keeping the editor in step.
 function autopilotCard(area) {
   const input = h('input', { class: 'field', type: 'number', id: 'apreq', min: 0, step: 1, inputmode: 'numeric', 'aria-describedby': 'apreq-hint' });
   guard(async () => { input.value = JSON.parse((await api('GET', '/api/settings')).text).autopilotRequests ?? 150; })();
   const save = guard(async () => {
     const n = Number(input.value);
     if (input.value === '' || input.validity.badInput || !Number.isInteger(n) || n < 0) return toast('Use a whole number, or 0 for no limit.');
-    const { text } = await api('GET', '/api/settings');
-    const next = `${JSON.stringify({ ...JSON.parse(text), autopilotRequests: n }, null, 2)}\n`;
-    await api('PUT', '/api/settings', { text: next });
-    if (area.value === text.replace(/\r\n?/g, '\n')) area.value = next;
+    await putSettings(area, { autopilotRequests: n });
     toast(n ? `Autopilot now pauses after ${n} requests until your next message.` : 'Autopilot has no request limit now. Only a budget stops it.');
   });
   return [h('h2', {}, h('label', { htmlFor: 'apreq' }, 'Autopilot request limit')),
     h('div', { class: 'card' }, h('div', { class: 'rowline' }, input, h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Save')),
       h('p', { class: 'small muted', id: 'apreq-hint' }, 'How many model requests autopilot makes, subagents included, before it pauses until your next message. Long tasks may need 500 or more. 0 means no limit, so set a budget with /budget to cap the cost. Applies right away, even to a running chat.'))];
+}
+
+// All off by default: settings.json "requestsPerMinute", "autoRetry", "notifyErrors" and "fallbackModels". The server reads them on each request.
+function reliabilityCard(area) {
+  const card = h('div', { class: 'card form' });
+  const render = st => {
+    const rpm = h('input', { class: 'field grow', type: 'number', id: 'rpm', min: 0, step: 1, inputmode: 'numeric', value: st.requestsPerMinute || 0, 'aria-describedby': 'rpm-hint' });
+    const saveRpm = guard(async () => {
+      const n = Number(rpm.value);
+      if (rpm.value === '' || rpm.validity.badInput || !Number.isInteger(n) || n < 0) return toast('Use a whole number, or 0 for no limit.');
+      render(await putSettings(area, { requestsPerMinute: n || undefined }));
+      toast(n ? `At most ${n} requests a minute now go to each provider.` : 'Requests are no longer paced.');
+    });
+    const flag = (key, label, hint, on, off) => {
+      const box = h('input', { type: 'checkbox', id: `set-${key}`, checked: Boolean(st[key]), 'aria-describedby': `set-${key}-hint`, onchange: guard(async () => {
+        render(await putSettings(area, { [key]: box.checked || undefined }));
+        toast(box.checked ? on : off);
+      }) });
+      return [h('label', { class: 'rowline check', htmlFor: box.id }, box, h('span', { class: 'grow title' }, label)), h('p', { class: 'small muted', id: `${box.id}-hint` }, hint)];
+    };
+    const list = Array.isArray(st.fallbackModels) ? st.fallbackModels : [];
+    const label = id => { const m = S.models?.find(x => x.id === id); return m ? `${m.name || m.id} · ${m.providerName || m.provider || ''}` : id; };
+    const save = async next => render(await putSettings(area, { fallbackModels: next.length ? next : undefined }));
+    const add = h('select', { class: 'field', id: 'fbadd', 'aria-describedby': 'fb-hint', onchange: guard(async () => { if (add.value) await save([...list, add.value]); }) },
+      h('option', { value: '' }, list.length ? 'Add another model…' : 'Add a model…'), ...(S.models || []).filter(m => !list.includes(m.id)).map(m => h('option', { value: m.id }, label(m.id))));
+    card.replaceChildren(...[
+      h('label', { class: 'title', htmlFor: 'rpm' }, 'Requests per minute, to each provider'),
+      h('div', { class: 'rowline' }, rpm, h('button', { class: 'btn', type: 'button', onclick: saveRpm }, 'Save')),
+      h('p', { class: 'small muted', id: 'rpm-hint' }, "Paces requests so a provider's per-minute limit is never hit, counting every chat and subagent together. Set it a little under the limit your provider's console shows for your plan. 0 means no pacing."),
+      ...flag('autoRetry', 'Retry automatically when a request fails', 'Rate limits, overloaded servers and dropped connections are tried again up to 6 times, waiting as long as the provider asks (up to 10 minutes each). The chat shows each wait, and Stop cancels it. A key out of credit is not retried.',
+        'Failed requests are retried now.', 'Failed requests are no longer retried after the first few seconds.'),
+      ...flag('notifyErrors', 'Notify me when a chat stops on an error', 'The notification says what went wrong instead of just "finished", through every notification you have turned on.',
+        'Errors now come with a notification.', 'Error notifications are off.'),
+      h('label', { class: 'title', htmlFor: 'fbadd' }, 'Fallback models'),
+      h('p', { class: 'small muted', id: 'fb-hint' }, "When a key runs out of credit or quota, the chat switches to the first model below from a different provider and carries on. You'll see the switch in the chat. Empty means no switching."),
+      list.length > 0 && h('ol', { class: 'fblist' }, list.map((id, i) => h('li', { class: 'rowline' }, h('span', { class: 'grow mono' }, label(id)),
+        i > 0 && h('button', { class: 'btn small', type: 'button', 'aria-label': `Move ${id} up`, onclick: guard(() => save([...list.slice(0, i - 1), id, list[i - 1], ...list.slice(i + 1)])) }, 'Up'),
+        h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove ${id}`, onclick: guard(() => save(list.filter(x => x !== id))) }, 'Remove')))),
+      add].filter(Boolean));
+  };
+  guard(async () => render(JSON.parse((await api('GET', '/api/settings')).text)))();
+  return [h('h2', {}, 'Reliability'), card];
 }
 
 function notifyCard() {

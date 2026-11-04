@@ -12,7 +12,7 @@ import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
 import { HIGH_RISK, parseRisk, RISK_PROMPT, riskInput, riskRules } from './risk.js';
 import { decide, execTool, findAIComments, hasTool, killGroup, ruleKey, shells, TOOL_DEFS } from './tools.js';
-import { apiKey, childEnv, clip, isInside, NEXUS_HOME, realish, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
+import { apiKey, childEnv, clip, isInside, NEXUS_HOME, outOfCredit, realish, newId, postWithRetry, readJson, readSettings, sleep, slug, sseEvents, writeAtomic } from './util.js';
 
 export const hub = new EventEmitter();
 hub.setMaxListeners(0);
@@ -353,9 +353,26 @@ async function runCalls(s, calls, ctx) {
   return calls.map((c, i) => ({ type: 'function_call_output', call_id: c.call_id, output: results[i] }));
 }
 
+// ---- reliability, all off by default ----
+// settings.json "autoRetry": rate limits, overloaded or failing servers and dropped connections are tried again after a wait,
+// as long as the server asks for (up to 10 minutes), else 1s, 4s, 16s and so on.
+const RETRIES = 6;
+const retryable = err => !outOfCredit(err) && (err.status ? err.status === 408 || err.status === 429 || err.status >= 500
+  : /overload|rate.?limit|fetch failed|terminated|ECONNRESET|ETIMEDOUT|socket|network|stream ended unexpectedly/i.test(`${err.message} ${err.cause?.message || ''} ${err.cause?.code || ''}`));
+const seconds = ms => (ms < 90_000 ? `${Math.ceil(ms / 1000)}s` : `${Math.round(ms / 60_000)} min`);
+// settings.json "fallbackModels": the user's list, in order. A key out of credit rules out its provider for the rest of the turn,
+// and the first listed model from another provider takes over.
+const providerKey = m => providerOf(m) || (isAnthropic(m) ? 'anthropic' : 'openai');
+function fallbackModel(current, spent) {
+  spent.add(providerKey(current));
+  const list = readSettings().fallbackModels;
+  return Array.isArray(list) ? list.find(m => typeof m === 'string' && /^[\w.:/-]+$/.test(m) && !spent.has(providerKey(m))) : undefined;
+}
+
 // ---- the loop, shared by conversations and subagents ----
-async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLabel, drain, onUsage, compact, cwd }) {
-  let retriedCompact = false;
+async function loop(s, { items, sink, model, setModel, effort, sys, tools, signal, agentLabel, drain, onUsage, compact, cwd }) {
+  let retriedCompact = false, retries = 0;
+  const spent = new Set();
   for (;;) {
     await drain?.();
     const { cost = 0 } = s.state.usage;
@@ -384,9 +401,24 @@ async function loop(s, { items, sink, model, effort, sys, tools, signal, agentLa
         sink.add({ type: 'system', text: 'The API rejected an image, so it was removed from the conversation.' });
         continue;
       }
+      if (signal.aborted) throw err;
+      const next = setModel && outOfCredit(err) && fallbackModel(model(), spent);
+      if (next) {
+        sink.add({ type: 'system', text: `${err.message}\nSwitched to **${next}**, the next model in your fallback list.` });
+        setModel(next);
+        continue;
+      }
+      if (readSettings().autoRetry && retryable(err) && retries < RETRIES) {
+        const ms = Math.min(err.retryAfter || 1000 * 4 ** retries, 600_000);
+        retries++;
+        sink.add({ type: 'system', text: `${err.message}\nTrying again in ${seconds(ms)} (${retries} of ${RETRIES}).` });
+        await sleep(ms, signal);
+        continue;
+      }
       throw err;
     }
     retriedCompact = false;
+    retries = 0;
     onUsage(result.usage);
     items().push(...result.output);
     if (result.incomplete) sink.add({ type: 'system', text: `The model stopped early: ${result.incomplete}.` });
@@ -456,7 +488,7 @@ export async function runSubagent(s, args, parentSignal) {
   const allowed = def.tools ? new Set(def.tools) : null;
   let final;
   const work = loop(s, {
-    items: () => items, sink, model: () => a.model, effort: () => s.state.effort, signal: controller.signal, agentLabel: a.description, cwd: dir || undefined,
+    items: () => items, sink, model: () => a.model, setModel: m => { a.model = m; announce(a); }, effort: () => s.state.effort, signal: controller.signal, agentLabel: a.description, cwd: dir || undefined,
     sys: () => systemPrompt(s, `\n\n# Your role\n${def.prompt}\nYour final message is returned to the agent that launched you, so include everything it needs.${dir ? `\n\nYou work in your own git worktree, on branch ${a.branch} made from the last commit, so other agents can work at the same time. Change files only inside ${dir}. It holds only tracked files, so install dependencies first if you need to run anything. Whatever you leave there is committed to the branch for review when you finish.` : ''}`, true, dir || cwd),
     tools: () => toolList(t => {
       const n = t.name || t.type;
@@ -696,7 +728,7 @@ async function startTurn(s) {
     const sink = { ...mainSink(s), persist: () => { persist(s); status(s); } };
     await loop(s, {
       items: () => s.state.items, sink, signal, drain,
-      model: () => s.state.model, effort: () => s.state.effort,
+      model: () => s.state.model, setModel: m => setOption(s, 'model', m), effort: () => s.state.effort,
       sys: () => systemPrompt(s), tools: () => mainTools(s),
       onUsage: u => { addUsage(s, u); Object.assign(s.state.usage, { lastInput: u?.input_tokens || 0, lastCached: u?.input_tokens_details?.cached_tokens || 0 }); },
       compact: () => compact(s),

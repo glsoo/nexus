@@ -94,18 +94,57 @@ export function clip(text, max = 30000) {
 export const settingsPath = () => path.join(NEXUS_HOME, 'settings.json');
 export const readSettings = () => readJson(settingsPath(), {});
 
+// A wait that ends early, with the signal's AbortError, when the user interrupts.
+export const sleep = (ms, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) return reject(signal.reason);
+  const stop = () => { clearTimeout(timer); reject(signal.reason); };
+  const timer = setTimeout(() => { signal?.removeEventListener('abort', stop); resolve(); }, ms);
+  signal?.addEventListener('abort', stop, { once: true });
+});
+
+// A key that has run out of money or quota. Waiting won't help; another provider might (settings.json "fallbackModels").
+export const outOfCredit = err => err.status === 402 || err.code === 'insufficient_quota'
+  || /credit balance|insufficient.{0,12}(balance|credit|funds|quota)|exceeded your current quota|out of credits?|payment required/i.test(err.message);
+
+// How long the server asked to wait, in ms: OpenAI's retry-after-ms, else retry-after in seconds or as a date.
+function retryAfter(headers) {
+  const ms = Number(headers.get('retry-after-ms'));
+  if (ms > 0) return ms;
+  const v = headers.get('retry-after');
+  if (!v) return undefined;
+  return Number(v) >= 0 ? Number(v) * 1000 : Math.max(0, Date.parse(v) - Date.now()) || undefined;
+}
+
+// settings.json "requestsPerMinute": at most that many requests a minute to each provider, counted across every chat and subagent,
+// so a provider's per-minute limit (Anthropic's, for one) isn't hit in the first place. Off when unset or 0.
+const started = new Map();
+export async function pace(label, signal) {
+  const limit = readSettings().requestsPerMinute;
+  if (!(Number.isInteger(limit) && limit > 0)) return;
+  if (!started.has(label)) started.set(label, []);
+  const times = started.get(label);
+  for (;;) {
+    while (times.length && Date.now() - times[0] >= 60_000) times.shift();
+    if (times.length < limit) return void times.push(Date.now());
+    await sleep(60_000 - (Date.now() - times[0]) + 50, signal);
+  }
+}
+
 export async function postWithRetry(label, url, headers, body, signal) {
   for (let attempt = 0; ; attempt++) {
+    await pace(label, signal);
     const res = await fetch(url, { method: 'POST', signal, headers, body: JSON.stringify(body) });
     if (res.ok) return res;
     const text = await res.text();
-    if ((res.status === 429 || res.status >= 500) && attempt < 4 && !/insufficient_quota/.test(text)) {
-      await new Promise(r => setTimeout(r, 2000 * 2 ** attempt));
-      continue;
-    }
     let message = text.slice(0, 500), code;
     try { const e = JSON.parse(text).error; message = typeof e === 'string' ? e : e?.message || message; code = e?.code; } catch { /* raw text */ }
-    throw Object.assign(new Error(`${label} ${res.status}: ${message}`), { code });
+    const err = Object.assign(new Error(`${label} ${res.status}: ${message}`), { code, status: res.status, retryAfter: retryAfter(res.headers) });
+    // A few quick retries ride out a blip. A longer wait the server asks for is left to the chat's auto retry (settings.json "autoRetry").
+    if ((res.status === 429 || res.status >= 500) && attempt < 4 && !outOfCredit(err) && !(err.retryAfter > 30_000)) {
+      await sleep(Math.max(2000 * 2 ** attempt, err.retryAfter || 0), signal);
+      continue;
+    }
+    throw err;
   }
 }
 

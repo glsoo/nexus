@@ -181,7 +181,7 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
   try {
     res = await postWithRetry(p.name, `${p.baseURL}/chat/completions`, headers(id, p), body, signal);
   } catch (err) {
-    if (err.name === 'TypeError') throw new Error(`Couldn't reach ${p.name} at ${p.baseURL}. Is it running?`);
+    if (err.name === 'TypeError') throw new Error(`Couldn't reach ${p.name} at ${p.baseURL}. Is it running?`, { cause: err });
     if (/context.{0,20}(length|window)|too long|maximum context/i.test(err.message)) err.code = 'context_length_exceeded'; // OpenRouter sends a numeric code
     throw err;
   }

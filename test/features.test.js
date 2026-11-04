@@ -344,6 +344,82 @@ test('any OpenAI-compatible server: its models are listed and a chat runs tools 
   }
 });
 
+test('reliability: off by default; auto retry waits out a failure, and a key out of credit switches to the next provider in the fallback list', { timeout: 30000 }, async () => {
+  const { postWithRetry } = await import('../server/util.js');
+  const realFetch = globalThis.fetch;
+  const sent = [], replies = [];
+  const sse = events => new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''));
+  const ok = { type: 'response.completed', response: { output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] }], usage: { input_tokens: 1, output_tokens: 1 } } };
+  globalThis.fetch = async (url, init) => {
+    url = String(url);
+    if (url === 'https://openrouter.ai/api/v1/models') return Response.json({ data: PRICES });
+    if (url === 'http://backup.test/v1/models') return Response.json({ data: [{ id: 'coder' }] });
+    if (url === 'http://backup.test/v1/chat/completions') { sent.push(`backup:${JSON.parse(init.body).model}`); return sse([{ choices: [{ delta: { content: 'from backup' }, finish_reason: 'stop' }] }]); }
+    if (!url.includes('api.openai.com/v1/responses')) return realFetch(url, init);
+    sent.push(JSON.parse(init.body).model);
+    return (replies.shift() || (() => sse([ok])))();
+  };
+  const overloaded = () => sse([{ type: 'error', error: { message: 'Overloaded' } }]);
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  projects.create('reliable');
+  const s = agent.getSession('reliable');
+  agent.setOption(s, 'model', 'gpt-main');
+  try {
+    replies.push(overloaded);
+    await agent.submit('reliable', 'one');
+    await idle(s);
+    assert.deepEqual([sent.length, s.state.log.at(-1).type], [1, 'error'], 'no retry unless it is turned on');
+
+    fs.writeFileSync(settingsFile, JSON.stringify({ autoRetry: true, providers: { backup: { baseURL: 'http://backup.test/v1' } } }));
+    sent.length = 0;
+    replies.push(overloaded);
+    await agent.submit('reliable', 'two');
+    await idle(s, 8000);
+    assert.equal(sent.length, 2);
+    assert.ok(s.state.log.some(e => e.type === 'system' && /Overloaded\nTrying again in 1s \(1 of 6\)/.test(e.text)));
+    assert.equal(s.state.items.at(-1).content[0].text, 'ok', 'the retried request answered');
+
+    // The wait a server asks for comes back on the error, and a long one isn't spent in quick retries.
+    replies.push(() => new Response('{"error":{"message":"Rate limited"}}', { status: 429, headers: { 'retry-after': '120' } }));
+    sent.length = 0;
+    const err = await postWithRetry('OpenAI', 'https://api.openai.com/v1/responses', {}, { model: 'gpt-main' }).catch(e => e);
+    assert.deepEqual([err.status, err.retryAfter, sent.length], [429, 120000, 1]);
+
+    // Out of credit: no retries, the same provider is skipped, and the chat carries on with the next one.
+    fs.writeFileSync(settingsFile, JSON.stringify({ autoRetry: true, fallbackModels: ['gpt-other', 'backup:coder'], providers: { backup: { baseURL: 'http://backup.test/v1' } } }));
+    sent.length = 0;
+    replies.push(() => new Response('{"error":{"message":"You exceeded your current quota","code":"insufficient_quota"}}', { status: 429 }));
+    await agent.submit('reliable', 'three');
+    await idle(s);
+    assert.deepEqual(sent, ['gpt-main', 'backup:coder']);
+    assert.equal(s.state.model, 'backup:coder');
+    assert.ok(s.state.log.some(e => e.type === 'system' && /Switched to \*\*backup:coder\*\*/.test(e.text)));
+    assert.equal(s.state.log.at(-1).text, 'from backup');
+  } finally {
+    globalThis.fetch = realFetch;
+    fs.writeFileSync(settingsFile, '{}');
+  }
+});
+
+test('requestsPerMinute paces requests to each provider separately', async t => {
+  const { pace } = await import('../server/util.js');
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ requestsPerMinute: 2 }));
+  try {
+    await pace('Paced');
+    await pace('Paced');
+    let third = false;
+    const waiting = pace('Paced').then(() => { third = true; });
+    await pace('Other'); // another provider has its own count
+    await new Promise(r => setImmediate(r));
+    assert.equal(third, false, 'the third request in a minute waits');
+    t.mock.timers.tick(60_050);
+    await waiting;
+    assert.equal(third, true);
+  } finally { fs.writeFileSync(settingsFile, '{}'); }
+});
+
 test('any folder opens as a project: linked, not moved, and removing it leaves the folder', async () => {
   const { isInside } = await import('../server/util.js');
   const outside = path.join(tmp, 'elsewhere', 'My App');
