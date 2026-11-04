@@ -20,6 +20,7 @@ import * as push from './push.js';
 import * as notify from './notify.js';
 import * as vscode from './vscode.js';
 import * as preview from './preview.js';
+import * as repo from './git.js';
 import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -135,6 +136,15 @@ route('GET', '/api/projects/:name/preview', async ({ req, p, q }) => {
   if (!preview.validPort(port, own)) throw fail(400, "Enter the port your app's dev server listens on.");
   const base = process.env.NEXUS_PREVIEW_URL?.replace(/\/+$/, '') || `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${String(req.headers.host).replace(/:\d+$/, '')}:${preview.PREVIEW_PORT}`;
   return { ...out, url: `${base}/__nexus_preview?t=${encodeURIComponent(preview.previewToken(port))}` };
+});
+// Source control for the project's folder, from the Changes tab. Switching branches or pulling waits while an agent works there.
+route('GET', '/api/projects/:name/git', ({ p }) => repo.overview(projects.projectDir(need(p.name))));
+route('GET', '/api/projects/:name/git/show', async ({ p, q }) => ({ text: await repo.show(projects.projectDir(need(p.name)), q.get('hash')) }));
+route('POST', '/api/projects/:name/git/message', async ({ p }) => ({ message: await agent.commitMessage(need(p.name)) }));
+route('POST', '/api/projects/:name/git', async ({ req, p }) => {
+  const args = await body(req);
+  if (['switch', 'create', 'pull'].includes(args.action) && agent.projectBusy(projects.baseOf(need(p.name)))) throw fail(409, 'An agent is working in this folder. Stop it first.');
+  return { output: String(await repo.act(projects.projectDir(p.name), args)).trim() };
 });
 // A new chat in this chat's project, or a fork of this chat from one of its messages ("from": the message's id).
 route('POST', '/api/projects/:name/chats', async ({ req, p }) => {

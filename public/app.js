@@ -1993,7 +1993,7 @@ async function refreshReview() {
 function changesView(view) {
   const box = h('pre', { class: 'diff', tabIndex: 0, 'aria-label': 'Changes' }, 'Loading…');
   const since = h('span', { class: 'path muted' });
-  view.append(h('div', { class: 'ebar' }, since, h('button', { class: 'btn small', onclick: load }, 'Refresh')), box);
+  view.append(h('div', { class: 'ebar' }, since, h('button', { class: 'btn small', onclick: () => gitDialog(load) }, 'Source control'), h('button', { class: 'btn small', onclick: load }, 'Refresh')), box);
   async function load() {
     try {
       const { since: s, diff } = await api('GET', `${P(S.project)}/changes`);
@@ -2011,6 +2011,50 @@ function changesView(view) {
   }
   load();
 }
+
+// Source control: the folder's git status, a commit with a message the AI can write, branches, history, pull and push.
+const GIT_STATUS = { M: 'changed', A: 'added', D: 'deleted', R: 'renamed', '??': 'new', '?': 'new', U: 'conflict' };
+const gitDialog = guard(async after => {
+  const project = S.project, body = h('div', { class: 'form' });
+  const render = async () => {
+    const g = await api('GET', `${P(project)}/git`);
+    if (!g.repo) return body.replaceChildren(h('p', {}, "This folder isn't a git repository yet. Ask Nexus to run git init, or open a cloned repo."));
+    const act = (action, extra = {}, done) => guard(async e => {
+      e.currentTarget.disabled = true;
+      try { await api('POST', `${P(project)}/git`, { action, ...extra }); toast(done); await render(); after?.(); } finally { e.currentTarget.disabled = false; }
+    });
+    const msg = h('textarea', { class: 'field', id: 'gmsg', rows: 3, placeholder: 'What changed and why' });
+    const write = guard(async e => { const b = e.currentTarget; b.disabled = true; try { msg.value = (await api('POST', `${P(project)}/git/message`, {})).message; } finally { b.disabled = false; } });
+    const pick = h('select', { class: 'field', 'aria-label': 'Branch' }, g.branches.map(b => h('option', { value: b, selected: b === g.branch }, b)));
+    const fresh = h('input', { class: 'field', placeholder: 'new-branch-name', 'aria-label': 'New branch name', spellcheck: false, autocapitalize: 'off' });
+    const history = g.log.map(c => {
+      const d = h('details', { class: 'fold' }, h('summary', {}, h('span', { class: 'mono muted' }, c.hash), ' ', c.subject, h('span', { class: 'small muted' }, ` · ${c.author}, ${c.when}`)));
+      d.addEventListener('toggle', guard(async () => {
+        if (!d.open || d.querySelector('pre')) return;
+        const { text } = await api('GET', `${P(project)}/git/show?hash=${c.hash}`);
+        d.append(h('pre', { class: 'diff' }, text.split('\n').map(diffLine)));
+      }));
+      return d;
+    });
+    body.replaceChildren(...[
+      h('div', { class: 'rowline' }, h('div', { class: 'grow' }, h('span', { class: 'title' }, `On ${g.branch || 'no branch'}`),
+        h('span', { class: 'small muted' }, g.upstream ? ` · ${g.ahead} to push, ${g.behind} to pull` : ' · not on GitHub or another remote yet')),
+        g.upstream && h('button', { class: 'btn small', type: 'button', onclick: act('pull', {}, 'Pulled.') }, 'Pull'),
+        h('button', { class: 'btn small', type: 'button', onclick: act('push', {}, 'Pushed.') }, 'Push')),
+      h('div', { class: 'title' }, g.files.length ? `${g.files.length} changed file${g.files.length === 1 ? '' : 's'}` : 'Nothing to commit'),
+      g.files.length > 0 && h('div', { class: 'out gfiles' }, g.files.slice(0, 300).map(f => h('div', {}, h('span', { class: 'muted' }, `${GIT_STATUS[f.status] || GIT_STATUS[f.status[0]] || f.status} `), f.path))),
+      g.files.length > 0 && h('div', {}, h('label', { class: 'lbl', htmlFor: 'gmsg' }, 'Commit message'), msg,
+        h('div', { class: 'rowline', style: 'margin-top:6px' }, h('button', { class: 'btn', type: 'button', onclick: write }, icon('spark'), 'Write it with AI'),
+          h('button', { class: 'btn primary', type: 'button', onclick: e => act('commit', { message: msg.value }, 'Committed.')(e) }, 'Commit all'))),
+      h('div', { class: 'title' }, 'Branches'),
+      h('div', { class: 'rowline' }, pick, h('button', { class: 'btn', type: 'button', onclick: e => act('switch', { branch: pick.value }, `On ${pick.value} now.`)(e) }, 'Switch'),
+        fresh, h('button', { class: 'btn', type: 'button', onclick: e => act('create', { branch: fresh.value }, `Made ${fresh.value} and switched to it.`)(e) }, 'New branch')),
+      h('div', { class: 'title' }, 'History'),
+      history.length ? h('div', { class: 'ghist' }, history) : h('p', { class: 'small muted' }, 'No commits yet.')].filter(Boolean));
+  };
+  await render();
+  dialog({ title: 'Source control', wide: true, body, actions: [{ label: 'Close' }] });
+});
 
 // ---- terminal ----
 let termState = null;
