@@ -28,4 +28,7 @@ if ! npm test --silent >/dev/null 2>&1; then
   exit 1
 fi
 say "Updated to $(git rev-parse --short HEAD). Your changes were kept."
+# Run as a systemd service, Nexus restarts itself. Anywhere else, exit 10 tells the Nexus that ran this that new code is in,
+# so the Windows launcher can restart it and Settings can ask for a restart.
+[ -n "${INVOCATION_ID:-}" ] && command -v systemd-run >/dev/null 2>&1 || exit 10
 systemd-run --user --collect --quiet --working-directory="$PWD" "$PWD/scripts/self-restart.sh" "$(git rev-parse HEAD)" "$before"

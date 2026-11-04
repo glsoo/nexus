@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -291,22 +291,54 @@ route('PUT', '/api/settings', async ({ req }) => {
 const UPDATE_MS = 6 * 3600_000;
 const AUTO_UPDATE = process.platform !== 'win32' && process.env.NEXUS_AUTO_UPDATE !== '0';
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+// The commit this server started from: once HEAD on disk moves past it, the new code waits for a restart.
+const RUNNING = (() => { try { return git('rev-parse', '--short', 'HEAD'); } catch { return ''; } })();
+let updating = false;
 // Waits while anything is running, because a restart would interrupt it and a merge could catch the bot mid-edit.
+// update.sh runs in Git Bash on Windows, as the tests do. Exit 10 means new code is in and nothing restarted it yet.
 function runUpdate() {
-  if (process.platform === 'win32') throw fail(409, 'Use Git to update this Windows checkout, then restart Nexus from its launcher.');
-  if (projects.list().some(p => agent.isBusy(p.name))) return false;
-  spawn(path.join(ROOT, 'scripts/update.sh'), { cwd: ROOT, env: childEnv(), detached: true, stdio: 'ignore' }).unref();
+  if (updating || projects.list().some(p => agent.isBusy(p.name))) return false;
+  const shell = shellCommand(); // on Windows, says to install Git for Windows if there is no Git Bash
+  updating = true;
+  const run = spawn(shell, [path.join(ROOT, 'scripts/update.sh').replaceAll('\\', '/')], { cwd: ROOT, env: childEnv(), detached: process.platform !== 'win32', stdio: 'ignore', windowsHide: true });
+  run.on('error', () => { updating = false; });
+  run.on('exit', code => { updating = false; if (code === 10) restartAfterUpdate().catch(err => console.error('Restart after update:', err.message)); });
+  run.unref();
   return true;
 }
-if (AUTO_UPDATE) setInterval(runUpdate, UPDATE_MS).unref();
+// Under the Windows launcher, a helper outside this process tree ("start" from a cmd that exits at once leaves it parentless,
+// out of reach of the launcher's taskkill /T) waits for this server to stop gracefully, then rebuilds and reopens the launcher.
+// Run any other way, Nexus keeps running the old code and Settings asks for a restart.
+async function restartAfterUpdate() {
+  if (process.platform !== 'win32') return;
+  const parent = await new Promise(resolve => execFile('powershell.exe', ['-NoProfile', '-Command', `(Get-Process -Id ${process.ppid}).Path`], { encoding: 'utf8', timeout: 15000, windowsHide: true }, (err, out) => resolve(err ? '' : out.trim())));
+  if (parent.toLowerCase() !== path.join(ROOT, 'windows', 'Nexus.exe').toLowerCase()) return;
+  const helper = path.join(ROOT, 'windows', 'restart.ps1');
+  // Stopping only once cmd has handed off, since the helper must be running before this process exits.
+  spawn('cmd.exe', ['/d', '/c', `start "" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${helper}" -ServerPid ${process.pid} -LauncherPid ${process.ppid}`],
+    { windowsVerbatimArguments: true, windowsHide: true, stdio: 'ignore' }).on('exit', () => shutdown()).on('error', err => console.error('Restart after update:', err.message));
+}
+// Windows doesn't install updates by itself, but still looks for them every 6 hours so Settings can offer them. NEXUS_AUTO_UPDATE=0 stops both.
+const fetchUpdates = () => new Promise(resolve => execFile('git', ['fetch', '-q', 'origin', 'main'], { cwd: ROOT, timeout: 60_000, windowsHide: true }, () => resolve()));
+if (process.env.NEXUS_AUTO_UPDATE !== '0') {
+  setInterval(AUTO_UPDATE ? runUpdate : fetchUpdates, UPDATE_MS).unref();
+  if (!AUTO_UPDATE) setTimeout(fetchUpdates, 30_000).unref();
+}
 route('GET', '/api/version', () => {
   const count = range => { try { return Number(git('rev-list', '--count', range)); } catch { return 0; } };
   let status = '';
   try { status = fs.readFileSync(path.join(ROOT, 'data/update-status.txt'), 'utf8').trim(); } catch { /* no update has run yet */ }
-  return { version: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, commit: git('rev-parse', '--short', 'HEAD'),
-    local: count('origin/main..HEAD'), behind: count('HEAD..origin/main'), status, auto: AUTO_UPDATE, canMerge: status.startsWith('Update skipped') };
+  // What an update brings: the newest 20 upstream commit subjects. They are upstream's text, which the page shows as plain text.
+  let commits = [];
+  try { commits = git('log', '-20', '--format=%h %s', 'HEAD..origin/main').split('\n').filter(Boolean).map(l => ({ hash: l.slice(0, l.indexOf(' ')), subject: l.slice(l.indexOf(' ') + 1) })); } catch { /* no upstream yet */ }
+  const commit = git('rev-parse', '--short', 'HEAD');
+  return { version: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version, commit,
+    local: count('origin/main..HEAD'), behind: count('HEAD..origin/main'), commits, updating, restart: Boolean(RUNNING) && commit !== RUNNING,
+    status, auto: AUTO_UPDATE, canMerge: status.startsWith('Update skipped') };
 });
+route('POST', '/api/update/check', async () => { await fetchUpdates(); return {}; });
 route('POST', '/api/update', () => {
+  if (updating) throw fail(409, 'An update is already installing.');
   if (!runUpdate()) throw fail(409, 'Something is running. Try again when it finishes.');
   return {};
 });

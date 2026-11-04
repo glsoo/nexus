@@ -204,7 +204,7 @@ cd nexus
 powershell -ExecutionPolicy Bypass -File windows\install.ps1 -Launch
 ```
 
-This builds `windows\Nexus.exe` and adds a **Nexus** shortcut to your desktop. The launcher's Settings set the login, API keys and port. To update, run `git pull`, then rerun `install.ps1` while the launcher is closed.
+This builds `windows\Nexus.exe` and adds a **Nexus** shortcut to your desktop. The launcher's Settings set the login, API keys and port. To update, open **Settings → Version** in Nexus and click **Install update**: Nexus merges it, runs the tests, then rebuilds and reopens the launcher by itself.
 
 ## 🔧 Configuration
 
@@ -224,9 +224,13 @@ Hooks, MCP servers, providers and the auto-compact size live in `~/.nexus/settin
 
 ## 🔄 Updates
 
-Every 6 hours, when nothing is running, Nexus fetches `origin/main` and merges it into your local branch, so your own commits stay. It then runs the tests and restarts. If the merge conflicts or the tests fail, your code stays as it was, and that update is skipped until a newer one appears. Settings shows the version, your local change count and the last result, and has an **Update now** button.
+Nexus updates straight from this GitHub repo, no releases needed. **Settings → Version** shows when updates are waiting (Settings also gets a dot) and lists what's new; **Install update** does the rest. Nexus merges `origin/main` into your local branch, so your own commits stay, runs the tests, and restarts. If the merge conflicts or the tests fail, your code stays as it was, and that update is skipped until a newer one appears.
 
-Automatic restarts need the systemd service below. Automatic updates are Linux-only.
+- **Windows:** the launcher restarts itself after an update, rebuilding `Nexus.exe` first, and the open page reconnects. Nexus looks for updates every 6 hours and installs them when you click.
+- **Linux:** run as the systemd service below, Nexus also installs updates by itself every 6 hours when nothing is running, and restarts.
+- **macOS, or Linux without the service:** updates install the same way; restart Nexus afterwards, as Settings says.
+
+Set `NEXUS_AUTO_UPDATE=0` to turn off the automatic checks and installs.
 
 ## 🧪 Test
 

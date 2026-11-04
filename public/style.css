@@ -77,6 +77,8 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .side-foot { border-top: 1px solid var(--line); padding: 8px 8px calc(8px + var(--sab)) max(8px, var(--sal)); display: grid; gap: 2px; }
 .navbtn { background: none; border: 0; border-radius: 6px; padding: 8px; text-align: left; cursor: pointer; display: flex; gap: 8px; align-items: center; color: var(--muted); }
 .navbtn.on { background: var(--card); color: var(--fg); }
+.navbtn.has-update::after { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: auto; }
+.news { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
 .menu { position: fixed; z-index: 50; background: var(--card); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 4px; min-width: 150px; box-shadow: 0 10px 30px #0008; }
 .menu button { display: flex; gap: 8px; align-items: center; width: 100%; background: none; border: 0; padding: 8px 10px; text-align: left; border-radius: 5px; cursor: pointer; }
 .menu button:focus-visible { background: var(--raised); }

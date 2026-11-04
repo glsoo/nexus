@@ -13,7 +13,8 @@ const bin = path.join(tmp, 'bin');
 const restarted = path.join(tmp, 'restarted');
 fs.mkdirSync(bin);
 fs.writeFileSync(path.join(bin, 'systemd-run'), `#!/bin/sh\necho "$@" > "${restarted.replaceAll('\\', '/')}"\n`, { mode: 0o755 });
-const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+// INVOCATION_ID is what systemd sets for a service, which is when update.sh restarts Nexus itself.
+const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', INVOCATION_ID: 'test' };
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 const write = (dir, file, text) => fs.writeFileSync(path.join(dir, file), text);
 const save = (dir, msg) => { git(dir, 'add', '-A'); git(dir, 'commit', '-qm', msg); };
@@ -35,8 +36,8 @@ function setup(name) {
   fs.rmSync(restarted, { force: true });
   return { up, local };
 }
-function update(local) {
-  try { execFileSync(shellCommand(), [path.join(local, 'scripts/update.sh').replaceAll('\\', '/')], { env, stdio: 'ignore' }); return 0; } catch (err) { return err.status; }
+function update(local, e = env) {
+  try { execFileSync(shellCommand(), [path.join(local, 'scripts/update.sh').replaceAll('\\', '/')], { env: e, stdio: 'ignore' }); return 0; } catch (err) { return err.status; }
 }
 const status = local => fs.readFileSync(path.join(local, 'data/update-status.txt'), 'utf8');
 
@@ -49,6 +50,17 @@ test('an update merges upstream, keeps local and uncommitted changes, and restar
   for (const f of ['mine.txt', 'new.txt', 'loose.txt']) assert.ok(fs.existsSync(path.join(local, f)), f);
   assert.ok(fs.existsSync(restarted));
   assert.equal(git(local, 'status', '--porcelain'), '');
+});
+
+test('outside a systemd service the update still goes in, and exit 10 hands the restart to Nexus (the Windows launcher, or Settings)', () => {
+  const { up, local } = setup('noservice');
+  write(up, 'new.txt', 'upstream\n');
+  save(up, 'upstream');
+  const { INVOCATION_ID, ...bare } = env;
+  assert.equal(update(local, bare), 10);
+  assert.ok(fs.existsSync(path.join(local, 'new.txt')) && fs.existsSync(path.join(local, 'mine.txt')));
+  assert.ok(!fs.existsSync(restarted), 'systemd-run is not used');
+  assert.match(status(local), /Updated to \w+\. Your changes were kept\./);
 });
 
 test('nothing new means no restart', () => {

@@ -2403,28 +2403,65 @@ function selfBot() {
   h('div', { style: 'margin-top:8px' }, h('button', { class: 'btn primary' }, 'Start')));
 }
 
+// Updates come straight from the GitHub repo: the card lists what's new and installs it in one click. The server merges it with
+// your own changes, runs the tests, and restarts (Linux service, Windows launcher); anything that fails leaves the code as it was.
 async function versionCard() {
-  const merge = h('button', { class: 'btn primary', type: 'button', hidden: true, onclick: async () => {
-    try {
-      const { name } = await api('POST', '/api/update/merge', {});
-      await refreshProjects();
-      go(name);
-    } catch (e) { toast(e.message); }
-  } }, 'Merge with AI');
-  const line = h('div', { class: 'title mono' });
-  const note = h('div', { class: 'small muted' });
+  const card = h('div', { class: 'card form' });
+  let polling = false;
   const show = async () => {
     const v = await api('GET', '/api/version').catch(() => null);
-    if (!v) { note.textContent = 'Version unavailable.'; return; }
-    line.textContent = `v${v.version} · ${v.commit}`;
-    merge.hidden = !v.canMerge;
-    note.textContent = [`${v.local} local change${v.local === 1 ? '' : 's'}`, v.behind ? `${v.behind} behind` : 'none behind', v.auto ? 'Auto-updates on' : 'Auto-updates off', v.status].filter(Boolean).join(' · ');
+    if (!v) return card.replaceChildren(h('div', { class: 'small muted' }, 'Version unavailable.'));
+    markUpdates(v);
+    const n = v.behind, s = n === 1 ? '' : 's';
+    const state = v.updating ? 'Installing the update: merging it with your changes and running the tests. This takes a minute or two.'
+      : v.restart ? 'An update is installed. Restart Nexus to start using it.'
+      : n ? `${n} update${s} available.` : 'Up to date.';
+    const install = guard(async () => {
+      await api('POST', '/api/update', {});
+      toast('Installing the update. Nexus restarts by itself when the tests pass, and this page reconnects.', null, 8000);
+      watch(v.commit);
+    });
+    const check = guard(async () => { await api('POST', '/api/update/check', {}); await show(); toast(card.querySelector('.ustate').textContent); });
+    const merge = guard(async () => { const { name } = await api('POST', '/api/update/merge', {}); await refreshProjects(); go(name); });
+    card.replaceChildren(...[
+      h('div', { class: 'rowline' }, h('div', { class: 'grow' }, h('div', { class: 'title mono' }, `v${v.version} · ${v.commit}`), h('div', { class: `ustate${n && !v.updating ? ' title' : ' small muted'}`, role: 'status' }, state)),
+        v.canMerge && h('button', { class: 'btn', type: 'button', onclick: merge }, 'Merge with AI'),
+        !v.updating && (n ? h('button', { class: 'btn primary', type: 'button', onclick: install }, `Install update${s}`) : h('button', { class: 'btn', type: 'button', onclick: check }, 'Check for updates'))),
+      n > 0 && h('details', { class: 'fold', open: n <= 5 }, h('summary', {}, "What's new"),
+        h('ul', { class: 'news' }, v.commits.map(c => h('li', {}, h('span', { class: 'mono muted' }, c.hash), ' ', c.subject)), n > v.commits.length && h('li', { class: 'muted' }, `and ${n - v.commits.length} more`))),
+      h('div', { class: 'small muted' }, [v.local ? `${v.local} change${v.local === 1 ? '' : 's'} of your own, which updates keep` : '', v.auto ? 'Installs updates by itself every 6 hours when nothing is running' : 'Checks for updates every 6 hours', v.status && `Last update: ${v.status}`].filter(Boolean).join(' · ')),
+      h('div', { class: 'small' }, 'Nexus is open source. ', extLink('Star it on GitHub', 'https://github.com/glsoo/nexus'), ' to help others find it.'),
+    ].filter(Boolean));
+  };
+  // While an update installs, and through the restart that follows, keep the card current.
+  const watch = from => {
+    if (polling) return;
+    polling = true;
+    const started = Date.now();
+    const tick = async () => {
+      const v = await api('GET', '/api/version').catch(() => null);
+      if (v && !v.updating) {
+        polling = false;
+        if (v.commit !== from && !v.restart) toast(`Nexus is updated to ${v.commit}.`);
+        return card.isConnected && show();
+      }
+      if (Date.now() - started < 10 * 60_000) setTimeout(tick, 4000); else polling = false;
+    };
+    setTimeout(tick, 4000);
   };
   await show();
-  return [h('h2', {}, 'Version'), h('div', { class: 'card rowline' }, h('div', { class: 'grow' }, line, note, h('div', { class: 'small' }, 'Nexus is open source. ', extLink('Star it on GitHub', 'https://github.com/glsoo/nexus'), ' to help others find it.')), merge,
-    h('button', { class: 'btn', type: 'button', onclick: async () => {
-      try { await api('POST', '/api/update', {}); toast('Checking for updates.'); setTimeout(show, 8000); } catch (e) { toast(e.message); }
-    } }, 'Update now'))];
+  return [h('h2', {}, 'Version'), card];
+}
+
+// A dot on Settings while updates wait, and a toast the first time each new one shows up.
+function markUpdates(v) {
+  const nav = document.getElementById('nav-settings');
+  nav?.classList.toggle('has-update', v.behind > 0);
+  nav?.setAttribute('aria-label', v.behind > 0 ? `Settings, ${v.behind} update${v.behind === 1 ? '' : 's'} available` : 'Settings');
+  const head = v.commits[0]?.hash;
+  if (!head || pref('nexus.updateSeen') === head) return;
+  pref('nexus.updateSeen', head);
+  if (S.page !== 'settings') toast(`Nexus has ${v.behind} update${v.behind === 1 ? '' : 's'} on GitHub.`, ['See them', () => go(null, 'settings')], 10000);
 }
 
 // ---- keys and boot ----
@@ -2439,6 +2476,7 @@ async function boot() {
   shell();
   await refreshProjects();
   connect();
+  api('GET', '/api/version').then(markUpdates).catch(() => {});
   const m = /^#\/(?:p\/([^/]+)\/(\w+)|(agents|settings|marketplace))?/.exec(location.hash) || [];
   const name = m[1] ? decodeURIComponent(m[1]) : null;
   if (m[3]) go(null, m[3]);

@@ -53,6 +53,7 @@ internal static class Program
                 SetForegroundWindow(window);
                 return;
             }
+            Launcher.Quiet = Array.IndexOf(args, "--updated") >= 0; // restarted after an update: the open page reconnects by itself
             try { Application.Run(new Launcher(root, key)); }
             catch (Exception error) { MessageBox.Show(error.Message, "Nexus", MessageBoxButtons.OK, MessageBoxIcon.Error); }
             finally { mutex.ReleaseMutex(); }
@@ -360,6 +361,7 @@ internal sealed class StatusDot : Control
 
 internal sealed class Launcher : Form
 {
+    internal static bool Quiet;
     private readonly string root, node, bash, credentialFile;
     private readonly JavaScriptSerializer json = new JavaScriptSerializer();
     private readonly StringBuilder log = new StringBuilder();
@@ -614,7 +616,7 @@ internal sealed class Launcher : Form
         ready.Stop();
         if ((bool)config["openai"] || (bool)config["anthropic"]) SetStatus("Running", Theme.Ok, false);
         else SetStatus("Running - API key needed", Theme.Warn, false);
-        Guard(OpenBrowser);
+        if (Quiet) Quiet = false; else Guard(OpenBrowser);
     }
 
     private void StopServer()
