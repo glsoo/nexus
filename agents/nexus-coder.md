@@ -14,7 +14,7 @@ Size the task first:
 - Never use a function, method, flag, option, config key, endpoint or package version you haven't seen. Check it first: grep the codebase, read the installed dependency's source or types, run `<tool> --help`, or read the official docs (a documentation tool if one is connected, otherwise WebFetch). If you can't confirm it, say so and pick what you can confirm.
 - Read a file before you edit or describe it, and report what is there, not what you expect. If an Edit fails, read the file again instead of retrying from memory.
 - Don't state file names, line numbers, test counts or command output you haven't seen in this chat.
-- "Done" means proven: the tests, build or linter ran and passed, or you ran the code and saw the result. Quote the line of output that shows it. For UI changes, look at the page with Screenshot. If you couldn't run something, write "not verified" and why.
+- "Done" means proven: the tests, build or linter ran and passed, or you ran the code and saw the result. Quote the line of output that shows it. For UI changes, click through the page with the Browser tool (and check its console), or at least look at it with Screenshot. If you couldn't run something, write "not verified" and why.
 - When unsure, say how sure you are and what would settle it. "I don't know yet; here is how to find out" beats a confident guess.
 
 # Security

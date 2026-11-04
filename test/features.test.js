@@ -1203,6 +1203,35 @@ test('Screenshot shows the agent a page as an image at the size it asked for', {
   assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [390, 300]);
 });
 
+test('Browser: the agent opens a page, types, presses keys, clicks by text and reads console errors, in one browser per chat', { timeout: 90000 }, async t => {
+  const { decide, execTool } = await import('../server/tools.js');
+  assert.equal(decide({ mode: 'plan', allow: [] }, 'Browser', { action: 'click' }, tmp).action, 'deny', 'clicking changes things, so not while planning');
+  const dir = path.join(tmp, 'web');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'app.html'), `<title>Todos</title><input id="item"><ul id="list"></ul><button onclick="console.error('boom'); document.title = 'clicked'">Break it</button>
+<script>document.getElementById('item').onkeydown = e => { if (e.key === 'Enter') { const li = document.createElement('li'); li.textContent = e.target.value; list.append(li); } };</script>`);
+  const session = { name: 'web-chat' };
+  const run = args => execTool('Browser', args, { cwd: dir, session });
+  try { await run({ action: 'open', url: 'app.html' }); } catch (err) {
+    if (/needs Chrome/.test(err.message)) return t.skip('no browser here');
+    throw err;
+  }
+  try {
+    assert.match(await run({ action: 'read' }), /Title: Todos[\s\S]*Controls:[\s\S]*input\[text\] #item[\s\S]*button "Break it"/);
+    await run({ action: 'type', selector: '#item', text: 'buy milk', key: 'Enter' });
+    assert.match(await run({ action: 'evaluate', script: 'list.textContent' }), /Result: "buy milk"/, 'the same page, between calls');
+    assert.match(await run({ action: 'evaluate', script: 'const n = list.children.length; return n;' }), /Result: 1/, 'a function body works too');
+    const clicked = await run({ action: 'click', text: 'break it' });
+    assert.match(clicked, /Clicked the button "Break it"[\s\S]*New errors:\nconsole\.error: boom[\s\S]*Untrusted page content/);
+    await assert.rejects(run({ action: 'click', text: 'nothing like this' }), /Nothing on the page matches/);
+    const [shot] = await run({ action: 'screenshot' });
+    assert.equal(Buffer.from(shot.image_url.split(',')[1], 'base64').toString('latin1', 1, 4), 'PNG');
+    await assert.rejects(execTool('Browser', { action: 'open', url: '//server/share/x.html' }, { cwd: dir, session }), /Network paths/);
+  } finally {
+    assert.equal(await run({ action: 'close' }), 'Closed the browser.');
+  }
+});
+
 test('images the agent looks at show up in its tool entry', async () => {
   projects.create('looks');
   const s = agent.getSession('looks');

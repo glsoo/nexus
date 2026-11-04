@@ -2363,7 +2363,7 @@ const TOOL_GROUPS = [
   ['Run commands', ['Bash'], 'The command rules below can allow or block single commands.'],
   ['Edit files', ['Write', 'Edit', 'NotebookEdit'], 'Allow is Accept edits in every chat. Files in .nexus and .git still ask.'],
   ['Read files outside the project', ['Read', 'Glob', 'Grep'], 'Reading inside the project never asks.'],
-  ['Fetch web pages', ['WebFetch']], ['Screenshots', ['Screenshot']],
+  ['Fetch web pages', ['WebFetch']], ['Screenshots', ['Screenshot']], ['Use a browser (click and type in pages)', ['Browser']],
   ['Search the web', ['web_search'], '', true], ['Subagents', ['Task'], '', true], ['Skills', ['Skill'], '', true],
 ];
 function permissionsCard(area, mcp) {

@@ -36,7 +36,7 @@ Gate: every Build step is done, and its nearest test or run passes.
 
 ## 4. Verify
 - Run the full test suite once, and the build, linter or type check if the project has them. Keep the output short (`| tail -n 40`).
-- Run the real thing: the command, the endpoint, the page. For UI, look at it with Screenshot.
+- Run the real thing: the command, the endpoint, the page. For UI, use the Browser tool to click through what changed and check its console for errors, or at least look at it with Screenshot.
 - Read your own `git diff` and check: no secrets, no debug output or leftovers, nothing unrelated changed, every caller and test updated, errors handled, new logic tested.
 - After a large or risky change, launch the nexus-verifier subagent with the request and a summary of what you changed. Fix what it confirms and re-run the affected checks.
 
