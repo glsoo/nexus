@@ -88,7 +88,23 @@
 
 ## 🚀 Quick start
 
-You need **Node.js 24+**, **Git** and **ripgrep**, plus `make`, `g++` and `python3` in case `node-pty` has to compile for your platform. You also need a model: an API key for **OpenAI, Anthropic, OpenRouter, Gemini, Groq, DeepSeek, Mistral or xAI**, or a local model in **Ollama** or **LM Studio**.
+**One line.** On macOS or Linux (needs Node.js 24+ and Git):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/glsoo/nexus/main/scripts/get-nexus.sh | sh
+```
+
+It clones Nexus into `~/nexus`, installs it, makes a login and prints it. Then `cd ~/nexus && npm start`.
+
+On Windows, in PowerShell (installs Git, Node.js and ripgrep with winget if they're missing):
+
+```powershell
+irm https://raw.githubusercontent.com/glsoo/nexus/main/scripts/get-nexus.ps1 | iex
+```
+
+It clones Nexus into `~\nexus`, builds the launcher, adds a desktop shortcut and opens it. Run either line again to update. Set `NEXUS_DIR` first to install somewhere else.
+
+**By hand.** You need **Node.js 24+**, **Git** and **ripgrep**, plus `make`, `g++` and `python3` in case `node-pty` has to compile for your platform. You also need a model: an API key for **OpenAI, Anthropic, OpenRouter, Gemini, Groq, DeepSeek, Mistral or xAI**, or a local model in **Ollama** or **LM Studio**.
 
 ```sh
 git clone https://github.com/glsoo/nexus.git
