@@ -70,6 +70,9 @@ function distrustCommitted(s) {
 const cwdOf = s => projects.projectDir(s.name);
 // Waiting on the user: a question, a plan or a tool call to approve.
 export const isWaiting = name => Boolean(sessions.get(name)?.pending.size);
+// A project's own folder is busy while any of its chats is.
+const projectBusy = name => [...new Set([name, ...projects.list().filter(p => p.parent === name).map(p => p.name), ...sessions.keys()])]
+  .some(k => projects.baseOf(k) === name && isBusy(k));
 export const isBusy = name => {
   const s = sessions.get(name);
   return Boolean(s?.running)
@@ -794,7 +797,7 @@ export function interrupt(name) { sessions.get(name)?.controller?.abort(); }
 export function answer(name, id, value) { sessions.get(name)?.pending.get(id)?.(value); }
 
 const HELP = `**Commands**
-\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|readonly|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review <target>\` use the read-only review skill · \`/review branch [base]\` review this branch · \`/review <PR number|URL>\` review a pull request · \`/review\` or \`/review help\` show usage · \`/pr [notes]\` commit, push and open a pull request · \`/issue <number>\` fix a GitHub issue · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/check <command>|off\` run tests after each change and fix failures · \`/watch [on|off]\` act on \`AI!\` comments saved in any editor · \`/todos\` · \`/help\`
+\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/btw <question>\` ask on the side without derailing the task · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|readonly|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review <target>\` use the read-only review skill · \`/review branch [base]\` review this branch · \`/review <PR number|URL>\` review a pull request · \`/review\` or \`/review help\` show usage · \`/pr [notes]\` commit, push and open a pull request · \`/issue <number>\` fix a GitHub issue · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/check <command>|off\` run tests after each change and fix failures · \`/watch [on|off]\` act on \`AI!\` comments saved in any editor · \`/todos\` · \`/help\`
 
 Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover a prompt to rewind to it.
 
@@ -939,6 +942,9 @@ async function slash(s, text) {
       return note(s, s.state.autopilot
         ? `Autopilot is on. The agent approves its own tool calls${s.state.mode === 'plan' ? ' and its plan' : ''}, answers its own questions and keeps going, ${autopilotLimit() ? `for up to ${autopilotLimit()} model requests at a time` : 'with no request limit'}. Change the limit in Settings → Autopilot request limit, or \`autopilotRequests\` in ~/.nexus/settings.json (0 means no limit).`
         : 'Autopilot is off. The agent stops to ask when it needs you.');
+    case 'btw':
+      if (!arg) return note(s, 'Usage: `/btw <question>` asks something on the side, even while the agent works. The answer stays out of the conversation.', 'error');
+      return sideQuestion(s, arg);
     case 'cost': {
       const u = s.state.usage;
       return note(s, `Tokens: ${u.input.toLocaleString()} input (${u.cached.toLocaleString()} cached), ${u.output.toLocaleString()} output (${u.reasoning.toLocaleString()} reasoning) over ${u.requests} requests.\n\nCost: ${spent(s)}.`);
@@ -1062,16 +1068,51 @@ export function autoName(s, text) {
 }
 
 export function renameProject(from, to) {
-  if (from !== to && isBusy(from)) throw projects.httpError(409, 'This project is busy. Stop its agents and shells before renaming.');
+  if (from !== to && projectBusy(from)) throw projects.httpError(409, 'This project is busy. Stop its agents and shells before renaming.');
   projects.rename(from, to);
-  const s = sessions.get(from);
-  if (s) { sessions.delete(from); s.name = to; sessions.set(to, s); }
-  for (const a of agents.values()) if (a.project === from) a.project = to;
-  for (const sh of shells.values()) if (sh.project === from) sh.project = to;
+  // Its other chats ("from~id") move with the folder.
+  const moved = k => (k === from ? to : projects.baseOf(k) === from && projects.chatOf(k) ? `${to}~${projects.chatOf(k)}` : k);
+  for (const [k, s] of [...sessions]) if (moved(k) !== k) { sessions.delete(k); s.name = moved(k); sessions.set(s.name, s); }
+  for (const a of agents.values()) a.project = moved(a.project);
+  for (const sh of shells.values()) sh.project = moved(sh.project);
   const list = schedules();
-  if (list.some(x => x.project === from)) saveSchedules(list.map(x => (x.project === from ? { ...x, project: to } : x)));
-  if (watched().includes(from)) { setWatched(from, false); setWatched(to, true); }
+  if (list.some(x => moved(x.project) !== x.project)) saveSchedules(list.map(x => ({ ...x, project: moved(x.project) })));
+  for (const k of watched()) if (moved(k) !== k) { setWatched(k, false); setWatched(moved(k), true); }
   hub.emit('renamed', from, to);
+}
+
+// A new chat in the same project and folder. Forking from one of the user's messages takes the conversation up to just before it
+// (like rewinding, but in a new chat, leaving this one as it was) and hands that message back as the draft to edit and send.
+export function newChat(from, entryId) {
+  const src = getSession(from).state;
+  const keep = { model: src.model, effort: src.effort, mode: src.mode, agent: src.agent, dirs: src.dirs, allow: [...src.allow] };
+  if (!entryId) return { name: projects.createChat(from, keep), draft: '' };
+  const at = src.log.findIndex(e => e.id === entryId && e.type === 'user');
+  if (at < 0 || !Number.isInteger(src.log[at].itemsLen)) throw projects.httpError(400, 'Fork from one of your own messages that has been sent.');
+  const name = projects.createChat(from, { ...keep, gen: src.gen, log: structuredClone(src.log.slice(0, at)), items: structuredClone(src.items.slice(0, src.log[at].itemsLen)) });
+  projects.setTitle(name, `${src.log[at].text.split('\n')[0].slice(0, 50)} (fork)`);
+  return { name, draft: src.log[at].text };
+}
+
+// /btw: a question on the side, answered from the conversation so far without tools, even while a task runs.
+// Neither the question nor the answer joins the conversation the model sees.
+async function sideQuestion(s, question) {
+  addEntry(s, { type: 'system', text: `**Side question:** ${question}` });
+  const entry = addEntry(s, { type: 'assistant', text: '', side: true, status: 'running' });
+  const items = structuredClone(s.state.items);
+  projects.repairItems(items); // a tool call still running has no output yet, which the API refuses
+  try {
+    const result = await callModel({ model: s.state.model, effort: 'low', instructions: systemPrompt(s), tools: await mainTools(s), toolChoice: 'none', cacheKey: s.name,
+      input: [...items, { role: 'user', content: `[A side question from the user, not part of the task. Answer it briefly from what you know so far, without tools.]\n${question}` }] },
+    { add: e => e, update() {}, delta() {} }, AbortSignal.timeout(180000));
+    addUsage(s, result.usage);
+    Object.assign(entry, { text: result.output.filter(o => o.type === 'message').flatMap(o => o.content).map(c => c.text || '').join('') || '(No answer came back.)', status: 'done' });
+  } catch (err) {
+    Object.assign(entry, { type: 'error', text: `The side question failed: ${err.message}`, status: 'done' });
+  }
+  send(s, { t: 'entry', entry });
+  persist(s);
+  status(s);
 }
 
 export function selfProject() {
@@ -1087,7 +1128,7 @@ export function selfProject() {
 // scripts/self-restart.sh leaves this behind when it had to revert a change.
 // A restart stops running work where it is, and the next process picks it back up.
 let stopping = false;
-const resumeMark = name => path.join(projects.projectDir(name), '.nexus', 'resume');
+const resumeMark = name => path.join(projects.projectDir(name), '.nexus', projects.chatOf(name) ? path.join('chats', `${projects.chatOf(name)}.resume`) : 'resume');
 const RESUME = 'The Nexus server restarted while you were working, which stopped your last step and any background shells and subagents. Check what actually finished, then carry on with the task. Do not restart or redeploy the server again unless the task still needs it.';
 
 export async function stopForRestart() {
@@ -1119,20 +1160,23 @@ export function reportFailedDeploy() {
 }
 
 export function trashProject(name) {
-  if (isBusy(name)) throw projects.httpError(409, 'This project is busy. Stop its agents and shells before deleting.');
+  const chat = projects.chatOf(name);
+  if (chat ? isBusy(name) : projectBusy(name)) throw projects.httpError(409, `This ${chat ? 'chat' : 'project'} is busy. Stop its agents and shells before deleting.`);
   projects.trash(name);
-  sessions.delete(name);
-  // A new chat can reuse the name, and must not inherit these.
+  // Deleting a project takes its other chats with it. A new chat can reuse a name, and must not inherit these.
+  const gone = k => k === name || (!chat && projects.baseOf(k) === name);
+  for (const k of [...sessions.keys()]) if (gone(k)) sessions.delete(k);
   const list = schedules();
-  if (list.some(x => x.project === name)) saveSchedules(list.filter(x => x.project !== name));
-  if (watched().includes(name)) setWatched(name, false);
-  for (const [id, a] of agents) if (a.project === name) agents.delete(id);
-  for (const [id, sh] of shells) if (sh.project === name) shells.delete(id);
+  if (list.some(x => gone(x.project))) saveSchedules(list.filter(x => !gone(x.project)));
+  for (const k of watched()) if (gone(k)) setWatched(k, false);
+  for (const [id, a] of agents) if (gone(a.project)) agents.delete(id);
+  for (const [id, sh] of shells) if (gone(sh.project)) shells.delete(id);
 }
 
 export async function submit(name, text, images) {
   const s = getSession(name);
   await autoName(s, text);
+  if (projects.chatOf(name) && !projects.title(name) && text.trim() && !/^[/!#]/.test(text)) projects.setTitle(name, text.split('\n')[0].slice(0, 60));
   const hook = await runHooks('UserPromptSubmit', { prompt: text }, cwdOf(s));
   if (hook.blocked) return note(s, `Prompt blocked: ${hook.reason}`, 'error');
   try {

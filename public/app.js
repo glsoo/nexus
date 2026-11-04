@@ -15,7 +15,7 @@ function h(tag, props = {}, ...kids) {
   return el;
 }
 const ICONS = {
-  term: '<path d="M5 7l5 5-5 5M12 18h7"/>', search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/>', globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>',
+  term: '<path d="M5 7l5 5-5 5M12 18h7"/>', fork: '<circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v1a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M12 12v5"/>', search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/>', globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>',
   shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>', eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>', bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
   plus: '<path d="M12 5v14M5 12h14"/>', dots: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   menu: '<path d="M3 6h18M3 12h18M3 18h18"/>', bot: '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M9 14h.01M15 14h.01"/>',
@@ -187,7 +187,13 @@ const drawer = open => {
 };
 
 // The folder keeps its dashes; only what people read changes. "say-hello" shows as "Say Hello".
-const pretty = name => name.replace(/[-_]+/g, ' ').replace(/\.+$/, '').replace(/\b[a-z]/g, c => c.toUpperCase());
+// A project's other chats are "<project>~<id>", shown as "Project · Title".
+const chatTitle = key => S.projects.find(p => p.name === key)?.title || 'New chat';
+const pretty = name => {
+  const [base, chat] = name.split('~');
+  const nice = base.replace(/[-_]+/g, ' ').replace(/\.+$/, '').replace(/\b[a-z]/g, c => c.toUpperCase());
+  return chat ? `${nice} · ${chatTitle(name)}` : nice;
+};
 
 async function newProject() {
   const { name } = await api('POST', '/api/projects', {});
@@ -307,11 +313,17 @@ async function refreshProjects() {
   // A question answered on another device clears its mark here.
   for (const p of S.projects) if (S.alerts[p.name] === 'waiting' && !p.waiting) delete S.alerts[p.name];
   syncTitle();
-  $list.replaceChildren(...S.projects.map(p => {
+  const heading = !S.page && document.querySelector('.ttl h1'); // a chat's title can arrive with its first message
+  if (heading && S.project) heading.textContent = heading.title = pretty(S.project);
+  // Each project, then its other chats under it, newest first; a project moves up when any of its chats is used.
+  const kids = name => S.projects.filter(p => p.parent === name);
+  const latest = p => Math.max(p.updated, ...kids(p.name).map(c => c.updated));
+  const tops = S.projects.filter(p => !p.parent).sort((a, b) => latest(b) - latest(a));
+  $list.replaceChildren(...tops.flatMap(p => [p, ...kids(p.name)]).map(p => {
     const mark = p.waiting ? 'waiting' : S.alerts[p.name];
-    return h('div', { class: `pitem ${p.name === S.project && !S.page ? 'on' : ''} ${mark ? 'unseen' : ''}` },
+    return h('div', { class: `pitem ${p.parent ? 'chat' : ''} ${p.name === S.project && !S.page ? 'on' : ''} ${mark ? 'unseen' : ''}` },
     h('button', { class: 'open', title: p.dir || pretty(p.name), 'aria-current': p.name === S.project ? 'true' : undefined, onclick: () => go(p.name, null, 'chat') },
-      h('span', { class: `dot ${p.busy && !p.waiting ? 'busy' : mark === 'waiting' ? 'awaiting' : mark === 'finished' ? 'done' : mark === 'error' ? 'error' : ''}` }), h('span', { class: 'nm' }, pretty(p.name)),
+      h('span', { class: `dot ${p.busy && !p.waiting ? 'busy' : mark === 'waiting' ? 'awaiting' : mark === 'finished' ? 'done' : mark === 'error' ? 'error' : ''}` }), h('span', { class: 'nm' }, p.parent ? p.title || 'New chat' : pretty(p.name)),
       mark === 'waiting' && h('span', { class: 'need' }, 'needs you'), mark === 'finished' && h('span', { class: 'sr' }, ', finished'), mark === 'error' && h('span', { class: 'sr' }, ', stopped on an error')),
     h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(p.name)}`, 'aria-haspopup': 'menu', onclick: e => projectMenu(e.currentTarget, p.name) }, icon('dots')));
   }));
@@ -352,6 +364,7 @@ function projectMenu(anchor, name) {
       items[(items.indexOf(document.activeElement) + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
     }
   } },
+  !name.includes('~') && h('button', { role: 'menuitem', onclick: () => { close(); newChat(name); } }, icon('plus'), 'New chat'),
   h('button', { role: 'menuitem', onclick: () => { close(); renameDialog(name); } }, icon('pen'), 'Rename'),
   h('button', { role: 'menuitem', onclick: () => { close(); guard(foldersDialog)(name); } }, icon('folder'), 'Folders'),
   h('button', { role: 'menuitem', onclick: () => { close(); exportChat(name); } }, icon('download'), 'Export chat'),
@@ -369,7 +382,17 @@ function projectMenu(anchor, name) {
   setTimeout(() => document.addEventListener('pointerdown', outside));
 }
 
+// A new chat in the project, or a fork of a chat from one of its messages, whose text comes back as the draft.
+const newChat = guard(async (name, from) => {
+  const { name: key, draft } = await api('POST', `${P(name)}/chats`, from ? { from } : {});
+  if (draft) drafts[key] = draft;
+  await refreshProjects();
+  go(key);
+  if (from) toast('Forked into a new chat, with your message ready to edit. Both chats share the same project files.');
+});
+
 function renameDialog(name) {
+  if (name.includes('~')) return renameChat(name);
   const err = h('div', { class: 'err', role: 'alert' });
   const input = h('input', { class: 'field mono', value: pretty(name), id: 'rn', 'aria-describedby': 'rn-hint', spellcheck: false, autocapitalize: 'off' });
   const save = async () => {
@@ -384,7 +407,18 @@ function renameDialog(name) {
   input.select();
 }
 
+function renameChat(key) {
+  const input = h('input', { class: 'field', value: chatTitle(key), id: 'rn', maxlength: 80 });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input.closest('dialog').querySelector('.primary').click(); } });
+  dialog({ title: 'Rename chat', body: h('div', {}, h('label', { class: 'lbl', htmlFor: 'rn' }, 'Title'), input),
+    actions: [{ label: 'Cancel' }, { label: 'Rename', class: 'primary', run: guard(async () => { await api('POST', `${P(key)}/rename`, { title: input.value }); await refreshProjects(); }) }] });
+  input.select();
+}
 async function deleteDialog(name) {
+  if (name.includes('~')) {
+    if (!await confirmBox(`Delete ${pretty(name)}?`, 'Only this chat goes. The project, its files and its other chats stay.', 'Delete', 'danger')) return;
+    return guard(async () => { await api('DELETE', P(name)); if (S.project === name) go(name.split('~')[0]); await refreshProjects(); })();
+  }
   const where = projectDir(name);
   if (!await confirmBox(where ? `Remove ${pretty(name)}?` : `Delete ${pretty(name)}?`, where ? `Nexus stops showing it. The folder, its files and the chat saved in its .nexus stay at ${where}; open the folder again to pick up where you left off.`
     : 'The folder moves to ~/projects/.trash, where you can still recover it by hand.', where ? 'Remove' : 'Delete', 'danger')) return;
@@ -835,13 +869,14 @@ function renderEntry(e) {
   switch (e.type) {
     case 'user': {
       const rw = !e.queued && e.cp !== undefined && h('button', { class: 'icon-btn rw', 'aria-label': 'Rewind to this prompt', title: 'Rewind to here', onclick: () => rewindDialog(e) }, icon('undo'));
+      const fork = !e.queued && e.cp !== undefined && h('button', { class: 'icon-btn rw fork', 'aria-label': 'Fork a new chat from this prompt', title: 'Fork a new chat from here', onclick: () => newChat(S.project, e.id) }, icon('fork'));
       const tag = e.injected && h('span', { class: 'itag', title: 'Your standing instructions from Prompts were added to this message' }, '+ injected');
-      return h('div', { class: `e user ${e.queued ? 'queued' : ''}` }, e.text, (e.images || []).map(src => h('img', { src: imageSrc(src), alt: 'Attachment' })), tag, rw);
+      return h('div', { class: `e user ${e.queued ? 'queued' : ''}` }, e.text, (e.images || []).map(src => h('img', { src: imageSrc(src), alt: 'Attachment' })), tag, fork, rw);
     }
     case 'assistant': {
       const md = h('div', { class: 'md' });
       markdown(md, e.text, e.status !== 'running');
-      return h('div', { class: 'e assistant' }, md);
+      return h('div', { class: `e assistant${e.side ? ' side' : ''}` }, e.side && h('div', { class: 'small muted' }, 'Side answer, not part of the conversation'), md);
     }
     case 'reasoning': {
       const md = h('div', { class: 'md small muted' });

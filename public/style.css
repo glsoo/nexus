@@ -105,6 +105,10 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .diff .undo { float: right; margin: -2px 0 2px 8px; font-family: var(--sans); }
 .e.tool img.seen { display: block; max-width: min(100%, 640px); max-height: 480px; border: 1px solid var(--line); border-radius: 6px; margin: 8px 0 4px; }
 .e.user .rw { position: absolute; top: 5px; right: 5px; opacity: 0; }
+.e.user .rw.fork { right: 38px; }
+.pitem.chat .open { padding-left: 26px; }
+.pitem.chat .nm { font-weight: 400; }
+.e.assistant.side { border-left: 2px solid var(--line-strong); padding-left: 10px; }
 .e.user .rw:focus-visible { opacity: 1; }
 @media (hover: none) { .e.user .rw { opacity: .75; } }
 .e.system { color: var(--muted); font-size: 13px; }

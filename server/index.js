@@ -117,9 +117,18 @@ route('GET', '/api/projects/:name/folders', ({ p }) => agent.folders(need(p.name
 route('POST', '/api/projects/:name/folders', async ({ req, p }) => agent.addFolder(need(p.name), (await body(req)).path));
 route('DELETE', '/api/projects/:name/folders', async ({ req, p }) => agent.removeFolder(need(p.name), String((await body(req)).path || '')));
 route('POST', '/api/projects/:name/rename', async ({ req, p }) => {
-  const { to } = await body(req);
-  agent.renameProject(need(p.name), to);
+  const { to, title } = await body(req);
+  // A chat beyond the first is renamed by its title; a project by its folder name.
+  if (projects.chatOf(need(p.name))) { projects.setTitle(p.name, title ?? to); broadcast({ t: 'projects' }); return { name: p.name }; }
+  agent.renameProject(p.name, to);
   return { name: to };
+});
+// A new chat in this chat's project, or a fork of this chat from one of its messages ("from": the message's id).
+route('POST', '/api/projects/:name/chats', async ({ req, p }) => {
+  const { from } = await body(req);
+  const chat = agent.newChat(need(p.name), from ? String(from) : null);
+  broadcast({ t: 'projects' });
+  return chat;
 });
 route('DELETE', '/api/projects/:name', ({ p }) => {
   agent.trashProject(need(p.name));
@@ -562,6 +571,7 @@ wss.on('connection', ws => {
 
 // Subscribed browsers get a push when a chat finishes or waits on the user, even with Nexus closed.
 const busy = new Set(), pinged = new WeakSet();
+const chatLabel = key => (projects.chatOf(key) ? `${projects.baseOf(key)}: ${projects.title(key) || 'new chat'}` : key);
 const ping = (title, body, project) => push.notify({ title, body, project }, auth.liveSessionKey).catch(err => console.error('Web Push:', err.message));
 const asks = { AskUserQuestion: 'has a question for you', ExitPlanMode: 'has a plan for you to approve' };
 // A notification on this computer itself, unless you're looking at Nexus in a browser here, which shows its own toast.
@@ -578,15 +588,15 @@ agent.hub.on('project', (name, ev) => {
     const failed = log.at(-1)?.type === 'error' && readSettings().notifyErrors ? log.at(-1) : null;
     const reply = failed?.text || log.findLast(e => e.type === 'assistant')?.text || '';
     const body = reply.replace(/\s+/g, ' ').slice(0, 140) || 'The agent is done.';
-    const title = `${name} ${failed ? 'stopped on an error' : 'finished'}`;
+    const title = `${chatLabel(name)} ${failed ? 'stopped on an error' : 'finished'}`;
     ping(title, body, name);
     pcNotify(title, body, name);
     broadcast({ t: 'alert', project: name, kind: failed ? 'error' : 'finished', body }); // every open page, which shows it unless you're watching that chat
   } else if (ev.t === 'entry' && ev.entry.status === 'awaiting' && !pinged.has(ev.entry)) {
     pinged.add(ev.entry);
     const body = `The agent ${asks[ev.entry.name] || `wants to run ${ev.entry.name}`}.`;
-    ping(`${name} needs you`, body, name);
-    pcNotify(`${name} needs you`, body, name);
+    ping(`${chatLabel(name)} needs you`, body, name);
+    pcNotify(`${chatLabel(name)} needs you`, body, name);
     broadcast({ t: 'alert', project: name, kind: 'waiting', body });
   }
 });

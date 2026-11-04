@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { childEnv, HOME, isInside, PROJECTS, readJson, validName, writeAtomic } from './util.js';
 
-// One project = one conversation = one directory: ~/projects/<name>, which is also the agent's cwd.
+// One project = one directory: ~/projects/<name>, which is also the agent's cwd. Its main chat is .nexus/conversation.json;
+// more chats live in .nexus/chats/<id>.json and go by "<name>~<id>". Every chat of a project works in the same folder.
 // A folder opened from elsewhere is a link there (a junction on Windows), so every project still has a name in ~/projects.
 export const DEFAULT_MODEL = process.env.NEXUS_MODEL || 'gpt-6.1-sol';
 const blank = () => ({
@@ -17,8 +18,32 @@ const blank = () => ({
 
 // The self-improvement bot's chat is a project whose directory is a link to this repo.
 export const SELF = 'nexus-self';
-export const projectDir = name => path.join(PROJECTS, name);
-const stateFile = name => path.join(projectDir(name), '.nexus', 'conversation.json');
+export const chatOf = key => { const i = String(key).indexOf('~'); return i < 0 ? null : String(key).slice(i + 1); };
+export const baseOf = key => String(key).split('~')[0];
+const CHAT_ID = /^[a-z0-9]{1,16}$/;
+export const validKey = key => validName(baseOf(key)) && (chatOf(key) === null || CHAT_ID.test(chatOf(key)));
+export const projectDir = key => path.join(PROJECTS, baseOf(key));
+const chatsDir = key => path.join(projectDir(key), '.nexus', 'chats');
+const stateFile = key => (chatOf(key) ? path.join(chatsDir(key), `${chatOf(key)}.json`) : path.join(projectDir(key), '.nexus', 'conversation.json'));
+// A chat's title sits beside it, so the sidebar can list chats without reading whole conversations.
+export const title = key => readText(path.join(chatsDir(key), `${chatOf(key)}.title`)).trim();
+export function setTitle(key, text) {
+  if (!chatOf(key)) throw httpError(400, "A project's main chat goes by the project's name. Rename the project instead.");
+  writeAtomic(path.join(chatsDir(key), `${chatOf(key)}.title`), String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 80), 0o644);
+}
+export function createChat(name, state = {}) {
+  const key = `${baseOf(name)}~${createHash('sha256').update(`${Date.now()}${Math.random()}`).digest('hex').slice(0, 8)}`;
+  writeAtomic(stateFile(key), JSON.stringify({ ...blank(), ...state }));
+  return key;
+}
+function chats(name, dir) {
+  let files = [];
+  try { files = fs.readdirSync(chatsDir(name)); } catch { return []; }
+  return files.filter(f => /^[a-z0-9]{1,16}\.json$/.test(f)).map(f => {
+    const key = `${name}~${f.slice(0, -5)}`;
+    return { name: key, parent: name, title: title(key), updated: fs.statSync(stateFile(key)).mtimeMs, ...(dir ? { dir } : {}) };
+  });
+}
 
 export function list() {
   fs.mkdirSync(PROJECTS, { recursive: true });
@@ -31,7 +56,8 @@ export function list() {
       if (!stat.isDirectory()) return [];
       const file = stateFile(d.name);
       const mtime = fs.existsSync(file) ? fs.statSync(file).mtimeMs : stat.mtimeMs;
-      return [{ name: d.name, updated: mtime, ...(d.isSymbolicLink() ? { dir: fs.realpathSync.native(projectDir(d.name)) } : {}) }];
+      const dir = d.isSymbolicLink() ? fs.realpathSync.native(projectDir(d.name)) : undefined;
+      return [{ name: d.name, updated: mtime, ...(dir ? { dir } : {}) }, ...chats(d.name, dir)];
     })
     .sort((a, b) => b.updated - a.updated);
 }
@@ -108,7 +134,7 @@ export function open(dir) {
 }
 const readText = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return ''; } };
 
-export const exists = name => validName(name) && fs.existsSync(projectDir(name));
+export const exists = key => validKey(key) && fs.existsSync(projectDir(key)) && (!chatOf(key) || fs.existsSync(stateFile(key)));
 
 export function create(name) {
   fs.mkdirSync(PROJECTS, { recursive: true });
@@ -155,7 +181,7 @@ export async function clone(url) {
 }
 
 export function rename(from, to) {
-  if (!exists(from)) throw httpError(404, 'Project not found.');
+  if (!exists(from) || chatOf(from)) throw httpError(404, 'Project not found.');
   if (!validName(to)) throw httpError(400, 'Names use letters, numbers, dot, dash or underscore, and start with a letter or number.');
   if (from !== to && fs.existsSync(projectDir(to))) throw httpError(409, `"${to}" already exists.`);
   fs.renameSync(projectDir(from), projectDir(to));
@@ -165,6 +191,10 @@ export function rename(from, to) {
 // A folder opened from elsewhere only loses its link: the folder, and the chat in its .nexus, stay where they are.
 export function trash(name) {
   if (!exists(name)) throw httpError(404, 'Project not found.');
+  if (chatOf(name)) { // a chat goes; the project, its folder and its other chats stay
+    fs.renameSync(stateFile(name), `${stateFile(name)}.deleted-${Date.now()}`);
+    return fs.rmSync(path.join(chatsDir(name), `${chatOf(name)}.title`), { force: true });
+  }
   if (fs.lstatSync(projectDir(name)).isSymbolicLink()) return fs.unlinkSync(projectDir(name));
   const bin = path.join(PROJECTS, '.trash');
   fs.mkdirSync(bin, { recursive: true });

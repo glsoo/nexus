@@ -438,6 +438,59 @@ test('permissions: tools and command rules from settings decide what asks, what 
   } finally { fs.writeFileSync(settingsFile, '{}'); }
 });
 
+test('several chats per project: new, forked from a message, a side question, renamed with the project, deleted alone', async () => {
+  projects.create('multi');
+  const main = agent.getSession('multi');
+  const model = fakeModel();
+  try {
+    await agent.submit('multi', 'first task');
+    await idle(main);
+    await agent.submit('multi', 'second task');
+    await idle(main);
+
+    // A new chat: same folder and settings, empty conversation, titled by its first message.
+    const { name: fresh } = agent.newChat('multi', null);
+    assert.match(fresh, /^multi~[a-z0-9]{8}$/);
+    assert.equal(projects.projectDir(fresh), projects.projectDir('multi'));
+    assert.deepEqual(agent.getSession(fresh).state.items, []);
+    await agent.submit(fresh, 'look at the readme\nplease');
+    await idle(agent.getSession(fresh));
+    assert.equal(projects.title(fresh), 'look at the readme');
+    const listed = projects.list().filter(p => p.name.startsWith('multi'));
+    assert.deepEqual(listed.map(p => p.parent || '-').sort(), ['-', 'multi']);
+
+    // A fork from the second message keeps everything before it and hands the message back as the draft.
+    const second = main.state.log.find(e => e.type === 'user' && e.text === 'second task');
+    const { name: forked, draft } = agent.newChat('multi', second.id);
+    assert.equal(draft, 'second task');
+    const fs2 = agent.getSession(forked).state;
+    assert.deepEqual(fs2.log.filter(e => e.type === 'user').map(e => e.text), ['first task']);
+    assert.equal(fs2.items.length, second.itemsLen);
+    assert.equal(projects.title(forked), 'second task (fork)');
+    assert.throws(() => agent.newChat('multi', 'nope'), /Fork from one of your own messages/);
+
+    // /btw answers on the side: shown in the log, kept out of the items the model sees.
+    const before = main.state.items.length;
+    await agent.submit('multi', '/btw what did we do?');
+    assert.equal(main.state.items.length, before);
+    const side = main.state.log.at(-1);
+    assert.equal(side.side, true);
+    assert.equal(side.text, 'ok');
+    assert.match(model.sent.at(-1).input.at(-1).content, /side question[\s\S]*what did we do\?/);
+  } finally { model.restore(); }
+
+  // Renaming the project moves its chats; deleting a chat leaves the rest.
+  agent.renameProject('multi', 'multi2');
+  const moved = projects.list().filter(p => p.parent === 'multi2').map(p => p.name);
+  assert.equal(moved.length, 2);
+  assert.ok(moved.every(k => projects.exists(k)));
+  assert.equal(agent.getSession(moved[0]).name, moved[0]);
+  agent.trashProject(moved[0]);
+  assert.ok(!projects.exists(moved[0]) && projects.exists(moved[1]) && projects.exists('multi2'));
+  assert.throws(() => projects.setTitle('multi2', 'x'), /main chat/);
+  assert.ok(!projects.validKey('multi2~../x') && !projects.validKey('../x~ab') && projects.validKey('multi2~ab12'));
+});
+
 test('requestsPerMinute paces requests to each provider separately', async t => {
   const { pace } = await import('../server/util.js');
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
