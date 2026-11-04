@@ -8,6 +8,7 @@ import * as checkpoint from './checkpoint.js';
 import { callCompat, compatContext, costOf, providerOf } from './compat.js';
 import { agentDefs, commands, instructions, runHooks, skills } from './extensions.js';
 import * as repo from './git.js';
+import { typeErrors } from './diagnose.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
@@ -740,6 +741,7 @@ async function startTurn(s) {
     });
     await runHooks('Stop', {}, cwd);
     await autoCheck(s, signal);
+    await typeCheck(s, signal);
   } catch (err) {
     if (signal.aborted) addEntry(s, { type: 'system', text: stopping ? 'Stopped by a server restart.' : 'Interrupted.' });
     else addEntry(s, { type: 'error', text: err.message });
@@ -771,6 +773,27 @@ async function autoCheck(s, signal) {
   if (!failed || signal.aborted) return;
   if ((s.checkFixes = (s.checkFixes || 0) + 1) > CHECK_FIXES) return note(s, `\`${command}\` still fails after ${CHECK_FIXES} fixes, so Nexus stopped trying. Over to you.`, 'error');
   enqueue(s, { text: `The check \`${command}\` failed after your changes:\n${clip(output, 20000)}\nFix the cause, then stop. Don't weaken or skip the check.`, label: `The check failed, so Nexus is fixing it (${s.checkFixes}/${CHECK_FIXES}).` });
+}
+
+// After a turn that changed code in a TypeScript project, tsc checks it, and errors the change caused go back to the agent,
+// two rounds at most per prompt. A /check command replaces this; settings.json "typeCheck": false turns it off.
+const TYPE_FIXES = 2;
+async function typeCheck(s, signal) {
+  const last = lastCheckpoint(s);
+  if (s.state.check || readSettings().typeCheck === false || !last || signal.aborted) return;
+  const changed = [...(await diffSince(s, last)).matchAll(/^diff --git a\/(.+?) b\//gm)].map(m => m[1]).filter(f => /\.[cm]?[jt]sx?$/.test(f));
+  if (!changed.length) return;
+  const entry = { type: 'tool', name: 'Bash', args: { command: 'tsc --noEmit', description: 'Type check what changed' }, status: 'running', output: '' };
+  let result;
+  try { result = await typeErrors(cwdOf(s), changed, s.tsSeen, signal); } catch { return; }
+  if (!result) return;
+  s.tsSeen = result.seen;
+  addEntry(s, Object.assign(entry, { status: result.counted.length ? 'error' : 'done', output: result.all.length ? clip(result.all.join('\n'), 60000) : 'No type errors.' }));
+  if (!result.counted.length) return;
+  if ((s.checkFixes = (s.checkFixes || 0) + 1) > TYPE_FIXES) return note(s, `TypeScript still reports errors after ${TYPE_FIXES} fixes, so Nexus stopped trying. Over to you.`, 'error');
+  const others = result.all.length - result.counted.length;
+  enqueue(s, { text: `TypeScript reports errors after your changes:\n${clip(result.counted.join('\n'), 15000)}${others ? `\n(${others} more were already there before this change.)` : ''}\nFix the cause, then stop. Don't silence them with any, casts or @ts-ignore.`,
+    label: `TypeScript found errors in what changed, so Nexus is fixing them (${s.checkFixes}/${TYPE_FIXES}).` });
 }
 
 // A manual /compact holds the session like a turn, so a prompt sent meanwhile queues instead of being lost when the summary replaces the history.

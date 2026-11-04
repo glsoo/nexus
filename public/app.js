@@ -2257,6 +2257,7 @@ async function settingsPage(hamb) {
     autopilotCard(area),
     riskCard(area),
     reliabilityCard(area),
+    typeCheckCard(area),
     permissionsCard(area, mcp),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact and Notification; a hook exiting with 2 blocks a tool call or prompt. MCP servers reconnect within seconds of saving.'),
@@ -2358,6 +2359,19 @@ function autopilotCard(area) {
   return [h('h2', {}, h('label', { htmlFor: 'apreq' }, 'Autopilot request limit')),
     h('div', { class: 'card' }, h('div', { class: 'rowline' }, input, h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Save')),
       h('p', { class: 'small muted', id: 'apreq-hint' }, 'How many model requests autopilot makes, subagents included, before it pauses until your next message. Long tasks may need 500 or more. 0 means no limit, so set a budget with /budget to cap the cost. Applies right away, even to a running chat.'))];
+}
+
+// On by default; settings.json "typeCheck": false turns it off.
+function typeCheckCard(area) {
+  const box = h('input', { type: 'checkbox', id: 'tcheck', 'aria-describedby': 'tcheck-hint' });
+  guard(async () => { box.checked = JSON.parse((await api('GET', '/api/settings')).text).typeCheck !== false; })();
+  box.onchange = guard(async () => {
+    await putSettings(area, { typeCheck: box.checked ? undefined : false });
+    toast(box.checked ? 'TypeScript projects are type checked after changes again.' : 'The type check after changes is off.');
+  });
+  return [h('h2', {}, 'Code checks'),
+    h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'tcheck' }, box, h('span', { class: 'grow' }, 'Type check TypeScript projects after the agent changes code')),
+      h('p', { class: 'small muted', id: 'tcheck-hint' }, "After a turn that changed code in a project with a tsconfig.json and its own typescript, Nexus runs tsc and hands errors the change caused back to the agent, twice at most. A JavaScript, JSON or Python file that stops parsing is caught right after each edit, always. A /check command in a chat replaces the type check."))];
 }
 
 // All off by default: settings.json "requestsPerMinute", "autoRetry", "notifyErrors" and "fallbackModels". The server reads them on each request.

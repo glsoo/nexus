@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { browserTool } from './browser.js';
+import { syntax } from './diagnose.js';
 import { childEnv, clip, HOME, isInside, newId, readSettings, shellCommand } from './util.js';
 
 const obj = (properties, required = []) => ({ type: 'object', properties, required });
@@ -258,7 +259,10 @@ async function webFetch({ url }, { signal }) {
 }
 
 const IMPL = {
-  Bash: bash, Read: read, Write: write, Edit: edit, NotebookEdit: notebook, Glob: glob, Grep: grep, WebFetch: webFetch, Screenshot: screenshot,
+  Bash: bash, Read: read, NotebookEdit: notebook, Glob: glob, Grep: grep, WebFetch: webFetch, Screenshot: screenshot,
+  // A file that no longer parses is said in the same tool result, so the agent fixes it right away.
+  async Write(args, ctx) { const out = write(args, ctx); return out + await syntax(resolve(ctx.cwd, args.file_path)); },
+  async Edit(args, ctx) { const out = edit(args, ctx); return out + await syntax(resolve(ctx.cwd, args.file_path)); },
   async Browser(args, { cwd, session }) {
     if (args.action === 'open' && networkPath(args.url, cwd)) throw new Error('Network paths are not supported.');
     return browserTool(args, { cwd, session: session.name, exe: args.action === 'close' ? null : findBrowser('Browser') });

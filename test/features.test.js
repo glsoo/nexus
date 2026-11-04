@@ -491,6 +491,37 @@ test('several chats per project: new, forked from a message, a side question, re
   assert.ok(!projects.validKey('multi2~../x') && !projects.validKey('../x~ab') && projects.validKey('multi2~ab12'));
 });
 
+test('code checks: a file that stops parsing is said right after the edit, and TypeScript errors a turn caused go back to the agent', { timeout: 60000 }, async () => {
+  const { execTool } = await import('../server/tools.js');
+  const dir = path.join(tmp, 'syntax');
+  fs.mkdirSync(dir, { recursive: true });
+  const write = (file, content) => execTool('Write', { file_path: file, content }, { cwd: dir });
+  assert.doesNotMatch(await write('ok.js', 'export const a = 1;\n'), /doesn't parse/);
+  assert.match(await write('bad.js', 'const a = ;\n'), /doesn't parse now:[\s\S]*SyntaxError[\s\S]*Fix this/);
+  assert.doesNotMatch(await write('view.js', 'export const V = () => <div>hi</div>;\n'), /doesn't parse/, 'JSX is left alone');
+  assert.doesNotMatch(await write('tsconfig.json', '{ // comments are fine here\n "compilerOptions": {}, }\n'), /doesn't parse/);
+  assert.match(await write('data.json', '{ "a": 1 '), /doesn't parse now/);
+  assert.match(await execTool('Edit', { file_path: 'ok.js', old_string: '= 1;', new_string: '= ;' }, { cwd: dir }), /doesn't parse now/);
+
+  // A stand-in tsc that always reports one error in src/a.ts, plus an old one elsewhere.
+  projects.create('typed');
+  const s = agent.getSession('typed');
+  agent.setOption(s, 'mode', 'bypass');
+  const cwd = projects.projectDir('typed');
+  fs.writeFileSync(path.join(cwd, 'tsconfig.json'), '{}');
+  fs.mkdirSync(path.join(cwd, 'node_modules', 'typescript', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, 'node_modules', 'typescript', 'bin', 'tsc'), "console.log(\"src/a.ts(3,5): error TS2322: Type 'string' is not assignable to type 'number'.\\nold.ts(1,1): error TS1000: Old.\"); process.exit(2);");
+  const model = fakeModel(n => (n === 1 ? ['Write', { file_path: 'src/a.ts', content: 'export const n: number = "x";\n' }] : null));
+  try {
+    await agent.submit('typed', 'add src/a.ts');
+    await idle(s, 30000);
+  } finally { model.restore(); }
+  const asked = model.sent.flatMap(r => r.input).filter(i => i.role === 'user' && /TypeScript reports errors/.test(JSON.stringify(i.content)));
+  assert.ok(asked.length >= 1, 'the error went back to the agent');
+  assert.match(JSON.stringify(asked[0].content), /src\/a\.ts\(3,5\): error TS2322[\s\S]*1 more were already there/);
+  assert.ok(s.state.log.some(e => e.type === 'tool' && e.args?.command === 'tsc --noEmit' && e.status === 'error'));
+});
+
 test('requestsPerMinute paces requests to each provider separately', async t => {
   const { pace } = await import('../server/util.js');
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
