@@ -96,7 +96,7 @@ test('default project tabs use visible text and retain accessible selection and 
       h, icon: name => h('svg', { name }), S: { project: 'fixture', tab: selected, page: null },
       document: { getElementById: () => ({ classList: { toggle() {} } }) },
       $main: main, $side: { classList: { contains: () => false } },
-      syncTitle() {}, pretty: value => value, navigateTabs() {}, motion() {}, prevTab: 0,
+      syncTitle() {}, pretty: value => value, projectDir: () => '/home/me/fixture', navigateTabs() {}, motion() {}, prevTab: 0,
       go: (...args) => calls.push(args), chatView() {}, filesView() {}, changesView() {}, termView() {},
     };
     vm.runInNewContext(`(${app.slice(start, end)})`, context)();

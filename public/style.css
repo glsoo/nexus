@@ -480,6 +480,97 @@ dialog.closing::backdrop { animation: fadeout .16s ease-in forwards; }
   .slash button:hover { background: var(--raised); }
   .tree button:hover { background: var(--card); }
 }
+/* ---- transcript and composer: one column of text, compact tool rows and a round message pill ---- */
+:root { --spark: #e8825e; }
+header.top { border-bottom: 0; }
+.top .icon-btn { width: 36px; height: 36px; border-radius: 50%; background: var(--card); color: var(--fg); }
+.ttl { display: grid; min-width: 0; }
+.top .ttl h1 { font: 600 14px var(--sans); }
+.ttl .sub { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spin { display: none; flex: none; width: 18px; height: 18px; border: 2px solid var(--line-strong); border-top-color: var(--fg); border-radius: 50%; animation: spin 1s linear infinite; }
+.main:has(.composer [aria-label="Stop"]:not([hidden])) .spin { display: block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.tabs, .pill, .tab { border-radius: 999px; }
+.pill { border-radius: 999px; }
+
+.e.assistant .md { font-size: 15px; line-height: 1.6; }
+.md :not(pre) > code { color: var(--info); border-radius: 6px; padding: 2px 6px; font-size: .88em; }
+.log > .e.user { width: fit-content; max-width: min(85%, 720px); margin-left: auto; margin-right: max(0px, calc((100% - 860px) / 2)); border: 0; border-radius: 18px; background: var(--raised); padding: 9px 14px; }
+.log > .e.user.queued { border: 1px dashed var(--line-strong); background: none; }
+.e.user .rw { top: 4px; right: calc(100% + 4px); }
+
+details.fold > summary::after { content: ''; flex: none; width: 7px; height: 7px; margin: 0 4px 0 auto; border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform .2s var(--ease); }
+details.fold[open] > summary::after { transform: rotate(45deg); }
+.tool summary:has(.tagent)::after { margin-left: 8px; }
+.tool summary .dot:has(svg) { display: grid; place-items: center; width: 18px; height: 18px; background: none; border-radius: 0; animation: none; color: var(--muted); }
+.tool summary .dot svg { width: 16px; height: 16px; }
+.tool summary .dot.running { color: var(--info); }
+.tool summary .dot.awaiting, .tool summary .dot.held { color: var(--warn); }
+.tool summary .dot.error, .tool summary .dot.denied { color: var(--danger); }
+.e.tool > summary .tname { font: 500 14px var(--sans); color: var(--muted); }
+.e.tool > summary:has(.dot.running) .tname { color: var(--fg); animation: pulse 1.4s infinite; }
+.e.tool > summary:has(.dot.error, .dot.denied) .tname { color: var(--danger); }
+
+.composer .cbox { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; padding: 8px; border-radius: 26px; }
+.composer .cbar { display: contents; }
+.composer .cbox .thumbs { order: 0; width: 100%; padding: 2px 6px 4px; }
+.composer .cbox textarea { order: 2; flex: 1 1 0; width: auto; min-width: 0; min-height: 36px; padding: 8px 4px; font-size: 15px; line-height: 20px; }
+.composer .cbar > .att { order: 1; }
+.composer .cbar > .mic { order: 3; }
+.composer .cbar > .btn { order: 4; }
+.composer .cbox::after { content: ''; order: 5; flex-basis: 100%; height: 0; margin-top: -6px; }
+.composer .cbar > .att, .composer .cbar > .mic, .composer .cbar > .btn { width: 36px; height: 36px; min-height: 36px; padding: 0; margin: 0; flex: none; border-radius: 50%; font-size: 0; align-self: flex-end; }
+.composer .cbar > .att { background: var(--raised); color: var(--fg); }
+.composer .cbar > .btn.primary::before { content: '↑'; font-size: 19px; line-height: 1; }
+.composer .cbar > .btn.danger { background: var(--fg); border-color: var(--fg); }
+.composer .cbar > .btn.danger::before { content: ''; width: 12px; height: 12px; border-radius: 2px; background: #000; }
+.cbox:has(textarea:placeholder-shown):not(:has(.thumbs:not([hidden]))):has(.btn.danger:not([hidden])) .btn.primary { display: none; }
+.composer .cbar > [aria-label="Permission mode"], .composer .cbar > .mbtn, .composer .cbar > .apbtn, .composer .cbar > .pbtn, .composer .cbar > .meter { order: 6; flex: 0 1 auto; align-self: center; }
+.composer .cbar > .meter { margin-left: auto; min-height: 30px; }
+.cbar > [aria-label="Permission mode"] { display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 3px 6px 3px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; font-size: 12.5px; white-space: nowrap; }
+.cbar > [aria-label="Permission mode"] svg { width: 14px; height: 14px; color: var(--muted); }
+.cbar > .plan, .cbar > .readonly { color: var(--info); }
+.cbar > .bypass { color: var(--danger); border-color: var(--danger); }
+.composer .cbar > .mbtn { border-radius: 999px; }
+.short .cbar > [aria-label="Permission mode"] { display: none; }
+
+.modes .mabout { font-size: 13px; color: var(--muted); }
+.modes .mrow { align-items: flex-start; padding-block: 10px; }
+.mcan { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.can { font-size: 11px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 0 7px; color: var(--muted); }
+.can.is-auto { color: #34d399; border-color: #065f46; }
+.can.is-blocked { color: var(--danger); border-color: #7f1d1d; }
+.mkey { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 5px; }
+.mrule { display: flex; align-items: center; gap: 8px; padding: 6px 8px; }
+.mrule .mtag { flex: none; }
+.mrule .mfacts { flex: 1; min-width: 0; }
+.mhint { font-size: 12px; }
+
+@media (max-width: 760px) {
+  .view .composer { padding-top: 26px; }
+  .ttl { flex: 1; text-align: center; }
+  .top .ttl h1 { flex: none; }
+  .e.assistant .md { font-size: 16px; }
+  .composer .cbox textarea { font-size: 16px; }
+  .composer .cbar > .mbtn:not(.abtn) { flex: 1 1 0; min-width: 0; justify-content: space-between; }
+  .composer .cbar > .abtn { flex: none; }
+  .composer .cbar > .abtn:not(.on) { aspect-ratio: 1; justify-content: center; padding: 0; }
+  .composer .cbar > .abtn:not(.on) .mlabel, .composer .cbar > .abtn > svg:last-child, .composer .cbar > [aria-label="Permission mode"] svg { display: none; }
+  .composer .cbar > .meter { position: absolute; top: 0; right: max(24px, calc(var(--sar) + 8px)); min-height: 26px; margin: 0; }
+  .composer .cbar > .meter::after { content: ''; position: absolute; inset: -9px 0; }
+}
+@media (pointer: coarse) {
+  .top .icon-btn { width: 44px; height: 44px; }
+  .composer .cbar > .att, .composer .cbar > .mic, .composer .cbar > .btn { width: 44px; height: 44px; min-height: 44px; }
+  .composer .cbar > [aria-label="Permission mode"] { min-height: 44px; padding-inline: 12px; }
+  .composer .cbox textarea { min-height: 44px; padding-block: 12px; }
+  .mkey, .mhint { display: none; }
+}
+@media (hover: hover) {
+  .top .icon-btn:hover { background: var(--raised); }
+  .cbar > [aria-label="Permission mode"]:hover { background: var(--raised); }
+  .composer .cbar > .btn.danger:hover { background: var(--muted); }
+}
 @media (forced-colors: active) {
   .cbar .apbtn.on { outline: 1px solid ButtonText; }
 }

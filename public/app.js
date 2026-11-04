@@ -15,6 +15,8 @@ function h(tag, props = {}, ...kids) {
   return el;
 }
 const ICONS = {
+  term: '<path d="M5 7l5 5-5 5M12 18h7"/>', search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/>', globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>',
+  shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>', eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>', bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
   plus: '<path d="M12 5v14M5 12h14"/>', dots: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   menu: '<path d="M3 6h18M3 12h18M3 18h18"/>', bot: '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M9 14h.01M15 14h.01"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/>',
@@ -441,7 +443,9 @@ function render() {
   const at = tabs.findIndex(([id]) => id === S.tab);
   const view = h('div', { class: 'view', id: 'project-view', role: 'tabpanel', 'aria-labelledby': `tab-${S.tab}` });
   const pill = h('span', { class: 'pill', style: `--i:${at}`, 'aria-hidden': 'true' });
-  $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', { title: pretty(S.project) }, pretty(S.project)),
+  $main.replaceChildren(h('header', { class: 'top' }, hamb,
+    h('div', { class: 'ttl' }, h('h1', { title: pretty(S.project) }, pretty(S.project)), projectDir(S.project) && h('span', { class: 'sub muted', title: projectDir(S.project) }, projectDir(S.project).split(/[\\/]/).slice(-2).join('/'))),
+    h('span', { class: 'spin', 'aria-hidden': 'true' }),
     h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(S.project)}`, onclick: e => projectMenu(e.currentTarget, S.project) }, icon('dots')),
     h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Project views', onkeydown: e => navigateTabs(e, tabs, at) }, pill,
       tabs.map(([id, label]) => h('button', { class: `tab ${S.tab === id ? 'on' : ''}`, id: `tab-${id}`, role: 'tab', 'aria-selected': String(S.tab === id), 'aria-controls': 'project-view', tabIndex: S.tab === id ? 0 : -1, onclick: () => go(S.project, null, id) }, label)))),
@@ -593,7 +597,7 @@ function onEvent(m) {
     case 'delta': delta(m); break;
     case 'status': {
       const was = S.state?.running;
-      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt, dirs: m.dirs });
+      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt, dirs: m.dirs, allow: m.allow });
       if (was && !m.running) { finished(); refreshReview(); filesChanged(); }
       if (m.running && $review) $review.hidden = true;
       syncTitle();
@@ -624,7 +628,7 @@ function onEvent(m) {
 }
 
 // ---- chat ----
-let $log, $todos, $input, $sendBtn, $stopBtn, $mode, $autoBtn, $model, $modelLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
+let $log, $todos, $input, $sendBtn, $stopBtn, $mode, $modeLabel, $autoBtn, $model, $modelLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
 
 function chatView(view) {
   $log = h('div', { class: 'log', role: 'log', 'aria-live': 'polite', 'aria-relevant': 'additions' });
@@ -766,6 +770,12 @@ function delta(m) {
   scroll(stick);
 }
 
+// A tool row's icon, then its verb while waiting or refused, once done and while running. Only a finished call reads as past tense.
+const TOOL_ROWS = {
+  Bash: ['term', 'Run', 'Ran', 'Running'], Read: ['file', 'Read', 'Read', 'Reading'], Edit: ['pen', 'Edit', 'Edited', 'Editing'], Write: ['pen', 'Write', 'Wrote', 'Writing'],
+  Grep: ['search', 'Search', 'Searched', 'Searching'], Glob: ['search', 'Search', 'Searched', 'Searching'], WebFetch: ['globe', 'Fetch', 'Fetched', 'Fetching'],
+};
+const toolVerb = e => TOOL_ROWS[e.name]?.[e.status === 'done' ? 2 : e.status === 'running' ? 3 : 1] || e.name;
 const toolTarget = (n, a) => a.command ?? a.file_path ?? a.pattern ?? a.url ?? a.description ?? a.query ?? a.question ?? a.shell_id ?? a.name ?? (n === 'TodoWrite' ? `${a.todos?.length ?? 0} items` : '');
 
 function diffBlock(oldS, newS) {
@@ -836,8 +846,8 @@ function renderEntry(e) {
     case 'tool': {
       const awaiting = e.status === 'awaiting';
       const d = h('details', { class: 'e fold tool', open: awaiting || e.status === 'error' || e.status === 'held' || e.direct || e.name === 'ExitPlanMode' || e.name === 'Screenshot' },
-        h('summary', {}, h('span', { class: `dot ${e.status}`, title: e.status }),
-          h('span', { class: 'tname' }, e.name), h('span', { class: 'targ muted' }, String(toolTarget(e.name, e.args || {})).split('\n')[0]),
+        h('summary', {}, h('span', { class: `dot ${e.status}`, title: e.status }, icon(TOOL_ROWS[e.name]?.[0] || 'spark')),
+          h('span', { class: 'tname', title: e.name }, toolVerb(e)), h('span', { class: 'targ muted' }, String(toolTarget(e.name, e.args || {})).split('\n')[0]),
           e.autopilot && h('span', { class: 'aptag', title: 'Autopilot answered this for you' }, 'autopilot'),
           e.risk && h('span', { class: 'rtag', title: e.risk.why }, e.status === 'held' ? `held · risk ${e.risk.score}/10` : `risk ${e.risk.score}/10`),
           e.agent && h('span', { class: 'tagent muted' }, e.agent)));
@@ -882,7 +892,7 @@ async function rewindDialog(e) {
 
 const BUILTIN = [
   ['help', 'Show commands and keys'], ['clear', 'Start over, archiving the transcript'], ['compact', 'Summarize to free up context'], ['autocompact', 'Turn auto-compact on or off, or set its size'],
-  ['model', 'Show or set the model'], ['effort', 'low, medium, high, xhigh or max'], ['mode', 'default, acceptEdits, plan or bypass'], ['plan', 'Research only, then propose a plan'],
+  ['model', 'Show or set the model'], ['effort', 'low, medium, high, xhigh or max'], ['mode', 'default, acceptEdits, plan, readonly or bypass'], ['plan', 'Research only, then propose a plan'],
   ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['pr', 'Commit, push and open a GitHub pull request'], ['issue', 'Fix a GitHub issue by number'], ['schedule', 'Run a prompt on a timer: cron fields, then the prompt'], ['check', 'A command, like npm test, to run after each change; Nexus fixes failures'], ['watch', 'on or off: act on comments ending in AI! saved in any editor'], ['todos', 'Show the task list'],
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
   ['skills', 'List skills and agents'], ['mcp', 'Open MCP and hook settings'], ['settings', 'Open settings'], ['memory', 'Edit NEXUS.md'], ['rewind', 'How to rewind'],
@@ -972,10 +982,19 @@ function syncThumbs() {
   $thumbs.replaceChildren(...S.images.map((src, i) => h('button', { type: 'button', 'aria-label': 'Remove attachment', title: 'Remove', onclick: () => { S.images.splice(i, 1); syncThumbs(); } }, h('img', { src, alt: '' }))));
 }
 
-const MODES = [['default', 'Ask first'], ['acceptEdits', 'Accept edits'], ['plan', 'Plan'], ['bypass', 'Bypass']];
+// In the order the 1-5 keys pick them. `can` answers CAN_DO for each mode and has to match decide() in server/tools.js; a test holds it to that.
+const CAN_DO = ['Reads', 'Edits', 'Commands', 'Web'];
+const MODES = [
+  { id: 'default', label: 'Ask first', group: 'Ask me', icon: 'shield', about: 'Reads project files on its own and asks before anything else.', words: 'normal safe approve', can: ['auto', 'ask', 'ask', 'ask'] },
+  { id: 'acceptEdits', label: 'Accept edits', group: 'Ask me', icon: 'pen', about: 'Edits files in the project without asking. Commands still ask.', words: 'write change code', can: ['auto', 'auto', 'ask', 'ask'] },
+  { id: 'plan', label: 'Plan', group: "Look, don't touch", icon: 'file', about: 'Researches and writes a plan for you to approve, then gets to work.', words: 'research think design', can: ['auto', 'blocked', 'blocked', 'ask'] },
+  { id: 'readonly', label: 'Read-only', group: "Look, don't touch", icon: 'eye', about: 'Only reads files and answers. It stays this way until you switch.', words: 'question review explain safe', can: ['auto', 'blocked', 'blocked', 'blocked'] },
+  { id: 'bypass', label: 'Bypass', group: 'Hands off', icon: 'bolt', about: 'Runs every command and changes any file on this machine without asking.', words: 'yolo danger everything', can: ['auto', 'auto', 'auto', 'auto'] },
+];
 const setMode = async value => {
-  if (value === 'bypass' && !await confirmBox('Turn on bypass mode?', 'The agent will run every command and change any file on this machine without asking.', 'Turn on', 'danger')) return syncComposer();
-  sendWs({ t: 'option', key: 'mode', value });
+  if (value === 'bypass' && S.state.mode !== 'bypass' && !await confirmBox('Turn on bypass mode?', 'The agent will run every command and change any file on this machine without asking.', 'Turn on', 'danger')) return false;
+  setOption('mode', value);
+  return true;
 };
 const toggleAutopilot = async () => {
   if (!S.state.autopilot && !await confirmBox('Turn on autopilot?', `The agent stops asking you. It runs commands and edits files without approval, approves its own plan in plan mode, and answers its own questions, until the task is done or it hits the autopilot request limit (150 by default; change it in Settings → Autopilot request limit). Plan mode still can't change anything before the plan. Stop works as usual.`, 'Turn on', 'danger')) return;
@@ -1032,7 +1051,8 @@ function composer() {
   $thumbs = h('div', { class: 'thumbs', hidden: true });
   $slash = h('div', { class: 'slash', hidden: true });
   const file = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true, onchange: () => { addFiles(file.files); file.value = ''; } });
-  $mode = h('select', { 'aria-label': 'Permission mode', title: 'Permission mode (Shift+Tab)', onchange: () => setMode($mode.value) }, MODES.map(([v, l]) => h('option', { value: v }, l)));
+  $modeLabel = h('span', { class: 'mlabel' });
+  $mode = h('button', { type: 'button', 'aria-label': 'Permission mode', 'aria-haspopup': 'dialog', title: 'Permission mode (Shift+Tab)', onclick: guard(() => modePicker()) }, $modeLabel, icon('down'));
   $autoBtn = h('button', { class: 'icon-btn apbtn', type: 'button', 'aria-label': 'Autopilot', onclick: guard(toggleAutopilot) }, icon('plane'));
   $agentLabel = h('span', { class: 'mlabel' });
   $agentBtn = h('button', { class: 'mbtn abtn', type: 'button', 'aria-label': 'Choose the agent for this chat', onclick: guard(agentPicker) }, icon('bot'), $agentLabel, icon('down'));
@@ -1044,7 +1064,7 @@ function composer() {
   $stopBtn = h('button', { class: 'btn small danger', type: 'button', 'aria-label': 'Stop', title: 'Stop', hidden: true, onclick: () => sendWs({ t: 'interrupt' }) }, 'Stop');
   syncThumbs();
   return h('div', { class: 'composer' }, $slash, h('div', { class: 'cbox' }, $thumbs, $input, h('div', { class: 'cbar' },
-    h('button', { class: 'icon-btn', 'aria-label': 'Attach image', title: 'Attach image', onclick: () => file.click() }, icon('clip')), file,
+    h('button', { class: 'icon-btn att', type: 'button', 'aria-label': 'Attach image', title: 'Attach image', onclick: () => file.click() }, icon('plus')), file,
     Speech && h('button', { class: 'icon-btn mic', type: 'button', 'aria-label': 'Dictate', 'aria-pressed': 'false', title: "Dictate: speak and it types (your browser's speech recognition)", onclick: e => dictate(e.currentTarget) }, icon('mic')),
     $mode, $autoBtn, $agentBtn, $model, $promptBtn, $meter, $stopBtn, $sendBtn)));
 }
@@ -1058,6 +1078,74 @@ function setOption(key, value) {
   S.state[key] = value;
   sendWs({ t: 'option', key, value });
   syncComposer();
+}
+
+// Turns a saved rule such as Bash:npm test or Read:* into its tool and what it covers.
+const ruleParts = rule => {
+  const at = rule.indexOf(':');
+  if (at < 0) return [rule, 'every use'];
+  const what = rule.slice(at + 1);
+  return [rule.slice(0, at), what === '*' ? 'any file in this project' : what];
+};
+
+function modePicker() {
+  const shut = () => sheet(d)();
+  const pick = async id => { if (await setMode(id)) shut(); };
+  const row = m => {
+    const current = m.id === S.state.mode;
+    return h('button', { class: `mrow${current ? ' current' : ''}`, type: 'button', 'aria-current': current ? 'true' : null, onclick: () => pick(m.id) }, icon(m.icon),
+      h('span', { class: 'mtext' }, h('span', { class: 'mname' }, m.label),
+        h('span', { class: 'mabout' }, m.about),
+        h('span', { class: 'mcan' }, CAN_DO.map((what, i) => h('span', { class: `can is-${m.can[i]}` }, `${what}: ${m.can[i]}`)))),
+      current ? icon('check') : h('kbd', { class: 'mkey', 'aria-hidden': 'true' }, MODES.indexOf(m) + 1));
+  };
+  const autoRow = () => h('button', { class: `mrow autorow${S.state.autopilot ? ' current' : ''}`, type: 'button', 'aria-pressed': String(Boolean(S.state.autopilot)),
+    onclick: guard(async () => { await toggleAutopilot(); render(); list.querySelector('.autorow').focus(); }) }, icon('plane'),
+    h('span', { class: 'mtext' }, h('span', { class: 'mname' }, 'Autopilot', S.state.autopilot && h('span', { class: 'mtag' }, 'On')),
+      h('span', { class: 'mabout' }, "Answers its own prompts until the task is done, on top of any mode. What a mode blocks stays blocked.")));
+  const ruleRow = rule => {
+    const [tool, what] = ruleParts(rule);
+    return h('div', { class: 'mrule' }, h('span', { class: 'mtag' }, tool), h('span', { class: 'mfacts', title: rule }, what),
+      h('button', { class: 'btn small', type: 'button', 'aria-label': `Stop allowing ${tool}: ${what}`, onclick: () => {
+        setOption('allow', S.state.allow.filter(r => r !== rule));
+        render();
+        (list.querySelector('.mrule .btn') || search).focus();
+      } }, 'Remove'));
+  };
+  const list = h('div', { class: 'mlist' });
+  const search = h('input', { class: 'field', type: 'search', placeholder: 'Search modes and rules', 'aria-label': 'Search modes and rules', autocomplete: 'off', oninput: () => render(),
+    onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); list.querySelector('.mrow')?.click(); } } });
+  const render = () => {
+    const terms = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const hit = text => terms.every(t => text.toLowerCase().includes(t));
+    const found = MODES.filter(m => hit(`${m.label} ${m.id} ${m.group} ${m.about} ${m.words}`));
+    const auto = hit('autopilot hands off away unattended');
+    const rules = (S.state.allow || []).filter(rule => hit(`always allowed ${ruleParts(rule).join(' ')}`));
+    const groups = [...new Set(MODES.map(m => m.group))].flatMap(group => {
+      const rows = found.filter(m => m.group === group).map(row);
+      if (group === 'Hands off' && auto) rows.push(autoRow());
+      return rows.length ? [h('h3', {}, group), ...rows] : [];
+    });
+    list.replaceChildren(...groups, ...(rules.length ? [h('h3', {}, 'Always allowed in this chat'), ...rules.map(ruleRow)] : []));
+    if (!list.children.length) list.append(h('p', { class: 'mnone muted' }, `Nothing matches "${search.value}".`));
+  };
+  const d = h('dialog', { class: 'picker modes', 'aria-label': 'Choose permission mode',
+    onclick: e => { if (e.target === d) shut(); },
+    oncancel: e => { e.preventDefault(); shut(); },
+    onclose: () => d.remove(),
+    onkeydown: e => {
+      if (/^[1-5]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); pick(MODES[e.key - 1].id); return; }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      const rows = [search, ...list.querySelectorAll('button')];
+      rows[(rows.indexOf(document.activeElement) + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length].focus();
+    } },
+    h('div', { class: 'mhead' }, h('h2', {}, 'Permission mode'), h('button', { class: 'btn small', type: 'button', onclick: shut }, 'Done')),
+    search, list, h('div', { class: 'mfoot mhint muted' }, 'Shift+Tab switches the first three · 1–5 picks'));
+  render();
+  document.body.append(d);
+  d.showModal();
+  if (!touch.matches) search.focus();
 }
 
 function modelPicker() {
@@ -1175,6 +1263,9 @@ function syncComposer() {
   if (!st || !$input?.isConnected) return;
   $mode.value = st.mode;
   $mode.className = st.mode;
+  const mode = MODES.find(m => m.id === st.mode);
+  $modeLabel.textContent = mode?.label || st.mode;
+  $input.placeholder = st.running ? 'Queue a message…' : 'Message Nexus';
   $autoBtn.classList.toggle('on', Boolean(st.autopilot));
   $autoBtn.setAttribute('aria-pressed', String(Boolean(st.autopilot)));
   $autoBtn.title = st.autopilot ? 'Autopilot is on: the agent decides without asking. Click to turn it off.' : 'Autopilot: let the agent finish without stopping to ask';

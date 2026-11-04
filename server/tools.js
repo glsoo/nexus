@@ -297,6 +297,8 @@ export function decide(state, tool, args, cwd) {
   if (ALWAYS_OK.has(tool)) return { action: 'allow' };
   if (state.mode === 'bypass') return { action: 'allow' };
   if (READS.has(tool) && inProject(cwd, tool, args, state.dirs)) return { action: 'allow' };
+  // Ahead of the allow list: a rule saved earlier in the chat must not reopen a read-only one.
+  if (state.mode === 'readonly' && !READS.has(tool)) return { action: 'deny', reason: 'Read-only mode: this chat can only read files. The user has to switch mode before anything can change.' };
   if (state.mode === 'plan' && !READS.has(tool) && tool !== 'WebFetch' && tool !== 'Screenshot' && !tool.startsWith('mcp__')) {
     return { action: 'deny', reason: 'Plan mode is read-only. Finish the plan and call ExitPlanMode.' };
   }

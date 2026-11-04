@@ -54,6 +54,29 @@ test('permissions', () => {
   assert.equal(decide(state('bypass'), 'Bash', { command: 'ls' }, cwd).action, 'allow');
 });
 
+test('read-only mode reads the project and refuses everything else, even a saved rule', () => {
+  const cwd = projects.projectDir('two');
+  assert.equal(decide(state('readonly'), 'Read', { file_path: 'a.txt' }, cwd).action, 'allow');
+  assert.equal(decide(state('readonly'), 'Read', { file_path: '../x' }, cwd).action, 'ask');
+  for (const [tool, args] of [['Write', { file_path: 'a' }], ['Edit', { file_path: 'a' }], ['Bash', { command: 'ls' }], ['WebFetch', { url: 'https://example.com' }], ['Screenshot', {}], ['mcp__x__y', {}]]) {
+    assert.equal(decide(state('readonly'), tool, args, cwd).action, 'deny', tool);
+    assert.equal(decide({ ...state('readonly'), autopilot: true }, tool, args, cwd).action, 'deny', `${tool} on autopilot`);
+  }
+  assert.equal(decide(state('readonly', ['Bash:ls']), 'Bash', { command: 'ls' }, cwd).action, 'deny');
+  assert.equal(decide(state('readonly', ['Write:*']), 'Write', { file_path: 'a' }, cwd).action, 'deny');
+});
+
+test("the modes menu says what decide() really does", () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const start = app.indexOf('const MODES = [');
+  const MODES = new Function(`${app.slice(start, app.indexOf('];', start) + 2)} return MODES;`)();
+  const cwd = projects.projectDir('two');
+  const calls = [['Read', { file_path: 'a.txt' }], ['Write', { file_path: 'a' }], ['Bash', { command: 'ls' }], ['WebFetch', { url: 'https://example.com' }]];
+  const says = { auto: 'allow', ask: 'ask', blocked: 'deny' };
+  assert.deepEqual(MODES.map(m => m.id), ['default', 'acceptEdits', 'plan', 'readonly', 'bypass']);
+  for (const m of MODES) calls.forEach(([tool, args], i) => assert.equal(decide(state(m.id), tool, args, cwd).action, says[m.can[i]], `${m.id} ${tool}`));
+});
+
 test('edit requires a unique match', () => {
   const cwd = projects.projectDir('two');
   fs.writeFileSync(path.join(cwd, 'f'), 'a a b');

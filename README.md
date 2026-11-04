@@ -172,7 +172,7 @@ flowchart LR
 | `/review <target>` | Read-only review with prioritized findings and file locations |
 | `/refactor <target and goal>` | Simplify code while preserving behavior |
 | `/agent` · `/prompts` · `/marketplace` | Open the agent picker, the prompts editor, or the marketplace |
-| `/plan` · `/mode <mode>` | Research-only plan mode, or `default`, `acceptEdits`, `plan` or `bypass` |
+| `/plan` · `/mode <mode>` | Research-only plan mode, or `default`, `acceptEdits`, `plan`, `readonly` or `bypass` |
 | `/model <id>` · `/effort <level>` | Change the model or the reasoning effort |
 | `/compact` · `/autocompact` | Summarize the chat to free context, now or automatically |
 | `/autopilot [on\|off]` | Keep working without stopping to ask |

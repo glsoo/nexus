@@ -114,6 +114,20 @@ test('a chat sends its injection with each prompt, works as its agent, and keeps
   assert.doesNotMatch(agent.previewPrompt('swap'), /# Your role/);
 });
 
+test('read-only mode can be chosen but not left by the agent, and the page can only remove always-allow rules', async () => {
+  projects.create('rules');
+  const s = agent.getSession('rules');
+  s.state.allow = ['Bash:ls', 'Read:*'];
+  assert.throws(() => agent.setOption(s, 'allow', ['Bash:ls', 'Bash:rm -rf ~']), /only be removed/);
+  assert.throws(() => agent.setOption(s, 'allow', 'Bash:ls'), /only be removed/);
+  assert.deepEqual(s.state.allow, ['Bash:ls', 'Read:*']);
+  agent.setOption(s, 'allow', ['Read:*']);
+  assert.deepEqual(s.state.allow, ['Read:*']);
+  agent.setOption(s, 'mode', 'readonly');
+  await assert.rejects(agent.runSubagent(s, { isolation: 'worktree', description: 'x', prompt: 'y' }), /Read-only/);
+  assert.equal(s.state.mode, 'readonly');
+});
+
 test('autopilot in plan mode: plan stays read-only, then the plan approves itself and the work gets done', async () => {
   projects.create('pilot');
   const s = agent.getSession('pilot');

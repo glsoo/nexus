@@ -154,7 +154,7 @@ test('inline controls synchronize permissions, Send/Queue, Stop, autopilot and c
   const emptyClasses = { toggle() {} };
   const context = {
     S: { state: { mode: 'default', model: 'preview', effort: 'medium', running: false, usage: { lastInput: 0 }, compactAt: 100000, todos: [] }, models: [], meta: { agents: [] }, prompts: null },
-    $input: { isConnected: true }, $mode: {},
+    $input: { isConnected: true }, $mode: {}, $modeLabel: {}, MODES: [{ id: 'bypass', label: 'Bypass' }, { id: 'plan', label: 'Plan' }],
     $modelLabel: {}, $agentLabel: {}, $agentBtn: { classList: emptyClasses }, $promptBtn: { classList: emptyClasses },
     $autoBtn: { classList: { toggle: (name, on) => on ? classes.add(name) : classes.delete(name) }, setAttribute(name, value) { this[name] = value; } },
     $stopBtn: {}, $sendBtn: {}, $meter: node('button'), $todos: node('div'), syncTokens: null, fmt: n => String(n),
@@ -172,6 +172,8 @@ test('inline controls synchronize permissions, Send/Queue, Stop, autopilot and c
     assert.equal(context.$mode.value, mode);
     assert.equal(context.$mode.className, mode);
   }
+  assert.equal(context.$modeLabel.textContent, 'Plan');
+  assert.equal(context.$input.placeholder, 'Queue a message…');
   assert.equal(context.$sendBtn.textContent, 'Queue');
   assert.equal(context.$sendBtn.ariaLabel, 'Queue');
   assert.equal(context.$sendBtn.title, 'Queue');

@@ -93,7 +93,7 @@ export function olderEntries(name, before) {
 }
 
 const persist = s => projects.save(s.name, s.state);
-const status = s => hub.emit('project', s.name, { t: 'status', running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), budget: s.state.budget || 0, compactAt: compactAt(s), dirs: s.state.dirs || [] });
+const status = s => hub.emit('project', s.name, { t: 'status', allow: s.state.allow, running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), budget: s.state.budget || 0, compactAt: compactAt(s), dirs: s.state.dirs || [] });
 const send = (s, ev) => hub.emit('project', s.name, ev);
 
 function addEntry(s, entry) {
@@ -188,7 +188,8 @@ function systemPrompt(s, extra = '', sub = false, dir = cwdOf(s)) {
   const { base, custom } = promptParts(cwd, s.state);
   const role = sub ? null : activeAgent(s);
   const planning = s.state.mode === 'plan'
-    ? '\n\nPLAN MODE IS ACTIVE. Do not change anything. Research with read-only tools, then present your plan with ExitPlanMode.' : '';
+    ? '\n\nPLAN MODE IS ACTIVE. Do not change anything. Research with read-only tools, then present your plan with ExitPlanMode.'
+    : s.state.mode === 'readonly' ? '\n\nREAD-ONLY MODE IS ACTIVE. You can read and search files and answer questions. Every other tool is refused, so do not try to change anything or run commands; say what you would do instead.' : '';
   const autopilot = s.state.autopilot
     ? `\n\nAUTOPILOT IS ON. The user is away, so don't stop to ask: make the call, say what you assumed, finish the work and verify it.${s.state.mode === 'plan' ? ' Your ExitPlanMode plan is approved automatically, and then you implement it in the same turn.' : ''}` : '';
   return `${base}
@@ -287,6 +288,7 @@ async function runTool(s, call, ctx) {
     if (answer.decision === 'always') s.state.allow.push(ruleKey(call.name, args, cwd, s.state.dirs));
     setEntry(s, sink, entry, { status: 'running', autopilot: answer.decision === 'auto' || undefined });
     persist(s);
+    if (answer.decision === 'always') status(s);
   }
 
   try {
@@ -312,6 +314,7 @@ async function execute(s, name, args, entry, ctx) {
       return answer.decision === 'deny' ? 'The user dismissed the question.' : `User answered: ${answer.answer}`;
     }
     case 'ExitPlanMode': {
+      if (s.state.mode === 'readonly') return 'Read-only mode: only the user can switch out of it.';
       const answer = await askUser(s, sink, entry, signal, 'plan');
       if (answer.decision === 'deny') return `The user rejected the plan. ${answer.message || 'Stay in plan mode and ask what to change.'}`;
       const auto = answer.decision === 'auto';
@@ -431,6 +434,7 @@ export async function runSubagent(s, args, parentSignal) {
   const def = agentDefs(cwd).find(d => d.name === (args.subagent_type || 'general-purpose'));
   if (!def) throw new Error(`Unknown subagent type "${args.subagent_type}". Available: ${agentDefs(cwd).map(d => d.name).join(', ')}`);
   const id = newId('agent');
+  if (s.state.mode === 'readonly' && args.isolation === 'worktree') throw new Error('Read-only mode: a worktree creates a branch and files. Launch the agent without isolation.');
   const dir = args.isolation === 'worktree' ? await addWorktree(cwd, id) : null;
   const background = Boolean(args.run_in_background);
   const controller = new AbortController();
@@ -757,7 +761,7 @@ export function interrupt(name) { sessions.get(name)?.controller?.abort(); }
 export function answer(name, id, value) { sessions.get(name)?.pending.get(id)?.(value); }
 
 const HELP = `**Commands**
-\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review <target>\` use the read-only review skill · \`/review branch [base]\` review this branch · \`/review <PR number|URL>\` review a pull request · \`/review\` or \`/review help\` show usage · \`/pr [notes]\` commit, push and open a pull request · \`/issue <number>\` fix a GitHub issue · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/check <command>|off\` run tests after each change and fix failures · \`/watch [on|off]\` act on \`AI!\` comments saved in any editor · \`/todos\` · \`/help\`
+\`/clear\` start over (the old transcript is archived in .nexus/history) · \`/compact [focus]\` summarize to free context · \`/autocompact [on|off|tokens]\` compact automatically at a context size · \`/model <id>\` · \`/effort low|medium|high|xhigh\` · \`/mode default|acceptEdits|plan|readonly|bypass\` · \`/plan\` · \`/autopilot [on|off]\` keep working without asking, even through a plan · \`/cost\` tokens and cost · \`/budget <dollars>|off\` stop once this chat has cost that much · \`/init\` write NEXUS.md · \`/review <target>\` use the read-only review skill · \`/review branch [base]\` review this branch · \`/review <PR number|URL>\` review a pull request · \`/review\` or \`/review help\` show usage · \`/pr [notes]\` commit, push and open a pull request · \`/issue <number>\` fix a GitHub issue · \`/schedule [cron prompt|remove id]\` run a prompt on a timer · \`/check <command>|off\` run tests after each change and fix failures · \`/watch [on|off]\` act on \`AI!\` comments saved in any editor · \`/todos\` · \`/help\`
 
 Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover a prompt to rewind to it.
 
@@ -769,7 +773,7 @@ Custom commands live in \`.nexus/commands/*.md\` or \`~/.nexus/commands/*.md\` (
 
 **Agents and prompts** \`/create-agent <what it does>\` has the AI write a new agent type · \`/create-skill <what it does>\` has it write a skill · the Agent button next to the model switches this chat to one · the Prompts button edits the system prompt and text injected into every message, for this chat, this project or everywhere.`;
 
-const MODES = ['default', 'acceptEdits', 'plan', 'bypass'];
+const MODES = ['default', 'acceptEdits', 'plan', 'readonly', 'bypass'];
 
 // Only these come from the page; anything else in the state is the server's.
 export function setOption(s, key, value) {
@@ -779,7 +783,9 @@ export function setOption(s, key, value) {
   else if (key === 'agent' && value && !agentDefs(cwdOf(s)).some(d => d.name === value && !d.builtin)) throw new Error(`There is no agent type called ${value}.`);
   else if (key === 'autopilot' && typeof value !== 'boolean') throw new Error('Autopilot is true or false.');
   else if (key === 'budget' && !(Number.isFinite(value) && value >= 0)) throw new Error('A budget is a dollar amount.');
-  else if (!['mode', 'effort', 'model', 'agent', 'autopilot', 'budget'].includes(key)) throw new Error(`Unknown option ${key}.`);
+  // The page can only take rules away: new ones come from answering "always" on a real prompt.
+  else if (key === 'allow' && !(Array.isArray(value) && value.every(rule => s.state.allow.includes(rule)))) throw new Error('Rules can only be removed here.');
+  else if (!['mode', 'effort', 'model', 'agent', 'autopilot', 'budget', 'allow'].includes(key)) throw new Error(`Unknown option ${key}.`);
   // The system prompt changes at once, but models lean on recent history, so the switch is also said in the conversation.
   if (key === 'agent' && (value || '') !== (s.state.agent || '')) {
     s.state.agentSwitch = value || '';
