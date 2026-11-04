@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import agentCatalog, { CATEGORIES } from '../catalog/agents.js';
+import { editorServers } from './vscode.js';
 import mcpCatalog from '../catalog/mcp.js';
 import { parseFrontmatter } from './extensions.js';
 
@@ -16,7 +17,7 @@ const fail = (status, message) => Object.assign(new Error(message), { status });
 
 export const SOURCES = {
   agents: [['nexus', 'Nexus picks'], ['aiagentslist', 'aiagentslist.com'], ['huggingface', 'Hugging Face']],
-  mcp: [['nexus', 'Nexus picks'], ['huggingface', 'Hugging Face'], ['aiagentslist', 'aiagentslist.com']],
+  mcp: [['nexus', 'Nexus picks'], ['huggingface', 'Hugging Face'], ['aiagentslist', 'aiagentslist.com'], ['vscode', 'VS Code & Cursor']],
   skills: [['anthropic', 'Anthropic'], ['collections', 'Collections'], ['skillssh', 'skills.sh']],
 };
 export const LINKS = {
@@ -65,6 +66,33 @@ function nexusItem(kind, id) {
   if (!c) throw fail(404, 'No such server in the catalog.');
   return { ...pickServer(c), server: { name: c.id, config: c.config, inputs: c.inputs || [] } };
 }
+
+// ---- MCP servers already set up in VS Code, Cursor or Windsurf ----
+// VS Code's ${input:id} values become fields to fill in, as the catalog's do; other ${...} values stay for the user to edit.
+function editorItem(f, cwd) {
+  const inputs = [], env = {}, headers = {};
+  const ask = id => f.inputs.find(i => i?.id === id) || {};
+  for (const [k, v] of Object.entries(f.conf.env && typeof f.conf.env === 'object' ? f.conf.env : {})) {
+    const m = /^\$\{input:([^}]+)\}$/.exec(v);
+    if (m) inputs.push({ env: k, label: ask(m[1]).description || k, secret: Boolean(ask(m[1]).password) });
+    else env[k] = String(v);
+  }
+  for (const [k, v] of Object.entries(f.conf.headers && typeof f.conf.headers === 'object' ? f.conf.headers : {})) {
+    const m = /^(.*)\$\{input:([^}]+)\}$/.exec(v);
+    if (m) inputs.push({ header: k, prefix: m[1], label: ask(m[2]).description || k, secret: Boolean(ask(m[2]).password) });
+    else headers[k] = String(v);
+  }
+  const here = s => String(s).replaceAll('${workspaceFolder}', cwd || '${workspaceFolder}');
+  const config = typeof f.conf.url === 'string' ? { url: f.conf.url, ...(Object.keys(headers).length ? { headers } : {}) }
+    : { command: String(f.conf.command || ''), args: (Array.isArray(f.conf.args) ? f.conf.args : []).map(here), ...(Object.keys(env).length ? { env } : {}) };
+  return {
+    source: 'vscode', kind: 'mcp', id: `${f.where}:${f.name}`, name: f.name, category: f.where, installable: true,
+    description: config.url ? `Connects to ${config.url}` : `Runs ${[config.command, ...config.args].join(' ')}`.slice(0, 200),
+    server: { name: serverName(f.name), config, inputs },
+    notes: `Set up in ${f.file}. Values like \${...} are placeholders to fill in.`,
+  };
+}
+const editorItems = (cwd, terms = []) => editorServers(cwd).map(f => editorItem(f, cwd)).filter(it => matches(terms, it.name, it.description, it.category));
 
 // ---- aiagentslist.com: no API, so cards from listing pages, names from the sitemap, details from each page ----
 const decode = s => s.replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
@@ -351,7 +379,7 @@ export async function installSkill(repo, dir, root) {
 }
 
 // ---- entry points ----
-export async function search(kind, source, q) {
+export async function search(kind, source, q, cwd) {
   if (!SOURCES[kind]?.some(([id]) => id === source)) throw fail(400, 'Unknown marketplace source.');
   const terms = words(q);
   if (kind === 'skills') {
@@ -364,12 +392,14 @@ export async function search(kind, source, q) {
     return source === 'anthropic' ? repoSkills('anthropics/skills', 'skills', terms, source) : skillssh(terms);
   }
   if (source === 'nexus') return nexus(kind, terms);
+  if (source === 'vscode') return editorItems(cwd, terms);
   return (source === 'aiagentslist' ? aiagentslist : huggingface)(kind, terms);
 }
 
-export async function item(kind, source, id) {
+export async function item(kind, source, id, cwd) {
   if (!SOURCES[kind]?.some(([s]) => s === source)) throw fail(400, 'Unknown marketplace source.');
   if (kind === 'skills') return skillItem(source, String(id));
   if (source === 'nexus') return nexusItem(kind, id);
+  if (source === 'vscode') return editorItems(cwd).find(it => it.id === id) || Promise.reject(fail(404, 'That server is no longer in the editor settings.'));
   return (source === 'aiagentslist' ? aiagentslistItem : huggingfaceItem)(kind, String(id));
 }

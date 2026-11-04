@@ -46,3 +46,27 @@ export function terminalRules() {
     return Object.keys(commands).length ? [{ app, file, commands }] : [];
   });
 }
+
+// MCP servers set up for VS Code (mcp.json "servers", or "mcp.servers" in settings), Cursor and Windsurf ("mcpServers"),
+// for this user and in this project. Listed for the user to install one by one, each showing exactly what it runs.
+export function editorServers(cwd) {
+  const found = new Map();
+  const read = (where, file, pick) => {
+    const json = readJsonc(file);
+    const servers = json && pick(json);
+    for (const [name, conf] of Object.entries(servers && typeof servers === 'object' ? servers : {})) {
+      if (conf && typeof conf === 'object' && !found.has(`${where}:${name}`)) found.set(`${where}:${name}`, { where, file, name, conf, inputs: Array.isArray(json.inputs) ? json.inputs : [] });
+    }
+  };
+  for (const { app, dir } of editors()) {
+    read(app, path.join(dir, 'mcp.json'), j => j.servers);
+    read(app, path.join(dir, 'settings.json'), j => j.mcp?.servers);
+  }
+  read('Cursor', path.join(HOME, '.cursor', 'mcp.json'), j => j.mcpServers);
+  read('Windsurf', path.join(HOME, '.codeium', 'windsurf', 'mcp_config.json'), j => j.mcpServers);
+  if (cwd) {
+    read('This project', path.join(cwd, '.vscode', 'mcp.json'), j => j.servers);
+    read('This project', path.join(cwd, '.cursor', 'mcp.json'), j => j.mcpServers);
+  }
+  return [...found.values()];
+}

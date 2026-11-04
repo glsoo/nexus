@@ -299,7 +299,8 @@ export function ruleKey(tool, args, cwd, dirs) {
 const permissions = () => { const p = readSettings().permissions; return p && typeof p === 'object' ? p : {}; };
 const KEEP = new Set(['TodoWrite', 'AskUserQuestion', 'ExitPlanMode']); // a chat can always plan, ask and keep its list
 const toolRule = (tools, tool) => (tools && typeof tools === 'object' ? tools[tool] ?? (tool.startsWith('mcp__') ? tools[tool.split('__', 2).join('__')] : undefined) : undefined);
-export const toolDenied = tool => !KEEP.has(tool) && toolRule(permissions().tools, tool) === 'deny';
+// Reads the settings once, for checking a whole tool list.
+export const toolDenied = (tools = permissions().tools) => tool => !KEEP.has(tool) && toolRule(tools, tool) === 'deny';
 
 const ruleHits = (rule, cmd) => {
   const re = /^\/(.+)\/([a-z]*)$/s.exec(rule);
@@ -323,7 +324,7 @@ export function commandRule(rules, command) {
 
 export function decide(state, tool, args, cwd) {
   const { tools, commands } = permissions();
-  if (toolDenied(tool)) return { action: 'deny', reason: `The user turned ${tool} off in Settings → Permissions. Do the task without it.` };
+  if (toolDenied(tools)(tool)) return { action: 'deny', reason: `The user turned ${tool} off in Settings → Permissions. Do the task without it.` };
   const command = tool === 'Bash' ? commandRule(commands, args.command || '') : null;
   if (command === 'deny') return { action: 'deny', reason: "The user's permission rules (Settings → Permissions) block this command. Don't work around them; do without it or ask the user." };
   if (ALWAYS_OK.has(tool)) return { action: 'allow' };

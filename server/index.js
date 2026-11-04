@@ -198,11 +198,13 @@ route('PUT', '/api/prompts', async ({ req }) => {
   return {};
 });
 
+// The project the page has open, for sources that also look inside it (MCP servers in its .vscode/mcp.json).
+const marketCwd = q => (projects.exists(q.get('project') || '') ? projects.projectDir(q.get('project')) : null);
 route('GET', '/api/market', async ({ q }) => {
   const kind = ['mcp', 'skills'].includes(q.get('kind')) ? q.get('kind') : 'agents';
-  return { items: await market.search(kind, q.get('source') || 'nexus', q.get('q')), sources: market.SOURCES[kind], links: market.LINKS[kind] };
+  return { items: await market.search(kind, q.get('source') || 'nexus', q.get('q'), marketCwd(q)), sources: market.SOURCES[kind], links: market.LINKS[kind] };
 });
-route('GET', '/api/market/item', ({ q }) => market.item(['mcp', 'skills'].includes(q.get('kind')) ? q.get('kind') : 'agents', q.get('source') || 'nexus', q.get('id') || ''));
+route('GET', '/api/market/item', ({ q }) => market.item(['mcp', 'skills'].includes(q.get('kind')) ? q.get('kind') : 'agents', q.get('source') || 'nexus', q.get('id') || '', marketCwd(q)));
 // Skills go to ~/.nexus/skills for every project, or this project's .nexus/skills.
 route('POST', '/api/projects/:name/skills', async ({ req, p }) => {
   const { repo, dir = '', scope } = await body(req);
@@ -390,7 +392,7 @@ async function api(req, res, url) {
     res.writeHead(200, { 'content-type': IMAGE_TYPES[path.extname(file)], 'cache-control': 'private, max-age=31536000, immutable' }).end(data);
     return RAW;
   }
-  if (url.pathname === '/api/me') return { build: BUILD, user: process.env.NEXUS_USER, defaultModel: projects.DEFAULT_MODEL, autoCompact: readSettings().autoCompactTokens || 300000, pickFolder: projects.canPickNatively(req.headers),
+  if (url.pathname === '/api/me') return { build: BUILD, user: process.env.NEXUS_USER, defaultModel: projects.DEFAULT_MODEL, autoCompact: readSettings().autoCompactTokens || 300000, pickFolder: projects.canPickNatively(req.headers), local: projects.localBrowser(req.headers),
     desktopNotify: projects.localBrowser(req.headers) ? (notify.available() ? notify.enabled() : null) : null };
   for (const r of routes) {
     if (r.method !== req.method) continue;

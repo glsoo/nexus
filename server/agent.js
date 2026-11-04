@@ -205,7 +205,8 @@ ${skillList ? `\n# Available skills (load with the Skill tool)\n${skillList}\n` 
 }
 
 async function toolList(filter) {
-  const defs = [...TOOL_DEFS, { type: 'web_search' }, ...await mcp.toolDefs()].filter(t => !toolDenied(t.name || t.type));
+  const denied = toolDenied();
+  const defs = [...TOOL_DEFS, { type: 'web_search' }, ...await mcp.toolDefs()].filter(t => !denied(t.name || t.type));
   return filter ? defs.filter(filter) : defs;
 }
 

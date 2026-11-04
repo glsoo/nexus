@@ -355,6 +355,11 @@ function projectMenu(anchor, name) {
   h('button', { role: 'menuitem', onclick: () => { close(); renameDialog(name); } }, icon('pen'), 'Rename'),
   h('button', { role: 'menuitem', onclick: () => { close(); guard(foldersDialog)(name); } }, icon('folder'), 'Folders'),
   h('button', { role: 'menuitem', onclick: () => { close(); exportChat(name); } }, icon('download'), 'Export chat'),
+  S.me?.local && h('button', { role: 'menuitem', onclick: guard(async () => {
+    close();
+    const { main } = await api('GET', `${P(name)}/folders`);
+    location.href = `vscode://file/${encodeURI(main.replace(/\\/g, '/'))}/`;
+  }) }, icon('ext'), 'Open in VS Code'),
   h('button', { role: 'menuitem', class: 'danger', onclick: () => { close(); deleteDialog(name); } }, icon('trash'), 'Delete'));
   document.body.append(menu);
   const r = anchor.getBoundingClientRect();
@@ -1483,7 +1488,7 @@ function marketPage(hamb) {
     grid.replaceChildren(h('p', { class: 'mnone muted' }, 'Loading…'));
     try {
       const q = search.value.trim();
-      const res = source === 'installed' ? { items: await installedItems(kind, q) } : await api('GET', `/api/market?kind=${kind}&source=${source}&q=${encodeURIComponent(q)}`);
+      const res = source === 'installed' ? { items: await installedItems(kind, q) } : await api('GET', `/api/market?kind=${kind}&source=${source}&q=${encodeURIComponent(q)}&project=${encodeURIComponent(projectForInstall() || '')}`);
       if (mine !== seq) return;
       items = res.items;
       if (res.sources) {
@@ -1505,7 +1510,7 @@ function marketPage(hamb) {
     detail.scrollTop = 0;
     try {
       const parts = src === 'installed' ? await installedDetail(it, k, back, load)
-        : marketDetail({ ...it, ...await api('GET', `/api/market/item?kind=${k}&source=${src}&id=${encodeURIComponent(it.id)}`) }, k, back);
+        : marketDetail({ ...it, ...await api('GET', `/api/market/item?kind=${k}&source=${src}&id=${encodeURIComponent(it.id)}&project=${encodeURIComponent(projectForInstall() || '')}`) }, k, back);
       if (mine === openSeq) detail.replaceChildren(...parts.flat(Infinity).filter(Boolean));
     } catch (e) {
       if (mine === openSeq) detail.replaceChildren(backBtn(back), h('p', { class: 'err' }, e.message));
