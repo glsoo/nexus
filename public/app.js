@@ -28,6 +28,7 @@ const ICONS = {
   close: '<path d="M6 6l12 12M6 18L18 6"/>',
   file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   plane: '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.3c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
 };
 const icon = name => { const t = document.createElement('template'); t.innerHTML = `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return t.content.firstChild; };
@@ -50,11 +51,13 @@ const FADE = [{ opacity: 0 }, { opacity: 1 }];
 const motion = (el, frames, ms = 260, fill = 'none') => (calm.matches || !el?.animate ? { finished: Promise.resolve() } : el.animate(frames, { duration: ms, easing: 'cubic-bezier(.22,1,.36,1)', fill }));
 const exit = (el, to, ms = 160) => motion(el, [{}, to], ms, 'forwards').finished.catch(() => {});
 
-function toast(text) {
+// action: [label, run], a button in the toast.
+function toast(text, action, ms = 5000) {
   document.querySelector('.toast')?.remove();
-  const el = h('div', { class: 'toast', role: 'status' }, text);
+  const el = h('div', { class: 'toast', role: 'status' }, text,
+    action && h('button', { class: 'btn small', type: 'button', onclick: () => { el.remove(); action[1](); } }, action[0]));
   document.body.append(el);
-  setTimeout(() => exit(el, { opacity: 0, transform: 'translate(-50%, 12px)' }, 220).then(() => el.remove()), 5000);
+  setTimeout(() => exit(el, { opacity: 0, transform: 'translate(-50%, 12px)' }, 220).then(() => el.remove()), ms);
 }
 const guard = fn => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message); } };
 
@@ -101,13 +104,15 @@ const usd = n => `$${(n || 0).toFixed(2)}`;
 const fmt = n => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? 'just now' : s < 3600 ? `${s / 60 | 0}m ago` : s < 86400 ? `${s / 3600 | 0}h ago` : `${s / 86400 | 0}d ago`; };
 
-function dialog({ title, body, wide, actions }) {
+// ref(shut): for a dialog that closes itself, such as one waiting on something else.
+function dialog({ title, body, wide, actions, ref }) {
   return new Promise(resolve => {
     const shut = value => {
       resolve(value);
       d.classList.add('closing');
       exit(d, { opacity: 0, transform: 'scale(.97)' }).then(() => d.close());
     };
+    ref?.(shut);
     const d = h('dialog', { class: wide ? 'wide' : '' }, h('h2', {}, title), body,
       h('div', { class: 'acts' }, actions.map(a => h('button', { class: `btn ${a.class || ''}`, type: 'button', onclick: async () => {
         if (a.run && (await a.run()) === false) return;
@@ -122,7 +127,7 @@ function dialog({ title, body, wide, actions }) {
 const confirmBox = (title, text, label = 'Confirm', cls = 'primary') => dialog({ title, body: h('p', { class: 'muted' }, text), actions: [{ label: 'Cancel' }, { label, class: cls, value: true }] });
 
 // ---- app state ----
-const S = { project: null, tab: 'chat', page: null, state: null, ws: null, projects: [], models: [], meta: { commands: [], skills: [], agents: [] }, prompts: null, me: null, images: [] };
+const S = { project: null, tab: 'chat', page: null, state: null, ws: null, projects: [], models: [], meta: { commands: [], skills: [], agents: [] }, prompts: null, me: null, images: [], alerts: {} };
 const entries = new Map();
 
 // ---- login ----
@@ -159,6 +164,7 @@ function shell() {
     h('div', { class: 'side-head' }, h('img', { src: '/icon.svg?v=purple', alt: '' }), 'Nexus',
       h('button', { class: 'icon-btn side-close', type: 'button', 'aria-label': 'Close menu', onclick: () => drawer(false) }, icon('close'))),
     h('div', { class: 'newrow' }, h('button', { class: 'btn new', onclick: guard(newProject) }, icon('plus'), 'New project'),
+      h('button', { class: 'btn', 'aria-label': 'Open a folder', title: 'Open a folder', onclick: () => chooseFolder() }, icon('folder')),
       h('button', { class: 'btn', 'aria-label': 'Clone a git repository', title: 'Clone a git repository', onclick: cloneDialog }, icon('download'))),
     $find, $list,
     h('div', { class: 'side-foot' },
@@ -208,13 +214,105 @@ function cloneDialog() {
   input.focus();
 }
 
+// Picks a folder on the computer Nexus runs on, which may not be the one showing this page, so the browser's own picker can't help.
+// By default the folder opens as a project; pick() does something else with it instead.
+const OPEN_HINT = 'Type or paste a path and press Enter to go there. Nexus works in the folder you open and keeps the chat in a .nexus folder inside it. Deleting the project later leaves the folder alone.';
+function folderDialog({ title = 'Open a folder', action = 'Open this folder', hint = OPEN_HINT, start = '~', pick } = {}) {
+  const err = h('div', { class: 'err', role: 'alert' });
+  const input = h('input', { class: 'field mono', id: 'fp', 'aria-describedby': 'fp-hint', spellcheck: false, autocapitalize: 'off', autocomplete: 'off' });
+  const list = h('div', { class: 'folders', 'aria-label': 'Folders' });
+  const show = async dir => {
+    err.textContent = '';
+    try {
+      const r = await api('GET', `/api/folders?path=${encodeURIComponent(dir)}`);
+      input.value = r.path;
+      list.replaceChildren(...[r.parent && h('button', { type: 'button', onclick: () => show(r.parent) }, icon('back'), 'Up one folder'),
+        ...r.folders.map(f => h('button', { type: 'button', onclick: () => show(f.path) }, icon('folder'), f.name)),
+        !r.folders.length && h('p', { class: 'small muted' }, 'No folders in here.')].filter(Boolean));
+      list.scrollTop = 0;
+    } catch (e) { err.textContent = e.message; }
+  };
+  let busy = false;
+  const run = async () => {
+    if (busy) return false;
+    busy = true; err.textContent = '';
+    try {
+      await (pick || openFolderAt)(input.value.trim());
+      return true;
+    } catch (e) { err.textContent = e.message; return false; } finally { busy = false; }
+  };
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); show(input.value); } });
+  dialog({ title, wide: true, body: h('div', {}, h('label', { class: 'lbl', htmlFor: 'fp' }, 'Folder'), input, list,
+    h('p', { class: 'small muted', id: 'fp-hint' }, hint), err),
+  actions: [{ label: 'Cancel' }, { label: action, class: 'primary', run }] });
+  show(start);
+  input.focus();
+}
+async function openFolderAt(dir) {
+  const { name } = await api('POST', '/api/projects/open', { path: dir });
+  await refreshProjects();
+  go(name, null, 'chat');
+}
+
+// With the browser on the Windows PC Nexus runs on, Windows' own Select Folder dialog; on a phone or another computer, the folder browser above.
+// While the Windows dialog is open, a small box here says where it is and offers the folder browser instead.
+async function chooseFolder(opts = {}) {
+  if (!S.me?.pickFolder) return folderDialog(opts);
+  const { title = 'Open a folder', button = 'Open', start = '', pick = openFolderAt } = opts;
+  const stop = new AbortController();
+  let shut;
+  dialog({ title, ref: s => { shut = s; }, body: h('p', { class: 'muted' }, "Choose a folder in the Windows window that opened. If you can't see it, it's in the taskbar."),
+    actions: [{ label: 'Browse here instead', value: 'here' }, { label: 'Cancel' }] })
+    .then(choice => { if (choice === 'done') return; stop.abort(); if (choice === 'here') folderDialog(opts); });
+  try {
+    const res = await fetch('/api/folders/pick', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: `${title} in Nexus`, button, start }), signal: stop.signal });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
+    shut('done');
+    if (json.path) await pick(json.path);
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    shut('done');
+    toast(e.message);
+  }
+}
+const projectDir = name => S.projects.find(p => p.name === name)?.dir;
+
+// The folders a chat works in: its own, plus any added. Added ones get the same tools, approvals and rewind, but not the Files and Changes tabs.
+async function foldersDialog(name) {
+  const box = h('div', { class: 'folders' });
+  let home = '~';
+  const show = ({ main, dirs }) => {
+    home = main;
+    if (S.project === name && S.state) S.state.dirs = dirs;
+    box.replaceChildren(h('div', { class: 'frow' }, icon('folder'), h('span', { class: 'grow mono' }, main), h('span', { class: 'small muted' }, 'Main folder')),
+      ...dirs.map(d => h('div', { class: 'frow' }, icon('folder'), h('span', { class: 'grow mono' }, d),
+        h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove ${d}`, onclick: guard(async () => show(await api('DELETE', `${P(name)}/folders`, { path: d }))) }, 'Remove'))));
+  };
+  const add = () => chooseFolder({ title: 'Add a folder', action: 'Add this folder', button: 'Add', start: home,
+    hint: 'Type or paste a path and press Enter to go there. The AI can then read and edit this folder like the project, and rewinding a prompt rewinds it too. It keeps its rewind data in a .nexus folder inside it.',
+    pick: async dir => { show(await api('POST', `${P(name)}/folders`, { path: dir })); toast('Added. The AI sees it from your next message.'); } });
+  show(await api('GET', `${P(name)}/folders`));
+  await dialog({ title: `Folders in ${pretty(name)}`, wide: true, body: h('div', {}, box,
+    h('p', { class: 'small muted' }, 'Add folders the AI should work in alongside this one, like a backend next to a frontend. They show in the Files and Changes tabs too.')),
+  actions: [{ label: 'Add a folder', run: () => { add(); return false; } }, { label: 'Done', class: 'primary' }] });
+  if (S.project === name && S.tab === 'chat' && !S.page) render(); // the new-chat screen lists the folders
+}
+
 async function refreshProjects() {
   S.projects = await api('GET', '/api/projects');
   if ($find.value.trim()) return; // search results stay until the box is cleared
-  $list.replaceChildren(...S.projects.map(p => h('div', { class: `pitem ${p.name === S.project && !S.page ? 'on' : ''}` },
-    h('button', { class: 'open', title: pretty(p.name), 'aria-current': p.name === S.project ? 'true' : undefined, onclick: () => go(p.name, null, 'chat') },
-      h('span', { class: `dot ${p.busy ? 'busy' : ''}` }), h('span', { class: 'nm' }, pretty(p.name))),
-    h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(p.name)}`, 'aria-haspopup': 'menu', onclick: e => projectMenu(e.currentTarget, p.name) }, icon('dots')))));
+  // A question answered on another device clears its mark here.
+  for (const p of S.projects) if (S.alerts[p.name] === 'waiting' && !p.waiting) delete S.alerts[p.name];
+  syncTitle();
+  $list.replaceChildren(...S.projects.map(p => {
+    const mark = p.waiting ? 'waiting' : S.alerts[p.name];
+    return h('div', { class: `pitem ${p.name === S.project && !S.page ? 'on' : ''} ${mark ? 'unseen' : ''}` },
+    h('button', { class: 'open', title: p.dir || pretty(p.name), 'aria-current': p.name === S.project ? 'true' : undefined, onclick: () => go(p.name, null, 'chat') },
+      h('span', { class: `dot ${p.busy && !p.waiting ? 'busy' : mark === 'waiting' ? 'awaiting' : mark === 'finished' ? 'done' : ''}` }), h('span', { class: 'nm' }, pretty(p.name)),
+      mark === 'waiting' && h('span', { class: 'need' }, 'needs you'), mark === 'finished' && h('span', { class: 'sr' }, ', finished')),
+    h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(p.name)}`, 'aria-haspopup': 'menu', onclick: e => projectMenu(e.currentTarget, p.name) }, icon('dots')));
+  }));
 }
 // Each hit opens its chat scrolled to the message.
 let findSeq = 0;
@@ -228,7 +326,8 @@ async function findChats() {
     h('div', { class: 'pitem' }, h('button', { class: 'open', onclick: () => open(r.name) }, h('span', { class: 'nm' }, pretty(r.name)))),
     ...r.hits.map(x => h('button', { class: 'snip', onclick: () => open(r.name, x.id) }, x.text)))) : [h('p', { class: 'small muted nohit' }, `No chats mention "${q}".`)]));
 }
-function jumpTo(id) {
+async function jumpTo(id) {
+  while (id && !entries.get(id) && await loadOlder().catch(() => false)) { /* keep loading */ }
   const el = id && entries.get(id)?.el;
   if (!el) return;
   el.scrollIntoView({ block: 'center' });
@@ -252,6 +351,7 @@ function projectMenu(anchor, name) {
     }
   } },
   h('button', { role: 'menuitem', onclick: () => { close(); renameDialog(name); } }, icon('pen'), 'Rename'),
+  h('button', { role: 'menuitem', onclick: () => { close(); guard(foldersDialog)(name); } }, icon('folder'), 'Folders'),
   h('button', { role: 'menuitem', onclick: () => { close(); exportChat(name); } }, icon('download'), 'Export chat'),
   h('button', { role: 'menuitem', class: 'danger', onclick: () => { close(); deleteDialog(name); } }, icon('trash'), 'Delete'));
   document.body.append(menu);
@@ -272,13 +372,15 @@ function renameDialog(name) {
   };
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input.closest('dialog').querySelector('.primary').click(); } });
   dialog({ title: 'Rename project', body: h('div', {}, h('label', { class: 'lbl', htmlFor: 'rn' }, 'Name'), input,
-    h('p', { class: 'small muted', id: 'rn-hint' }, `Moves the folder to ~/projects/<name>. Spaces become dashes.`), err),
+    h('p', { class: 'small muted', id: 'rn-hint' }, projectDir(name) ? `Renames the chat. The folder stays at ${projectDir(name)}. Spaces become dashes.` : 'Moves the folder to ~/projects/<name>. Spaces become dashes.'), err),
   actions: [{ label: 'Cancel' }, { label: 'Rename', class: 'primary', run: save }] });
   input.select();
 }
 
 async function deleteDialog(name) {
-  if (!await confirmBox(`Delete ${pretty(name)}?`, `The folder moves to ~/projects/.trash, where you can still recover it by hand.`, 'Delete', 'danger')) return;
+  const where = projectDir(name);
+  if (!await confirmBox(where ? `Remove ${pretty(name)}?` : `Delete ${pretty(name)}?`, where ? `Nexus stops showing it. The folder, its files and the chat saved in its .nexus stay at ${where}; open the folder again to pick up where you left off.`
+    : 'The folder moves to ~/projects/.trash, where you can still recover it by hand.', where ? 'Remove' : 'Delete', 'danger')) return;
   await guard(async () => {
     await api('DELETE', P(name));
     if (S.project === name) go(null);
@@ -294,6 +396,7 @@ function go(project, page = null, tab = 'chat') {
   const changed = project !== S.project;
   const moved = changed || page !== S.page;
   S.project = project; S.page = page; S.tab = tab;
+  if (project && !page && tab === 'chat' && S.alerts[project]) { delete S.alerts[project]; syncTitle(); }
   history.replaceState(null, '', page ? `#/${page}` : project ? `#/p/${encodeURIComponent(project)}/${tab}` : '#/');
   if (changed && project) { S.state = null; sendWs({ t: 'open', name: project }); guard(loadMeta)(); }
   render();
@@ -329,8 +432,9 @@ function render() {
   if (S.page === 'settings') return settingsPage(hamb);
   if (!S.project) {
     return $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', {}, 'Nexus')),
-      h('div', { class: 'empty' }, h('h2', {}, 'Start a project'), h('p', {}, 'Each conversation gets its own folder in ~/projects.'),
+      h('div', { class: 'empty' }, h('h2', {}, 'Start a project'), h('p', {}, 'Each conversation gets its own folder in ~/projects, or works in a folder you already have.'),
         h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: guard(newProject) }, icon('plus'), 'New project'),
+          h('button', { class: 'btn', onclick: () => chooseFolder() }, icon('folder'), 'Open a folder'),
           h('button', { class: 'btn', onclick: cloneDialog }, icon('download'), 'Clone a repo'))));
   }
   const tabs = [['chat', 'Chat'], ['files', 'Files'], ['changes', 'Changes'], ['terminal', 'Terminal']];
@@ -357,16 +461,34 @@ const pref = (key, value) => { try { if (value === undefined) return localStorag
 let doneUnseen = false;
 function syncTitle() {
   const base = S.project && !S.page ? `${pretty(S.project)} · Nexus` : 'Nexus';
-  document.title = `${S.state?.running ? '● ' : doneUnseen ? '✓ ' : ''}${base}`;
+  const n = Object.keys(S.alerts).length;
+  document.title = `${n ? `(${n}) ` : ''}${S.state?.running ? '● ' : doneUnseen ? '✓ ' : ''}${base}`;
 }
 function finished() {
   if (!document.hidden) return;
   doneUnseen = true;
-  if (pref('nexus.notify') === '1' && window.Notification?.permission === 'granted') {
-    new Notification('Nexus finished', { body: pretty(S.project), icon: '/icon-180.png', tag: `nexus-${S.project}` });
+}
+// The chat on screen counts as seen once you're looking at it again.
+const seen = () => {
+  if (!document.hidden && S.project && !S.page && S.tab === 'chat' && S.alerts[S.project]) { delete S.alerts[S.project]; refreshSoon(); }
+  syncTitle();
+};
+document.addEventListener('visibilitychange', () => { sendWs({ t: 'visible', on: !document.hidden }); if (!document.hidden) { doneUnseen = false; seen(); } });
+
+// A chat that finishes or needs an answer while you look elsewhere: a mark in the sidebar, a toast that opens it, a count in the title,
+// and a system notification when Nexus is in the background and notifications are on in Settings.
+function notice({ project, kind, body }) {
+  if (project === S.project && !S.page && S.tab === 'chat' && !document.hidden) return; // you're watching it
+  if (kind === 'waiting' || S.alerts[project] !== 'waiting') S.alerts[project] = kind;
+  refreshSoon();
+  syncTitle();
+  const title = `${pretty(project)} ${kind === 'waiting' ? 'needs your answer' : 'finished'}`;
+  if (!document.hidden) return toast(`${title}. ${body}`, ['Open', () => go(project, null, 'chat')], kind === 'waiting' ? 12000 : 6000);
+  // This computer shows its own notification for a browser on it, so the browser doesn't add a second one.
+  if (!S.me?.desktopNotify && pref('nexus.notify') === '1' && window.Notification?.permission === 'granted') {
+    new Notification(title, { body, icon: '/icon-180.png', tag: `nexus-${project}` }).onclick = () => { focus(); go(project, null, 'chat'); };
   }
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden && doneUnseen) { doneUnseen = false; syncTitle(); } });
 
 // Web Push reaches the phone with Nexus closed: the server pings when a chat finishes or needs an answer.
 // Its notifications share finished()'s tag, so a browser that gets both shows one.
@@ -381,7 +503,8 @@ async function setPush(on) {
   const { key } = await api('GET', '/api/push/key');
   const raw = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
   const bytes = b => Array.from(new Uint8Array(b || [])).join();
-  const keep = old && bytes(old.options.applicationServerKey) === bytes(raw);
+  const had = old?.options?.applicationServerKey; // a browser that can't say keeps its subscription, as before
+  const keep = old && (!had || bytes(had) === bytes(raw));
   if (old && !keep) { await api('POST', '/api/push/unsubscribe', { endpoint: old.endpoint }).catch(() => {}); await old.unsubscribe(); }
   const sub = keep ? old : await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw });
   await api('POST', '/api/push/subscribe', sub.toJSON());
@@ -404,6 +527,7 @@ function connect() {
     wsRetry = 0;
     lastHeard = Date.now();
     $conn?.remove(); $conn = null;
+    ws.send(JSON.stringify({ t: 'visible', on: !document.hidden }));
     if (S.project) ws.send(JSON.stringify({ t: 'open', name: S.project }));
     refreshSoon();
   };
@@ -443,35 +567,45 @@ function onEvent(m) {
   switch (m.t) {
     case 'state':
       { const first = !S.state;
+        const prev = S.state?.name === m.state.name && $log?.isConnected && S.tab === 'chat' && !S.page
+          ? { log: S.state.log, top: $log.scrollTop, bottom: nearBottom(), open: [...entries].filter(([, r]) => r.el.open).map(([id]) => id) } : null;
         S.state = m.state;
+        const i = prev ? prev.log.findIndex(e => e.id === m.state.log[0]?.id) : -1;
+        if (i > 0) { S.state.log = [...prev.log.slice(0, i), ...m.state.log]; S.state.older = Math.max(0, m.state.older - i); }
         if (m.state.name !== S.project) return;
         if (S.tab === 'chat' && !S.page) {
           if ($input?.isConnected) { syncTitle(); syncChat(); } else render();
           if (first) motion($log, FADE);
+          if (prev) { for (const id of prev.open) { const r = entries.get(id); if (r) r.el.open = true; } if (!prev.bottom) $log.scrollTop = prev.top; }
           if (S.jump) { jumpTo(S.jump); S.jump = null; }
         } }
       break;
     case 'entry': {
       if (!S.state) return;
-      const i = S.state.log.findIndex(x => x.id === m.entry.id);
-      if (i >= 0) S.state.log[i] = m.entry; else S.state.log.push(m.entry);
+      const i = S.state.log.findLastIndex(x => x.id === m.entry.id);
+      if (i >= 0) S.state.log[i] = m.entry;
+      else if (m.added || !S.state.older) S.state.log.push(m.entry);
+      else break; // an update to an older entry the page hasn't loaded
       upsertEntry(m.entry);
+      if (m.entry.type === 'tool' && !['running', 'awaiting'].includes(m.entry.status)) filesChanged();
       break;
     }
     case 'delta': delta(m); break;
     case 'status': {
       const was = S.state?.running;
-      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt });
-      if (was && !m.running) finished();
+      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt, dirs: m.dirs });
+      if (was && !m.running) { finished(); refreshReview(); filesChanged(); }
+      if (m.running && $review) $review.hidden = true;
       syncTitle();
       syncComposer();
       break;
     }
     case 'reset':
-      if (m.state) S.state = m.state; else if (S.state) S.state.log = [];
+      if (m.state) S.state = m.state; else if (S.state) Object.assign(S.state, { log: [], older: 0 });
       if (S.tab === 'chat' && !S.page) render();
       break;
     case 'projects': refreshSoon(); break;
+    case 'alert': notice(m); break;
     case 'renamed':
       if (m.from in drafts) { drafts[m.to] = drafts[m.from]; delete drafts[m.from]; }
       if (S.project === m.from) {
@@ -496,8 +630,13 @@ function chatView(view) {
   $log = h('div', { class: 'log', role: 'log', 'aria-live': 'polite', 'aria-relevant': 'additions' });
   $log.addEventListener('touchstart', stopFollow, { passive: true });
   $log.addEventListener('wheel', stopFollow, { passive: true });
+  // Pasted images finish loading after the first scroll to the bottom, so the log stays there while you haven't scrolled up.
+  let atBottom = true;
+  $log.addEventListener('scroll', () => { atBottom = nearBottom(); }, { passive: true });
+  for (const type of ['load', 'error']) $log.addEventListener(type, () => { if (atBottom) $log.scrollTop = $log.scrollHeight; }, true);
   $todos = h('div', { class: 'todos', hidden: true });
-  view.append($log, $todos, composer());
+  $review = h('div', { class: 'review', hidden: true, role: 'region', 'aria-label': 'Changes to review' });
+  view.append($log, $todos, $review, composer());
   syncChat();
   if (matchMedia('(hover: hover)').matches) $input.focus();
 }
@@ -507,12 +646,32 @@ function syncChat() {
   entries.clear();
   $log.replaceChildren();
   if (S.state) {
-    if (!S.state.log.length) $log.append(h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'),
-      h('p', { class: 'mono' }, `~/projects/${S.project}`), h('p', {}, 'Type a request. / runs a command and @ points at a file.')));
+    if (S.state.older) $log.append(olderButton());
+    if (!S.state.log.length) $log.append(hello());
     for (const e of S.state.log) upsertEntry(e, false);
   }
+  refreshReview();
   syncComposer();
   $log.scrollTop = $log.scrollHeight;
+}
+
+// Older entries of a long chat load a page at a time, above what you are reading, without moving it.
+const olderButton = () => h('button', { class: 'btn small older', type: 'button', onclick: guard(loadOlder) }, `Show earlier messages (${S.state.older})`);
+async function loadOlder() {
+  const project = S.project, first = S.state?.log[0], btn = $log?.querySelector('.older');
+  if (!first || !S.state.older || !btn || btn.disabled) return false;
+  btn.disabled = true;
+  try {
+    const { entries: list, older } = await api('GET', `${P(project)}/log?before=${encodeURIComponent(first.id)}`);
+    if (project !== S.project || S.state.log[0] !== first) return false;
+    const height = $log.scrollHeight;
+    S.state.log.unshift(...list);
+    S.state.older = older;
+    btn.after(...list.map(e => { const el = renderEntry(e); entries.set(e.id, { el, e }); return el; }));
+    if (older) btn.textContent = `Show earlier messages (${older})`; else btn.remove();
+    $log.scrollTop += $log.scrollHeight - height;
+    return true;
+  } finally { btn.disabled = false; }
 }
 
 let following = 0;
@@ -545,14 +704,49 @@ function upsertEntry(e, follow = true) {
   scroll(stick);
 }
 
+// A new chat offers a few first prompts: for exploring code that is already there, or for starting from nothing.
+// They only fill the message box, so they can be finished or changed before sending.
+const STARTERS = {
+  code: [['Explain this project', 'Explain how this project is put together: the main parts, how they connect, and where a newcomer should start reading.'],
+    ['Find and fix a bug', 'Find a real bug in this code. Explain it, fix it with the smallest change, and add a test that fails without the fix.'],
+    ['Write missing tests', 'Find the most important code that has no tests, write tests for it, and run them.'],
+    ['Review my changes', '/review']],
+  empty: [['Build a web page', 'Build a single-page website about '], ['Make a command-line tool', 'Make a small command-line tool that '],
+    ['Start from a GitHub repo', null], ['Plan an idea', 'Help me plan this project, step by step: ']],
+};
+function hello() {
+  const starters = h('div', { class: 'starters' });
+  const el = h('div', { class: 'empty', id: 'hello' }, h('h2', {}, 'What should we build?'), h('p', { class: 'mono' }, projectDir(S.project) || `~/projects/${S.project}`),
+    S.state?.dirs?.map(d => h('p', { class: 'mono small muted' }, `+ ${d}`)), starters,
+    h('p', { class: 'small' }, 'Type a request. / runs a command, @ points at a file and ! runs a shell command.'));
+  const project = S.project;
+  S.modelsReady?.then(() => {
+    if (!el.isConnected || project !== S.project || !S.state || S.models.some(m => m.id === S.state.model)) return;
+    el.append(h('p', { class: 'small note' }, S.models.length ? `${S.state.model} isn't one of the models your keys can use. ` : 'No model is connected yet. ',
+      S.models.length ? h('button', { class: 'linkbtn', type: 'button', onclick: modelPicker }, 'Pick a model') : h('button', { class: 'linkbtn', type: 'button', onclick: () => go(null, 'settings') }, 'Add an API key in Settings')));
+  });
+  api('GET', `${P(project)}/files?q=`).catch(() => []).then(files => {
+    if (project !== S.project || !el.isConnected) return;
+    starters.replaceChildren(...STARTERS[files.length ? 'code' : 'empty'].map(([label, text]) => h('button', { class: 'starter', type: 'button', onclick: () => {
+      if (!text) return cloneDialog();
+      $input.value = drafts[S.project] = text;
+      grow();
+      $input.focus();
+      $input.setSelectionRange(text.length, text.length);
+    } }, label)));
+  });
+  return el;
+}
+
 let mdPending = new Set();
 function delta(m) {
   const rec = entries.get(m.id);
   const stick = $log?.isConnected && nearBottom();
-  const logged = S.state?.log.find(x => x.id === m.id);
+  const logged = S.state?.log.findLast(x => x.id === m.id);
   if (m.kind === 'output') {
-    if (logged) logged.output = (logged.output || '') + m.text;
-    rec?.el.querySelector('.live')?.append(m.text);
+    if (logged) logged.output = ((logged.output || '') + m.text).slice(-60000);
+    const live = rec?.el.querySelector('.live');
+    if (live) { live.append(m.text); if (live.textContent.length > 120000) live.textContent = logged?.output ?? live.textContent.slice(-60000); }
   } else if (logged) {
     logged.text += m.text;
     if (rec) {
@@ -612,18 +806,22 @@ function askBox(e) {
   }
   const why = h('input', { class: 'field', placeholder: 'Tell the agent why, or what to do instead (optional)', 'aria-label': 'Reason for denying' });
   return h('div', { class: 'ask' }, e.agent ? h('div', { class: 'q small muted' }, `Requested by subagent: ${e.agent}`) : null,
+    // A risky call asks every time, so it has no "always allow".
+    e.risk && h('div', { class: 'q note' }, `High risk (${e.risk.score}/10): ${e.risk.why} The agent looked for a safer way and found none.`),
     h('div', { class: 'q' }, `Allow ${e.name}?`), toolArgs(e), why, h('div', { class: 'row' },
       h('button', { class: 'btn small primary', onclick: () => reply({ decision: 'allow' }) }, 'Allow once'),
-      h('button', { class: 'btn small', onclick: () => reply({ decision: 'always' }) }, e.name === 'Bash' ? 'Always allow this exact command' : 'Always allow'),
+      !e.risk && h('button', { class: 'btn small', onclick: () => reply({ decision: 'always' }) }, e.name === 'Bash' ? 'Always allow this exact command' : 'Always allow'),
       h('button', { class: 'btn small danger', onclick: () => reply({ decision: 'deny', message: why.value }) }, 'Deny')));
 }
 
+// Images in the log are files in the chat's .nexus/images ("images/<hash>.png"); older entries may still hold data URLs.
+const imageSrc = src => (/^images\/[a-f0-9]{32}\.\w+$/.test(src) ? `${P(S.project)}/${src}` : src);
 function renderEntry(e) {
   switch (e.type) {
     case 'user': {
       const rw = !e.queued && e.cp !== undefined && h('button', { class: 'icon-btn rw', 'aria-label': 'Rewind to this prompt', title: 'Rewind to here', onclick: () => rewindDialog(e) }, icon('undo'));
       const tag = e.injected && h('span', { class: 'itag', title: 'Your standing instructions from Prompts were added to this message' }, '+ injected');
-      return h('div', { class: `e user ${e.queued ? 'queued' : ''}` }, e.text, (e.images || []).map(src => h('img', { src, alt: 'Attachment' })), tag, rw);
+      return h('div', { class: `e user ${e.queued ? 'queued' : ''}` }, e.text, (e.images || []).map(src => h('img', { src: imageSrc(src), alt: 'Attachment' })), tag, rw);
     }
     case 'assistant': {
       const md = h('div', { class: 'md' });
@@ -637,18 +835,23 @@ function renderEntry(e) {
     }
     case 'tool': {
       const awaiting = e.status === 'awaiting';
-      const d = h('details', { class: 'e fold tool', open: awaiting || e.status === 'error' || e.direct || e.name === 'ExitPlanMode' || e.name === 'Screenshot' },
+      const d = h('details', { class: 'e fold tool', open: awaiting || e.status === 'error' || e.status === 'held' || e.direct || e.name === 'ExitPlanMode' || e.name === 'Screenshot' },
         h('summary', {}, h('span', { class: `dot ${e.status}`, title: e.status }),
           h('span', { class: 'tname' }, e.name), h('span', { class: 'targ muted' }, String(toolTarget(e.name, e.args || {})).split('\n')[0]),
           e.autopilot && h('span', { class: 'aptag', title: 'Autopilot answered this for you' }, 'autopilot'),
+          e.risk && h('span', { class: 'rtag', title: e.risk.why }, e.status === 'held' ? `held · risk ${e.risk.score}/10` : `risk ${e.risk.score}/10`),
           e.agent && h('span', { class: 'tagent muted' }, e.agent)));
       if (awaiting) d.append(askBox(e));
       else {
-        const args = toolArgs(e);
-        if (args) d.append(args);
-        if (e.images) d.append(...e.images.map(src => h('img', { class: 'seen', src, alt: 'The image the agent looked at' })));
-        else if (e.status === 'running' || e.output) d.append(h('div', { class: 'out live' }, e.output || ''));
         if (e.status === 'denied') d.open = true;
+        // A closed fold gets its arguments and output only when opened: a long chat has thousands of them.
+        const fill = () => {
+          const args = toolArgs(e);
+          if (args) d.append(args);
+          if (e.images) d.append(...e.images.map(src => h('img', { class: 'seen', src: imageSrc(src), alt: 'The image the agent looked at' })));
+          else if (e.status === 'running' || e.output) d.append(h('div', { class: 'out live' }, e.output || ''));
+        };
+        if (d.open) fill(); else d.addEventListener('toggle', fill, { once: true });
       }
       return d;
     }
@@ -683,12 +886,12 @@ const BUILTIN = [
   ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['pr', 'Commit, push and open a GitHub pull request'], ['issue', 'Fix a GitHub issue by number'], ['schedule', 'Run a prompt on a timer: cron fields, then the prompt'], ['check', 'A command, like npm test, to run after each change; Nexus fixes failures'], ['watch', 'on or off: act on comments ending in AI! saved in any editor'], ['todos', 'Show the task list'],
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
   ['skills', 'List skills and agents'], ['mcp', 'Open MCP and hook settings'], ['settings', 'Open settings'], ['memory', 'Edit NEXUS.md'], ['rewind', 'How to rewind'],
-  ['create-agent', 'Have the AI write a new agent type'], ['agent', 'Switch this chat to another agent'], ['prompts', 'Edit system prompts and injected text'],
+  ['create-agent', 'Have the AI write a new agent type'], ['create-skill', 'Have the AI write a new skill'], ['agent', 'Switch this chat to another agent'], ['prompts', 'Edit system prompts and injected text'],
   ['marketplace', 'Browse agents and MCP servers to add'], ['export', 'Download this chat as Markdown'], ['autopilot', 'on or off: keep working without stopping to ask'],
 ];
 const slashItems = () => [
   ...BUILTIN.map(([name, description]) => ({ name, description })),
-  ...S.meta.commands, ...S.meta.skills,
+  ...S.meta.commands, ...S.meta.skills.filter(k => !k.off),
 ];
 function localCommand(text) {
   const cmd = text.slice(1).trim();
@@ -1041,15 +1244,15 @@ async function agentPicker() {
   if (d.open) fill();
 }
 
-// /create-agent runs as a normal prompt, so the agent can read the project and its file write is shown for approval.
-function createWithAI(about = '') {
+// /create-agent and /create-skill run as normal prompts, so the agent can read the project and its file writes are shown for approval.
+function createWithAI(about = '', cmd = 'create-agent') {
   const project = projectForInstall();
   if (!project) return toast('Create a project first.');
-  drafts[project] = `/create-agent ${about}`;
+  drafts[project] = `/${cmd} ${about}`;
   if (S.project !== project || S.page || S.tab !== 'chat') go(project, null, 'chat');
   else if ($input?.isConnected) { $input.value = drafts[project]; grow(); }
   $input?.focus();
-  toast('Say what the agent should do after /create-agent, then send.');
+  toast(`Say what the ${cmd === 'create-skill' ? 'skill' : 'agent'} should do after /${cmd}, then send.`);
 }
 
 // ---- prompts ----
@@ -1133,9 +1336,12 @@ async function globalPromptsCard() {
 const openMarket = kind => { S.marketKind = kind; go(S.project, 'marketplace'); };
 const backBtn = back => h('div', { class: 'dhead' }, h('button', { class: 'btn small', type: 'button', onclick: back }, icon('back'), 'Back'));
 
+// Skills have no Nexus picks; their first source is Anthropic's own collection.
+const firstSource = k => (k === 'skills' ? ['anthropic', 'Anthropic'] : ['nexus', 'Nexus picks']);
 function marketPage(hamb) {
-  let kind = S.marketKind || 'agents', source = 'nexus', items = [], category = '', picked = '', seq = 0, openSeq = 0, timer;
+  let kind = S.marketKind || 'agents', source = S.marketSource || firstSource(kind)[0], items = [], category = '', picked = '', seq = 0, openSeq = 0, timer;
   const srcs = {};
+  S.marketSource = null;
   const kinds = h('div', { class: 'seg2', role: 'tablist', 'aria-label': 'What to browse' });
   const sources = h('div', { class: 'seg2 msrc', role: 'tablist', 'aria-label': 'Source' });
   const search = h('input', { class: 'field', type: 'search', placeholder: 'Search', 'aria-label': 'Search the marketplace', autocomplete: 'off',
@@ -1147,14 +1353,17 @@ function marketPage(hamb) {
   const page = h('div', { class: 'mpage' }, h('div', { class: 'mside' }, h('div', { class: 'mtop' }, kinds, sources, search, chips), grid, links), detail);
   $main.replaceChildren(h('header', { class: 'top' }, hamb, h('h1', {}, 'Marketplace')), h('div', { class: 'view' }, page));
   const back = () => page.classList.remove('showing');
-  const placeholder = () => detail.replaceChildren(h('p', { class: 'mnone muted' }, kind === 'mcp' ? 'Pick a server to see what it does and add it.' : 'Pick an agent to see what it does and install it.'));
+  const placeholder = () => detail.replaceChildren(h('p', { class: 'mnone muted' }, kind === 'mcp' ? 'Pick a server to see what it does and add it.'
+    : kind === 'skills' ? 'Pick a skill to see what it does and install it. A GitHub link to any skill, pasted into the search box, works too.' : 'Pick an agent to see what it does and install it.'),
+    ...(kind === 'skills' ? [h('div', { class: 'acts mnone' }, h('button', { class: 'btn', type: 'button', onclick: () => createWithAI('', 'create-skill') }, icon('spark'), 'Write a skill with AI'))] : []));
   const tab = (on, label, click) => h('button', { type: 'button', role: 'tab', class: on ? 'on' : '', 'aria-selected': String(on), onclick: click }, label);
   const renderTabs = () => {
-    kinds.replaceChildren(...[['agents', 'Agents'], ['mcp', 'MCP servers']].map(([k, label]) => tab(k === kind, label, () => {
-      if (k !== kind) { kind = S.marketKind = k; source = 'nexus'; category = ''; back(); placeholder(); load(); }
+    kinds.replaceChildren(...[['agents', 'Agents'], ['mcp', 'MCP servers'], ['skills', 'Skills']].map(([k, label]) => tab(k === kind, label, () => {
+      if (k !== kind) { kind = S.marketKind = k; source = firstSource(k)[0]; category = ''; back(); placeholder(); load(); }
     })));
-    sources.replaceChildren(...[...srcs[kind] || [['nexus', 'Nexus picks']], ['installed', 'Installed']].map(([id, label]) => tab(id === source, label, () => {
-      if (id !== source) { source = id; category = ''; load(); }
+    search.placeholder = kind === 'skills' ? 'Search, or paste a GitHub link' : 'Search';
+    sources.replaceChildren(...[...srcs[kind] || [firstSource(kind)], ['installed', 'Installed']].map(([id, label]) => tab(id === source, label, () => {
+      if (id !== source) { source = id; category = ''; if (/github\.com\//.test(search.value)) search.value = ''; load(); } // a link means one repo, not a filter
     })));
   };
   const renderGrid = () => {
@@ -1166,14 +1375,16 @@ function marketPage(hamb) {
     grid.replaceChildren(...(shown.length ? shown.map(tile) : [h('p', { class: 'mnone muted' }, empty)]));
     grid.scrollTop = 0;
   };
+  // A collection is a GitHub repo of skills: picking it lists them, the same as pasting its link.
+  const pick = it => (it.collection ? (search.value = it.url, load()) : open(it));
   const tile = it => h('div', { class: `tile${`${source}:${it.id}` === picked ? ' on' : ''}`, 'data-key': `${source}:${it.id}` },
-    h('button', { class: 'tmain', type: 'button', onclick: () => open(it) },
+    h('button', { class: 'tmain', type: 'button', onclick: () => pick(it) },
       h('span', { class: 'ticon', 'aria-hidden': 'true' }, it.icon || (it.name[0] || '?').toUpperCase()),
       h('span', { class: 'ttext' },
         h('span', { class: 'tname' }, h('b', {}, it.name), it.featured && h('span', { class: 'mtag' }, 'Featured'), it.running === false && h('span', { class: 'mtag old' }, 'Asleep')),
         h('span', { class: 'tmeta' }, [it.author && `by ${it.author}`, it.category, it.stats].filter(Boolean).join(' · ')),
         h('span', { class: 'tdesc' }, it.description || 'No description.'))),
-    h('button', { class: `btn small${it.installable ? ' primary' : ''}`, type: 'button', onclick: () => open(it) }, source === 'installed' ? 'Manage' : it.installable ? 'Install' : 'View'));
+    h('button', { class: `btn small${it.installable ? ' primary' : ''}`, type: 'button', onclick: () => pick(it) }, source === 'installed' ? 'Manage' : it.collection ? 'Browse' : it.installable ? 'Install' : 'View'));
   async function load() {
     const mine = ++seq;
     renderTabs();
@@ -1201,7 +1412,7 @@ function marketPage(hamb) {
     detail.replaceChildren(h('p', { class: 'mnone muted' }, 'Loading…'));
     detail.scrollTop = 0;
     try {
-      const parts = src === 'installed' ? installedDetail(it, k, back, load)
+      const parts = src === 'installed' ? await installedDetail(it, k, back, load)
         : marketDetail({ ...it, ...await api('GET', `/api/market/item?kind=${k}&source=${src}&id=${encodeURIComponent(it.id)}`) }, k, back);
       if (mine === openSeq) detail.replaceChildren(...parts.flat(Infinity).filter(Boolean));
     } catch (e) {
@@ -1217,6 +1428,12 @@ function marketPage(hamb) {
 async function installedItems(kind, q) {
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   const match = it => terms.every(t => `${it.name} ${it.description}`.toLowerCase().includes(t));
+  if (kind === 'skills') {
+    const project = projectForInstall();
+    const { skills } = project ? await api('GET', `${P(project)}/meta`) : { skills: [] };
+    const where = { user: 'All projects', project: 'This project', nexus: 'Comes with Nexus', other: 'From another tool' };
+    return skills.map(k => ({ id: k.name, name: k.name, description: `${k.off ? 'Off · ' : ''}${k.description}`, category: where[k.scope], skill: k })).filter(match);
+  }
   if (kind === 'mcp') {
     const { mcp } = await api('GET', '/api/settings');
     return mcp.map(s => ({ id: s.name, name: s.name, description: s.error || `${s.remote ? 'Remote · ' : ''}${s.status} · ${s.tools.length} tools`, server: s })).filter(match);
@@ -1226,7 +1443,7 @@ async function installedItems(kind, q) {
   return agents.filter(a => !a.builtin).map(a => ({ id: a.name, name: a.name, description: a.description, category: a.scope === 'user' ? 'All projects' : 'This project', def: a })).filter(match);
 }
 
-function installedDetail(it, kind, back, reload) {
+async function installedDetail(it, kind, back, reload) {
   const remove = (why, run) => h('button', { class: 'btn danger', type: 'button', onclick: guard(async () => {
     if (!await confirmBox(`Remove ${it.name}?`, why, 'Remove', 'danger')) return;
     await run();
@@ -1238,6 +1455,24 @@ function installedDetail(it, kind, back, reload) {
     h('div', { class: 'dtitle' }, h('span', { class: 'ticon big', 'aria-hidden': 'true' }, it.name[0].toUpperCase()),
       h('div', { class: 'grow' }, h('h3', {}, it.name), it.category && h('div', { class: 'small muted' }, it.category))),
     it.description && h('p', {}, it.description)];
+  if (kind === 'skills') {
+    const project = projectForInstall(), k = it.skill, url = `${P(project)}/skills/${encodeURIComponent(it.name)}`;
+    const { body, source } = await api('GET', url);
+    const mine = ['user', 'project'].includes(k.scope);
+    const done = async msg => { if (S.project === project) await loadMeta(); toast(msg); back(); reload(); };
+    const toggle = guard(async () => { await api('PUT', `/api/skills/${encodeURIComponent(it.name)}`, { off: !k.off }); await done(k.off ? `${it.name} is on again.` : `${it.name} is off in every project. Turn it on here any time.`); });
+    const update = guard(async () => { await api('POST', `${P(project)}/skills`, { ...source, scope: k.scope }); await done(`Updated ${it.name} from GitHub.`); });
+    return [...head, h('p', { class: 'small muted' }, k.off ? 'Off: Nexus doesn\'t offer it to the AI or as a command.' : `Type /${it.name} to use it, or just ask: Nexus reads it when a task fits.`),
+      mine && source && h('div', { class: 'mlinks small' }, extLink(`From github.com/${source.repo}${source.dir ? `/${source.dir}` : ''}`, `https://github.com/${source.repo}/tree/HEAD/${source.dir}`)),
+      h('details', { class: 'fold' }, h('summary', {}, 'Read SKILL.md', icon('down')), h('div', { class: 'out' }, body)),
+      h('div', { class: 'acts' },
+        h('button', { class: 'btn', type: 'button', onclick: toggle }, k.off ? 'Turn on' : 'Turn off'),
+        mine && source && h('button', { class: 'btn', type: 'button', onclick: update }, 'Update'),
+        mine && remove('Its folder is deleted. You can install it again from the marketplace.', async () => {
+          await api('DELETE', url);
+          if (S.project === project) await loadMeta();
+        }))];
+  }
   if (kind === 'mcp') {
     return [...head, h('div', { class: 'small muted' }, `Tools: ${it.server.tools.join(', ') || 'none yet'}`),
       h('div', { class: 'acts' }, remove('Its tools disappear from new messages. You can add it again from the marketplace.', () => api('DELETE', `/api/mcp-servers/${encodeURIComponent(it.name)}`)))];
@@ -1307,6 +1542,23 @@ function marketDetail(it, kind, back) {
         back();
       }) }, 'Install'))];
   }
+  if (kind === 'skills') {
+    const project = projectForInstall();
+    if (!project) return [...parts, h('p', { class: 'err' }, 'Create a project first.')];
+    const sid = uid();
+    const scope = h('select', { class: 'field', id: sid }, h('option', { value: 'user' }, 'All projects'), h('option', { value: 'project' }, `This project (${pretty(project)})`));
+    return [...parts,
+      h('details', { class: 'fold' }, h('summary', {}, `What it installs: ${it.files.length} file${it.files.length === 1 ? '' : 's'}, ${Math.max(1, Math.round(it.size / 1024))} KB`, icon('down')), h('div', { class: 'out' }, it.files.join('\n'))),
+      it.installable ? [h('div', {}, h('label', { class: 'lbl', htmlFor: sid }, 'Install for'), scope), err,
+        h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', onclick: e => busy(e.currentTarget, async () => {
+          if (S.project === project && S.meta.skills.some(k => k.name === it.name) && !await confirmBox(`Replace ${it.name}?`, 'A skill with this name is already installed.', 'Replace', 'danger')) return;
+          const { name } = await api('POST', `${P(project)}/skills`, { ...it.skill, scope: scope.value });
+          if (S.project === project) await loadMeta();
+          toast(`Installed ${name}. Type /${name} to use it, or just ask: Nexus reads it when a task fits.`);
+          back();
+        }) }, 'Install'))]
+        : h('p', { class: 'err' }, 'Too big to install from here (over 200 files or 10 MB). Clone it and copy the folder instead.')];
+  }
   if (it.external) {
     return [...parts, h('p', { class: 'small muted' }, "This is a product listed on aiagentslist.com, not an agent file Nexus can install. The AI can write a Nexus agent that does the same job."),
       h('div', { class: 'acts' }, h('button', { class: 'btn primary', type: 'button', onclick: () => { createWithAI(`that works like ${it.name}: ${it.description}`); } }, icon('spark'), 'Create a Nexus agent like this'))];
@@ -1349,21 +1601,90 @@ const exportChat = guard(async name => {
 });
 
 // ---- files ----
+// The language highlight.js knows a file by: its extension, a few extra names, or its whole name (Makefile, Dockerfile).
+const EXT_LANG = { mjs: 'javascript', cjs: 'javascript', htm: 'xml', vue: 'xml', svelte: 'xml', toml: 'ini', jsonc: 'json', gitignore: 'bash' };
+const langOf = file => {
+  const base = file.split(/[\\/]/).pop().toLowerCase(), ext = base.includes('.') ? base.split('.').pop() : base;
+  return [EXT_LANG[ext], ext, base].find(l => l && hljs.getLanguage(l)) || null;
+};
+// Big files are colored by a worker, since highlighting takes about a millisecond per KB and would stall typing.
+const SMALL = 30_000;
+let hlWorker = null, hlSeq = 0;
+const highlightAway = (text, lang) => new Promise(resolve => {
+  hlWorker ||= new Worker('/hljs-worker.js');
+  const id = ++hlSeq;
+  const done = e => { if (e.data.id === id) { hlWorker.removeEventListener('message', done); resolve(e.data.html); } };
+  hlWorker.addEventListener('message', done);
+  hlWorker.postMessage({ id, text, lang });
+});
+// The Files tab looks again at its tree and open file whenever they may have changed:
+// after each tool call, at the end of a turn, and when you come back to the page from another app.
+let filesWatch = null, watchTimer = 0;
+const filesChanged = () => { clearTimeout(watchTimer); watchTimer = setTimeout(() => filesWatch?.(), 300); };
+addEventListener('focus', filesChanged);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) filesChanged(); });
+
 let pendingOpen = null, current = null;
 function filesView(view) {
   current = null;
+  const expanded = new Set();
+  let loaded = '', disk = ''; // the open file as last loaded or saved, and the newest version seen on disk
   const tree = h('div', { class: 'tree', 'aria-label': 'Project files' });
   const pathEl = h('span', { class: 'path muted' }, 'Select a file');
-  const area = h('textarea', { spellcheck: false, disabled: true, 'aria-label': 'File contents', wrap: 'off', oninput: () => { saveBtn.disabled = false; },
+  const langEl = h('span', { class: 'small muted' });
+  // Code shows in color with line numbers: the textarea you type in is see-through, over a highlighted copy of its text,
+  // so typing, undo, selection and phone keyboards all stay the browser's own.
+  const code = h('code', { class: 'hljs' }), nums = h('div', { class: 'nums' });
+  const layer = h('pre', { class: 'hl', 'aria-hidden': 'true' }, code);
+  let lines = 0, frame = 0, slow = 0;
+  const sync = () => {
+    layer.style.transform = `translate(${-area.scrollLeft}px, ${-area.scrollTop}px)`;
+    nums.style.transform = `translateY(${-area.scrollTop}px)`;
+  };
+  // wait: how long a big file's colors hold off, so they come once typing pauses rather than on every key.
+  const paint = (wait = 600) => {
+    frame = 0;
+    clearTimeout(slow);
+    const text = area.value, file = current, lang = file ? langOf(file) : null;
+    // The copy ends with a newline so a last empty line takes up room, as it does in the textarea.
+    if (lang && text.length < SMALL) code.innerHTML = `${hljs.highlight(text, { language: lang, ignoreIllegals: true }).value}\n`;
+    else {
+      code.textContent = `${text}\n`;
+      if (lang) slow = setTimeout(async () => { const html = await highlightAway(text, lang); if (area.value === text && current === file) code.innerHTML = `${html}\n`; }, wait);
+    }
+    langEl.textContent = lang ? hljs.getLanguage(lang).name : '';
+    const n = text.split('\n').length;
+    if (n !== lines) { lines = n; nums.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); }
+    sync();
+  };
+  const changed = () => { saveBtn.disabled = false; frame ||= requestAnimationFrame(() => paint()); };
+  // New text from disk, keeping your place in the file.
+  const setText = text => {
+    const { scrollTop, scrollLeft, selectionStart, selectionEnd } = area;
+    area.value = loaded = disk = text;
+    area.setSelectionRange(Math.min(selectionStart, text.length), Math.min(selectionEnd, text.length));
+    saveBtn.disabled = true;
+    banner.hidden = true;
+    paint(0);
+    area.scrollTop = scrollTop;
+    area.scrollLeft = scrollLeft;
+    sync();
+  };
+  const banner = h('div', { class: 'ondisk', hidden: true, role: 'status' }, h('span', { class: 'grow' }, 'This file changed on disk while you were editing it.'),
+    h('button', { class: 'btn small', type: 'button', onclick: () => setText(disk) }, 'Load the new version'),
+    h('button', { class: 'btn small', type: 'button', onclick: () => { loaded = disk; banner.hidden = true; } }, 'Keep mine'));
+  const area = h('textarea', { spellcheck: false, autocapitalize: 'off', autocomplete: 'off', disabled: true, 'aria-label': 'File contents', wrap: 'off', oninput: changed, onscroll: sync,
     onkeydown: e => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
-      if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); area.setRangeText('  ', area.selectionStart, area.selectionEnd, 'end'); saveBtn.disabled = false; }
+      if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); area.setRangeText('  ', area.selectionStart, area.selectionEnd, 'end'); changed(); }
     } });
   const saveBtn = h('button', { class: 'btn small primary', disabled: true, onclick: () => save() }, 'Save');
   const save = guard(async () => {
     if (!current) return;
     await api('PUT', `${P(S.project)}/file`, { path: current, content: area.value });
+    loaded = disk = area.value;
     saveBtn.disabled = true;
+    banner.hidden = true;
     toast('Saved.');
   });
   const newBtn = h('button', { class: 'btn small', onclick: () => newFile(open) }, 'New file');
@@ -1381,37 +1702,68 @@ function filesView(view) {
   const open = guard(async rel => {
     if (!saveBtn.disabled && !await confirmBox('Discard unsaved changes?', `${current} has changes that aren't saved.`, 'Discard', 'danger')) return;
     try {
-      const { content } = await api('GET', `${P(S.project)}/file?path=${encodeURIComponent(rel)}`);
-      area.value = content;
-      area.disabled = false;
+      area.value = (await api('GET', `${P(S.project)}/file?path=${encodeURIComponent(rel)}`)).content;
     } catch (e) {
       // A missing file opens empty, ready to be created on save.
       if (!/no such file/i.test(e.message)) throw e;
-      area.value = ''; area.disabled = false;
+      area.value = '';
     }
+    area.disabled = false;
+    loaded = disk = area.value;
+    banner.hidden = true;
     current = rel; pathEl.textContent = rel; pathEl.classList.remove('muted'); saveBtn.disabled = true; askBtn.disabled = false;
+    paint(0);
+    area.scrollTop = area.scrollLeft = 0;
+    sync();
     tree.querySelectorAll('.on').forEach(b => b.classList.remove('on'));
     tree.querySelector(`[data-path="${CSS.escape(rel)}"]`)?.classList.add('on');
   });
+  // A folder in the tree. Folders you opened open again when the tree is listed anew.
+  const branch = (full, label, title) => {
+    const sub = h('ul', { hidden: true });
+    const btn = h('button', { class: 'd', title, 'aria-expanded': 'false', onclick: guard(async () => {
+      sub.hidden = !sub.hidden;
+      btn.setAttribute('aria-expanded', String(!sub.hidden));
+      if (sub.hidden) expanded.delete(full);
+      else { expanded.add(full); await list(full, sub); }
+    }) }, label);
+    btn.dataset.path = full;
+    const reopen = () => expanded.has(full) && (sub.hidden = false, btn.setAttribute('aria-expanded', 'true'), list(full, sub));
+    return [h('li', {}, btn, sub), reopen];
+  };
   async function list(rel, into) {
-    const items = await api('GET', `${P(S.project)}/tree?path=${encodeURIComponent(rel)}`);
-    if (rel === '.' && !items.length) { into.replaceChildren(h('li', { class: 'muted', style: 'padding:4px 6px' }, 'Empty folder')); return; }
+    // Asked of the server, since a page opened straight on this tab may not have the chat's state yet.
+    const [items, dirs] = await Promise.all([api('GET', `${P(S.project)}/tree?path=${encodeURIComponent(rel)}`), rel === '.' ? api('GET', `${P(S.project)}/folders`).then(r => r.dirs) : []]);
+    if (rel === '.' && !items.length && !dirs.length) { into.replaceChildren(h('li', { class: 'muted', style: 'padding:4px 6px' }, 'Empty folder')); return; }
+    const sep = /^[a-zA-Z]:\\|^\\\\/.test(rel) ? '\\' : '/'; // a Windows path in an added folder keeps its own separator
+    const reopen = [];
+    const folder = (...args) => { const [li, again] = branch(...args); reopen.push(again); return li; };
     into.replaceChildren(...items.map(it => {
-      const full = rel === '.' ? it.name : `${rel}/${it.name}`;
-      const sub = h('ul', { hidden: true });
-      const btn = h('button', { class: it.dir ? 'd' : '', onclick: guard(async () => {
-        if (!it.dir) return open(full);
-        sub.hidden = !sub.hidden;
-        btn.setAttribute('aria-expanded', String(!sub.hidden));
-        if (!sub.hidden && !sub.children.length) await list(full, sub);
-      }) }, it.dir ? `${it.name}/` : it.name);
+      const full = rel === '.' ? it.name : `${rel}${sep}${it.name}`;
+      if (it.dir) return folder(full, `${it.name}/`);
+      const btn = h('button', { class: full === current ? 'on' : '', onclick: () => open(full) }, it.name);
       btn.dataset.path = full;
-      return h('li', {}, btn, it.dir ? sub : null);
-    }));
+      return h('li', {}, btn);
+    }), ...dirs.map(d => folder(d, `${d.split(/[\\/]/).pop()}/ (added)`, d)));
+    await Promise.all(reopen.map(again => again()));
   }
   const root = h('ul');
   tree.append(root);
-  view.append(h('div', { class: 'files' }, tree, h('div', { class: 'editor' }, h('div', { class: 'ebar' }, pathEl, askBtn, newBtn, saveBtn), area)));
+  view.append(h('div', { class: 'files' }, tree, h('div', { class: 'editor' }, h('div', { class: 'ebar' }, pathEl, langEl, askBtn, newBtn, saveBtn), banner,
+    h('div', { class: 'code' }, h('div', { class: 'gutter', 'aria-hidden': 'true' }, nums), h('div', { class: 'pane' }, layer, area)))));
+  filesWatch = guard(async () => {
+    if (!view.isConnected) return;
+    const top = tree.scrollTop;
+    await list('.', root);
+    tree.scrollTop = top;
+    if (!current) return;
+    const now = await api('GET', `${P(S.project)}/file?path=${encodeURIComponent(current)}`).then(r => r.content, () => null);
+    if (now === null || now === disk || !view.isConnected) return; // gone or unreadable: the editor keeps what it has
+    disk = now;
+    if (now === loaded) banner.hidden = true;
+    else if (saveBtn.disabled) setText(now);
+    else banner.hidden = false;
+  });
   guard(list)('.', root);
   if (pendingOpen) { open(pendingOpen); pendingOpen = null; }
 }
@@ -1422,6 +1774,63 @@ function newFile(open) {
 }
 
 // ---- changes ----
+const diffLine = l => {
+  const cls = /^(\+\+\+|---|diff )/.test(l) ? 'head' : l.startsWith('@@') ? 'hunk' : l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : '';
+  return cls ? h('span', { class: cls }, l) : `${l}\n`;
+};
+// One entry per file: its path as Undo file takes it, its lines, and how many were added and removed.
+function splitDiff(diff) {
+  const files = [];
+  for (const l of diff.split('\n')) {
+    const file = /^diff --git a\/(.+) b\/\1$/.exec(l)?.[1];
+    if (file) { files.push({ path: file, lines: [], add: 0, del: 0 }); continue; }
+    const f = files.at(-1);
+    if (!f) continue;
+    f.lines.push(l);
+    if (l[0] === '+' && !l.startsWith('+++')) f.add++;
+    else if (l[0] === '-' && !l.startsWith('---')) f.del++;
+  }
+  return files;
+}
+
+// Like VS Code's Keep and Undo: after a turn, the files it changed wait above the message box until each is kept or undone.
+// Sending the next message keeps whatever is left, since changes are counted from your last prompt.
+let $review = null;
+async function refreshReview() {
+  const box = $review, project = S.project;
+  if (!box?.isConnected) return;
+  const ch = S.state && !S.state.running ? await api('GET', `${P(project)}/changes`).catch(() => null) : null;
+  if (box !== $review || project !== S.project || S.state?.running) return;
+  const files = ch?.id ? splitDiff(ch.diff).filter(f => !ch.kept.includes(f.path)) : [];
+  box.hidden = !files.length;
+  if (!files.length) return;
+  const after = fn => guard(async () => { await fn(); await refreshReview(); });
+  const keep = paths => after(() => api('POST', `${P(project)}/changes/keep`, { files: paths }));
+  const undo = paths => after(async () => { for (const path of paths) await api('POST', `${P(project)}/changes/undo`, { path }); });
+  const undoAll = guard(async () => {
+    if (!await confirmBox(`Undo ${files.length} file${files.length === 1 ? '' : 's'}?`, 'Each goes back to how it was before your last prompt, and files the AI created are deleted. Files you kept stay as they are.', 'Undo all', 'danger')) return;
+    await undo(files.map(f => f.path))();
+  });
+  box.replaceChildren(
+    h('div', { class: 'rrow rhead' }, h('b', { class: 'grow' }, `${files.length} file${files.length === 1 ? '' : 's'} changed`),
+      h('button', { class: 'btn small', type: 'button', onclick: keep(files.map(f => f.path)) }, icon('check'), 'Keep all'),
+      h('button', { class: 'btn small', type: 'button', onclick: undoAll }, icon('undo'), 'Undo all')),
+    ...files.map(f => {
+      const pre = h('pre', { class: 'diff', hidden: true }, f.lines.filter(l => !/^(index |--- |\+\+\+ |(new|deleted) file mode)/.test(l)).map(diffLine));
+      // A file in an added folder is shown from that folder's name, like api/src/app.js; the tooltip has the full path.
+      const root = (S.state?.dirs || []).map(d => d.split(/[\\/]/).join('/')).find(d => f.path.startsWith(`${d}/`));
+      const parts = (root ? `${root.split('/').pop()}${f.path.slice(root.length)}` : f.path).split('/');
+      return h('div', { class: 'rfile' },
+        h('div', { class: 'rrow' },
+          h('button', { class: 'linkbtn rname', type: 'button', title: f.path, 'aria-expanded': 'false', onclick: e => { pre.hidden = !pre.hidden; e.currentTarget.setAttribute('aria-expanded', String(!pre.hidden)); } },
+            h('span', { class: 'mono' }, parts.pop()), parts.length ? h('span', { class: 'small muted' }, ` ${parts.join('/')}`) : null),
+          h('span', { class: 'small radd' }, `+${f.add}`), h('span', { class: 'small rdel' }, `-${f.del}`),
+          h('button', { class: 'btn small', type: 'button', 'aria-label': `Keep ${f.path}`, onclick: keep([f.path]) }, 'Keep'),
+          h('button', { class: 'btn small', type: 'button', 'aria-label': `Undo ${f.path}`, onclick: undo([f.path]) }, 'Undo')),
+        pre);
+    }));
+}
+
 function changesView(view) {
   const box = h('pre', { class: 'diff', tabIndex: 0, 'aria-label': 'Changes' }, 'Loading…');
   const since = h('span', { class: 'path muted' });
@@ -1433,12 +1842,11 @@ function changesView(view) {
       box.replaceChildren(...(diff ? diff.split('\n').map(l => {
         const file = /^diff --git a\/(.+) b\/\1$/.exec(l)?.[1];
         if (file) return h('span', { class: 'head' }, l, h('button', { class: 'btn small undo', type: 'button', onclick: guard(async () => {
-          if (!await confirmBox(`Undo ${file}?`, 'It goes back to how it was before your last prompt. A checkpoint is saved first, so Rewind can bring the change back.', 'Undo file', 'danger')) return;
+          if (!await confirmBox(`Undo ${file}?`, 'It goes back to how it was before your last prompt, or is deleted if the AI created it.', 'Undo file', 'danger')) return;
           await api('POST', `${P(S.project)}/changes/undo`, { path: file });
           load();
         }) }, 'Undo file'));
-        const cls = /^(\+\+\+|---|diff )/.test(l) ? 'head' : l.startsWith('@@') ? 'hunk' : l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : '';
-        return cls ? h('span', { class: cls }, l) : `${l}\n`;
+        return diffLine(l);
       }) : ['No file changes.']));
     } catch (e) { box.textContent = e.message; }
   }
@@ -1554,7 +1962,10 @@ async function fillAgents() {
       !d.builtin && h('button', { class: 'btn small danger', 'aria-label': `Delete ${d.name}`, onclick: guard(async () => {
         if (await confirmBox(`Delete ${d.name}?`, 'This removes the agent type from Nexus folders. Types in other folders stay.', 'Delete', 'danger')) { await api('DELETE', `${P(project)}/agent-defs/${encodeURIComponent(d.name)}`); refreshAgentsSoon(); }
       }) }, 'Delete'))),
-    meta.skills.length ? [h('h2', {}, `Skills (${meta.skills.length})`), meta.skills.map(k => h('div', { class: 'card' }, h('div', { class: 'title mono' }, k.name), h('div', { class: 'small muted' }, k.description)))] : null,
+    h('div', { class: 'rowline', style: 'margin:22px auto 10px' }, h('h2', { style: 'margin:0', class: 'grow' }, `Skills (${meta.skills.length})`),
+      project && h('button', { class: 'btn small', onclick: () => createWithAI('', 'create-skill') }, icon('spark'), 'Create with AI'),
+      h('button', { class: 'btn small primary', onclick: () => { S.marketSource = 'installed'; openMarket('skills'); } }, icon('grid'), 'Manage')),
+    meta.skills.map(k => h('div', { class: 'card' }, h('div', { class: 'title mono' }, k.name), h('div', { class: 'small muted' }, `${k.off ? 'Off · ' : ''}${k.description}`))),
   ].flat(Infinity).filter(Boolean));
 }
 
@@ -1628,6 +2039,7 @@ async function settingsPage(hamb) {
     render();
   });
   page.append(...[
+    await modelsCard(),
     selfBot(),
     await versionCard(),
     h('div', { class: 'rowline', style: 'margin:22px auto 10px' }, h('h2', { style: 'margin:0', class: 'grow' }, 'MCP servers'),
@@ -1640,9 +2052,10 @@ async function settingsPage(hamb) {
     notifyCard(),
     await spendCard(),
     autopilotCard(area),
+    riskCard(area),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact and Notification; a hook exiting with 2 blocks a tool call or prompt. MCP servers reconnect within seconds of saving.'),
-    h('p', { class: 'small muted' }, 'Models: Ollama and LM Studio appear in the model picker while they run on this computer. Set OPENROUTER_API_KEY (hundreds of models, some free), GEMINI_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY, MISTRAL_API_KEY or XAI_API_KEY in Nexus\'s environment, or add any OpenAI-compatible server under "providers", as in the example.'),
+    h('p', { class: 'small muted' }, 'Models: add any other OpenAI-compatible server under "providers", as in the example.'),
     area, err,
     h('div', { style: 'margin-top:8px' }, h('button', { class: 'btn primary', onclick: async () => {
       err.textContent = '';
@@ -1653,6 +2066,50 @@ async function settingsPage(hamb) {
   ].flat());
 }
 
+// Keys for the model providers, pasted here on a first run instead of into an environment file. The page only learns whether each is set.
+const KEY_INFO = {
+  ANTHROPIC_API_KEY: ['Anthropic', 'anthropic', 'Claude models', 'https://console.anthropic.com/settings/keys'],
+  OPENAI_API_KEY: ['OpenAI', 'openai', 'GPT models', 'https://platform.openai.com/api-keys'],
+  OPENROUTER_API_KEY: ['OpenRouter', 'openrouter', 'Hundreds of models from every lab, some free', 'https://openrouter.ai/keys'],
+  GEMINI_API_KEY: ['Google Gemini', 'gemini', 'Gemini models, with a free tier', 'https://aistudio.google.com/apikey'],
+  GROQ_API_KEY: ['Groq', 'groq', 'Fast open models', 'https://console.groq.com/keys'],
+  DEEPSEEK_API_KEY: ['DeepSeek', 'deepseek', 'Low-cost DeepSeek models', 'https://platform.deepseek.com/api_keys'],
+  MISTRAL_API_KEY: ['Mistral', 'mistral', 'Mistral and Codestral', 'https://console.mistral.ai/api-keys'],
+  XAI_API_KEY: ['xAI', 'xai', 'Grok models', 'https://console.x.ai'],
+  DASHSCOPE_API_KEY: ['Alibaba Qwen (DashScope)', 'dashscope', 'Qwen models, with a key from any region', 'https://www.alibabacloud.com/help/en/model-studio/get-api-key'],
+};
+async function modelsCard() {
+  const [keys, models] = await Promise.all([guard(() => api('GET', '/api/keys'))(), api('GET', '/api/models').catch(() => [])]);
+  if (!keys) return [];
+  S.models = models;
+  const local = [...new Set(models.filter(m => /this computer/.test(m.providerName || '')).map(m => m.providerName.split(' · ')[0]))];
+  const row = k => {
+    const [label, provider, what, url] = KEY_INFO[k.name] || [k.name, '', '', ''];
+    const n = models.filter(m => m.provider === provider).length, id = uid();
+    const input = h('input', { class: 'field', id, type: 'password', autocomplete: 'off', spellcheck: false, placeholder: k.saved ? 'Paste a new key to replace it' : 'Paste an API key' });
+    const put = guard(async value => {
+      await api('PUT', `/api/keys/${k.name}`, { value });
+      S.models = await api('GET', '/api/models').catch(() => []);
+      syncComposer();
+      const got = S.models.filter(m => m.provider === provider).length;
+      toast(!value ? `Removed the ${label} key.` : got ? `${label} is connected: ${got} models are in the model picker.` : `Saved, but ${label} sent back no models. Check the key.`);
+      render();
+    });
+    const save = () => (input.value.trim() ? put(input.value.trim()) : toast('Paste a key first.'));
+    const status = k.env || k.saved ? (n ? `Connected · ${n} models` : 'Key set, but no models came back. Check it.') : 'Not set';
+    return h('div', { class: 'keyrow' },
+      h('div', { class: 'rowline' }, h('span', { class: `dot ${n ? 'done' : k.env || k.saved ? 'error' : 'idle'}`, 'aria-hidden': 'true' }),
+        h('div', { class: 'grow' }, h('label', { class: 'title', htmlFor: id }, label), h('div', { class: 'small muted' }, `${status} · ${what} · `, extLink('Get a key', url))),
+        k.saved && !k.env && h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove the ${label} key`, onclick: () => put('') }, 'Remove')),
+      k.env ? h('div', { class: 'small muted' }, `Set in Nexus's environment as ${k.name}.`)
+        : h('div', { class: 'rowline' }, input, h('button', { class: 'btn', type: 'button', onclick: save }, 'Save')));
+  };
+  return [h('h2', {}, 'Models'),
+    h('p', { class: 'small muted' }, models.length ? '' : 'Add a key for at least one provider to start chatting. ',
+      `Keys stay on this machine in ~/.nexus/keys.json, and the agent's shell commands never get them. Ollama and LM Studio models appear by themselves while they run on this computer${local.length ? ` (running now: ${local.join(', ')})` : ''}.`),
+    h('div', { class: 'card' }, keys.map(row))];
+}
+
 async function spendCard() {
   const sp = await guard(() => api('GET', '/api/spending'))();
   if (!sp) return [];
@@ -1660,6 +2117,22 @@ async function spendCard() {
     h('div', { class: 'card' }, h('div', { class: 'title' }, `About ${usd(sp.total)} across all chats`),
       h('div', { class: 'small muted' }, `Estimated from list prices, like each chat's meter.${sp.unpriced ? ` Not counting ${sp.unpriced} requests to models with no known price.` : ''}`),
       sp.chats.map(c => h('div', { class: 'rowline spend' }, h('button', { class: 'linkbtn grow', type: 'button', onclick: () => go(c.name, null, 'chat') }, pretty(c.name)), h('span', { class: 'mono' }, usd(c.cost)))))];
+}
+
+// On by default; settings.json "riskCheck": false turns it off.
+function riskCard(area) {
+  const box = h('input', { type: 'checkbox', id: 'riskon', 'aria-describedby': 'riskon-hint' });
+  guard(async () => { box.checked = JSON.parse((await api('GET', '/api/settings')).text).riskCheck !== false; })();
+  box.onchange = guard(async () => {
+    const { text } = await api('GET', '/api/settings');
+    const next = `${JSON.stringify({ ...JSON.parse(text), riskCheck: box.checked ? undefined : false }, null, 2)}\n`;
+    await api('PUT', '/api/settings', { text: next });
+    if (area.value === text.replace(/\r\n?/g, '\n')) area.value = next;
+    toast(box.checked ? 'Risky calls are checked first again.' : 'The risk check is off.');
+  });
+  return [h('h2', {}, 'Risk check'),
+    h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'riskon' }, box, h('span', { class: 'grow' }, 'Check risky commands and edits with the AI before they run')),
+      h('p', { class: 'small muted', id: 'riskon-hint' }, "Deleting folders, force-pushing, git resets, admin rights, deploys, database deletes and edits to secrets or CI files get a risk rating from the chat's model first. If it is high, the agent stops to look for a safer way. If there isn't one, you're asked, or on autopilot and in bypass it goes ahead. Each check is one short extra request, rarely needed."))];
 }
 
 // Writes one key of settings.json through the same endpoint as the editor below, keeping the editor in step.
@@ -1673,11 +2146,11 @@ function autopilotCard(area) {
     const next = `${JSON.stringify({ ...JSON.parse(text), autopilotRequests: n }, null, 2)}\n`;
     await api('PUT', '/api/settings', { text: next });
     if (area.value === text.replace(/\r\n?/g, '\n')) area.value = next;
-    toast(n ? `Autopilot now pauses after ${n} requests in one go.` : 'Autopilot has no request limit now. Only a budget stops it.');
+    toast(n ? `Autopilot now pauses after ${n} requests until your next message.` : 'Autopilot has no request limit now. Only a budget stops it.');
   });
   return [h('h2', {}, h('label', { htmlFor: 'apreq' }, 'Autopilot request limit')),
     h('div', { class: 'card' }, h('div', { class: 'rowline' }, input, h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Save')),
-      h('p', { class: 'small muted', id: 'apreq-hint' }, 'How many model requests autopilot makes in one go before it pauses for you. Long tasks may need 500 or more. 0 means no limit, so set a budget with /budget to cap the cost. Applies right away, even to a running chat.'))];
+      h('p', { class: 'small muted', id: 'apreq-hint' }, 'How many model requests autopilot makes, subagents included, before it pauses until your next message. Long tasks may need 500 or more. 0 means no limit, so set a budget with /budget to cap the cost. Applies right away, even to a running chat.'))];
 }
 
 function notifyCard() {
@@ -1688,7 +2161,15 @@ function notifyCard() {
     if (canPush) setPush(box.checked).catch(err => toast(`Push notifications didn't turn ${box.checked ? 'on' : 'off'}: ${err.message}`));
     if (box.checked) new Notification('Nexus', { body: 'Notifications are on.', icon: '/icon-180.png' });
   } });
+  // null: not on this computer's screen, or nowhere to show them (a Linux server without a desktop).
+  const pc = S.me?.desktopNotify != null && h('input', { type: 'checkbox', id: 'pcnotify', checked: S.me.desktopNotify, onchange: guard(async () => {
+    const { text } = await api('GET', '/api/settings');
+    await api('PUT', '/api/settings', { text: `${JSON.stringify({ ...JSON.parse(text), desktopNotify: pc.checked ? undefined : false }, null, 2)}\n` });
+    S.me.desktopNotify = pc.checked;
+    toast(pc.checked ? 'This computer will notify you when a chat finishes or needs you.' : "This computer's own notifications are off.");
+  }) });
   return [h('h2', {}, 'Notifications'),
+    pc && h('label', { class: 'card rowline check', htmlFor: 'pcnotify' }, pc, h('span', { class: 'grow' }, "Notify me on this computer when a chat finishes or needs me, even with no browser open, unless I'm looking at Nexus")),
     h('label', { class: 'card rowline check', htmlFor: 'notify' }, box, h('span', { class: 'grow' }, canPush ? 'Notify me when a chat finishes or needs me, even with Nexus closed' : 'Tell me when a chat finishes while Nexus is in the background'),
       !supported && h('span', { class: 'small muted' }, 'Not supported in this browser. Add Nexus to your home screen on iPhone.'))];
 }
@@ -1729,7 +2210,7 @@ async function versionCard() {
     note.textContent = [`${v.local} local change${v.local === 1 ? '' : 's'}`, v.behind ? `${v.behind} behind` : 'none behind', v.auto ? 'Auto-updates on' : 'Auto-updates off', v.status].filter(Boolean).join(' · ');
   };
   await show();
-  return [h('h2', {}, 'Version'), h('div', { class: 'card rowline' }, h('div', { class: 'grow' }, line, note), merge,
+  return [h('h2', {}, 'Version'), h('div', { class: 'card rowline' }, h('div', { class: 'grow' }, line, note, h('div', { class: 'small' }, 'Nexus is open source. ', extLink('Star it on GitHub', 'https://github.com/glsoo/nexus'), ' to help others find it.')), merge,
     h('button', { class: 'btn', type: 'button', onclick: async () => {
       try { await api('POST', '/api/update', {}); toast('Checking for updates.'); setTimeout(show, 8000); } catch (e) { toast(e.message); }
     } }, 'Update now'))];
@@ -1753,7 +2234,7 @@ async function boot() {
   else if (name && S.projects.some(p => p.name === name)) go(name, null, ['chat', 'files', 'changes', 'terminal'].includes(m[2]) ? m[2] : 'chat');
   else if (S.projects[0]) go(S.projects[0].name);
   else go(null);
-  api('GET', '/api/models').then(list => { S.models = list; syncComposer(); }).catch(() => {});
+  S.modelsReady = api('GET', '/api/models').then(list => { S.models = list; syncComposer(); }).catch(() => {});
 }
 
 // Let CSS fill the screen normally; only constrain it to the visual viewport for a keyboard.

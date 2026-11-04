@@ -163,12 +163,14 @@ export async function findAIComments(cwd) {
 }
 
 // For @-mentions: project files whose name starts with q, then whose name or path contains it, shortest first.
-export async function findFiles(cwd, q) {
+// dirs: other folders in the chat. Their files come back as full paths, ranked by the path inside their folder.
+export async function findFiles(cwd, q, dirs = []) {
   const t = q.toLowerCase();
   const rank = f => { const l = f.toLowerCase(), name = l.slice(l.lastIndexOf('/') + 1); return name.startsWith(t) ? 0 : name.includes(t) ? 1 : l.includes(t) ? 2 : 3; };
-  return (await rg(['--files', '--hidden', '--no-messages', '-g', '!.git', '-g', '!.nexus', '-g', '!node_modules'], cwd))
-    .split('\n').filter(Boolean).map(f => f.replaceAll('\\', '/')).map(f => [rank(f), f]).filter(([r]) => r < 3)
-    .sort((a, b) => a[0] - b[0] || a[1].length - b[1].length || a[1].localeCompare(b[1])).slice(0, 20).map(([, f]) => f);
+  const files = async (dir, prefix) => (await rg(['--files', '--hidden', '--no-messages', '-g', '!.git', '-g', '!.nexus', '-g', '!node_modules'], dir).catch(err => (prefix ? '' : Promise.reject(err))))
+    .split('\n').filter(Boolean).map(f => f.replaceAll('\\', '/')).map(f => [rank(f), prefix + f, f]);
+  const all = (await Promise.all([files(cwd, ''), ...dirs.map(d => files(d, `${d.replaceAll('\\', '/')}/`))])).flat();
+  return all.filter(([r]) => r < 3).sort((a, b) => a[0] - b[0] || a[2].length - b[2].length || a[1].localeCompare(b[1])).slice(0, 20).map(([, f]) => f);
 }
 
 async function glob({ pattern, path: dir = '.' }, { cwd, signal }) {
@@ -203,6 +205,7 @@ const BROWSERS = {
 };
 
 async function screenshot({ url, width = 1280, height = 800 }, { cwd, signal }) {
+  // Checked before looking for a browser, so the answer is the same on servers that have none.
   if (/^(\\\\|\/\/)/.test(String(url)) || /^\\\\/.test(resolve(cwd, String(url)))) throw new Error('Network paths are not supported.'); // Windows would send your login hash to that host
   const browser = (BROWSERS[process.platform] || BROWSERS.linux).find(f => fs.existsSync(f));
   if (!browser) throw new Error('Screenshot needs Chrome, Edge or Chromium installed.');
@@ -268,14 +271,15 @@ const EDITS = new Set(['Write', 'Edit', 'NotebookEdit']);
 const targetPath = (tool, a) => a.file_path ?? a.path ?? '.';
 
 // Writes into .nexus (conversation, agents, checkpoints) or any .git (config and hooks run commands) are never auto-approved.
-const inProject = (cwd, tool, a) => isInside(cwd, resolve(cwd, targetPath(tool, a)));
-const inNexus = (cwd, a) => {
+// dirs: other folders the chat works in, which count as the project too.
+const inProject = (cwd, tool, a, dirs = []) => [cwd, ...dirs].some(d => isInside(d, resolve(cwd, targetPath(tool, a))));
+const inNexus = (cwd, a, dirs = []) => {
   const file = resolve(cwd, targetPath('', a));
-  return isInside(path.join(cwd, '.nexus'), file) || path.relative(cwd, file).split(/[\\/]/).some(p => p.toLowerCase() === '.git');
+  return [cwd, ...dirs].some(d => isInside(path.join(d, '.nexus'), file)) || path.relative(cwd, file).split(/[\\/]/).some(p => p.toLowerCase() === '.git');
 };
 
 // "Always allow" rules are exact matches: a prefix rule like `npm test` would also pass `npm test; rm -rf ~`.
-export function ruleKey(tool, args, cwd) {
+export function ruleKey(tool, args, cwd, dirs) {
   if (tool === 'Bash') return `Bash:${args.command}`;
   if (tool === 'WebFetch') { try { return `WebFetch:${new URL(args.url).host}`; } catch { return `WebFetch:${args.url}`; } }
   // Like WebFetch per site, and like Read per file, so allowing one page never allows reading ~/.ssh.
@@ -284,7 +288,7 @@ export function ruleKey(tool, args, cwd) {
     try { return `Screenshot:${new URL(args.url).host}`; } catch { return `Screenshot:${args.url}`; }
   }
   if (EDITS.has(tool) || READS.has(tool)) {
-    return inProject(cwd, tool, args) && !inNexus(cwd, args) ? `${tool}:*` : `${tool}:${resolve(cwd, targetPath(tool, args))}`;
+    return inProject(cwd, tool, args, dirs) && !inNexus(cwd, args, dirs) ? `${tool}:*` : `${tool}:${resolve(cwd, targetPath(tool, args))}`;
   }
   return tool;
 }
@@ -292,11 +296,11 @@ export function ruleKey(tool, args, cwd) {
 export function decide(state, tool, args, cwd) {
   if (ALWAYS_OK.has(tool)) return { action: 'allow' };
   if (state.mode === 'bypass') return { action: 'allow' };
-  if (READS.has(tool) && inProject(cwd, tool, args)) return { action: 'allow' };
+  if (READS.has(tool) && inProject(cwd, tool, args, state.dirs)) return { action: 'allow' };
   if (state.mode === 'plan' && !READS.has(tool) && tool !== 'WebFetch' && tool !== 'Screenshot' && !tool.startsWith('mcp__')) {
     return { action: 'deny', reason: 'Plan mode is read-only. Finish the plan and call ExitPlanMode.' };
   }
-  if (state.allow.includes(ruleKey(tool, args, cwd))) return { action: 'allow' };
-  if (state.mode === 'acceptEdits' && EDITS.has(tool) && inProject(cwd, tool, args) && !inNexus(cwd, args)) return { action: 'allow' };
+  if (state.allow.includes(ruleKey(tool, args, cwd, state.dirs))) return { action: 'allow' };
+  if (state.mode === 'acceptEdits' && EDITS.has(tool) && inProject(cwd, tool, args, state.dirs) && !inNexus(cwd, args, state.dirs)) return { action: 'allow' };
   return { action: 'ask' };
 }

@@ -10,14 +10,15 @@ import * as agent from './agent.js';
 import { anthropicModels } from './anthropic.js';
 import { compatModels } from './compat.js';
 import * as auth from './auth.js';
-import { agentDefs, commands, deleteAgentDef, saveAgentDef, skills } from './extensions.js';
+import { agentDefs, commands, deleteAgentDef, removeSkill, saveAgentDef, skills, skillScope } from './extensions.js';
 import * as market from './market.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { findFiles } from './tools.js';
 import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
 import * as push from './push.js';
-import { childEnv, isInside, presentSocket, readSettings, settingsPath, shellCommand, writeAtomic } from './util.js';
+import * as notify from './notify.js';
+import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -37,6 +38,8 @@ const VENDOR = {
   'mono.woff2': '@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2',
 };
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
+const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const RAW = Symbol('answered already'); // a route that wrote its own response
 const SECURITY = {
   'content-security-policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
   'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY',
@@ -77,17 +80,27 @@ function need(name) {
   if (!projects.exists(name)) throw fail(404, 'Project not found.');
   return name;
 }
+// A path in the project's folder, or in a folder added to its chat (those are given in full).
 function projectPath(name, rel = '.') {
-  const dir = projects.projectDir(need(name));
-  if (!isInside(dir, String(rel))) throw fail(403, 'That path is outside the project.');
-  return path.resolve(dir, String(rel));
+  const dir = projects.projectDir(need(name)), target = path.resolve(dir, String(rel));
+  if (![dir, ...agent.folders(name).dirs].some(d => isInside(d, target))) throw fail(403, 'That path is outside the project.');
+  return target;
 }
 
 // ---- REST ----
 const routes = [];
 const route = (method, pattern, fn) => routes.push({ method, re: new RegExp(`^${pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)')}$`), fn });
 
-route('GET', '/api/projects', () => projects.list().map(p => ({ ...p, busy: agent.isBusy(p.name) })));
+route('GET', '/api/projects', () => projects.list().map(p => ({ ...p, busy: agent.isBusy(p.name), waiting: agent.isWaiting(p.name) })));
+route('GET', '/api/folders', ({ q }) => projects.folders(q.get('path')));
+route('POST', '/api/folders/pick', async ({ req, res }) => {
+  if (!projects.canPickNatively(req.headers)) throw fail(409, 'The Windows folder dialog opens only for a browser on this PC.');
+  const { title, button, start } = await body(req);
+  const pick = projects.pickFolder({ title: String(title || '').slice(0, 200), button: String(button || '').slice(0, 40), start: String(start || '').slice(0, 1000) });
+  res.on('close', () => { if (!res.writableEnded) pick.stop(); }); // the page stopped waiting
+  return { path: await pick.done };
+});
+route('POST', '/api/projects/open', async ({ req }) => ({ name: projects.open((await body(req)).path) }));
 route('GET', '/api/search', ({ q }) => agent.search(q.get('q') || ''));
 route('POST', '/api/projects', async ({ req }) => {
   const name = projects.create((await body(req)).name);
@@ -99,6 +112,9 @@ route('POST', '/api/projects/clone', async ({ req }) => {
   broadcast({ t: 'projects' });
   return { name };
 });
+route('GET', '/api/projects/:name/folders', ({ p }) => agent.folders(need(p.name)));
+route('POST', '/api/projects/:name/folders', async ({ req, p }) => agent.addFolder(need(p.name), (await body(req)).path));
+route('DELETE', '/api/projects/:name/folders', async ({ req, p }) => agent.removeFolder(need(p.name), String((await body(req)).path || '')));
 route('POST', '/api/projects/:name/rename', async ({ req, p }) => {
   const { to } = await body(req);
   agent.renameProject(need(p.name), to);
@@ -117,7 +133,7 @@ route('GET', '/api/projects/:name/tree', ({ p, q }) => {
     .map(d => ({ name: d.name, dir: d.isDirectory() }))
     .sort((a, b) => b.dir - a.dir || a.name.localeCompare(b.name));
 });
-route('GET', '/api/projects/:name/files', ({ p, q }) => findFiles(projectPath(p.name), q.get('q') || ''));
+route('GET', '/api/projects/:name/files', ({ p, q }) => findFiles(projectPath(p.name), q.get('q') || '', agent.folders(p.name).dirs));
 route('GET', '/api/projects/:name/file', ({ p, q }) => {
   const file = projectPath(p.name, q.get('path'));
   const { size } = fs.statSync(file);
@@ -129,19 +145,20 @@ route('GET', '/api/projects/:name/file', ({ p, q }) => {
 route('PUT', '/api/projects/:name/file', async ({ req, p }) => {
   const { path: rel, content } = await body(req);
   const file = projectPath(p.name, rel);
-  if (isInside(path.join(projects.projectDir(p.name), '.nexus'), file)) throw fail(403, '.nexus is managed by Nexus.');
+  if ([projects.projectDir(p.name), ...agent.folders(p.name).dirs].some(d => isInside(path.join(d, '.nexus'), file))) throw fail(403, '.nexus is managed by Nexus.');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, String(content));
   return {};
 });
 route('GET', '/api/projects/:name/changes', ({ p }) => agent.changes(need(p.name)));
+route('POST', '/api/projects/:name/changes/keep', async ({ req, p }) => { agent.keepChanges(need(p.name), (await body(req)).files); return {}; });
 route('POST', '/api/projects/:name/changes/undo', async ({ req, p }) => {
   const raw = String((await body(req)).path || '');
-  const file = path.relative(projects.projectDir(p.name), projectPath(p.name, raw)).split(path.sep).join('/');
-  if (!raw || !file || /^\.nexus(\/|$)/.test(file)) throw fail(400, 'That file cannot be undone.');
-  await agent.undoFile(p.name, file);
+  if (!raw) throw fail(400, 'That file cannot be undone.');
+  await agent.undoFile(p.name, projectPath(p.name, raw));
   return {};
 });
+route('GET', '/api/projects/:name/log', ({ p, q }) => agent.olderEntries(need(p.name), q.get('before') || ''));
 route('GET', '/api/projects/:name/export', ({ p }) => ({ markdown: agent.exportMarkdown(need(p.name)) }));
 route('POST', '/api/projects/:name/rewind', async ({ req, p }) => {
   const { id, files, conversation } = await body(req);
@@ -151,7 +168,7 @@ route('GET', '/api/projects/:name/meta', ({ p }) => {
   const cwd = projects.projectDir(need(p.name));
   return {
     commands: commands(cwd).map(({ name, description }) => ({ name, description })),
-    skills: skills(cwd).map(({ name, description, argumentHint }) => ({ name, description, argumentHint })),
+    skills: skills(cwd, true).map(({ name, description, argumentHint, dir, off }) => ({ name, description, argumentHint, off, scope: skillScope(cwd, dir) })),
     agents: agentDefs(cwd).map(({ prompt, file, ...a }) => ({ ...a, prompt })),
   };
 });
@@ -181,10 +198,33 @@ route('PUT', '/api/prompts', async ({ req }) => {
 });
 
 route('GET', '/api/market', async ({ q }) => {
-  const kind = q.get('kind') === 'mcp' ? 'mcp' : 'agents';
+  const kind = ['mcp', 'skills'].includes(q.get('kind')) ? q.get('kind') : 'agents';
   return { items: await market.search(kind, q.get('source') || 'nexus', q.get('q')), sources: market.SOURCES[kind], links: market.LINKS[kind] };
 });
-route('GET', '/api/market/item', ({ q }) => market.item(q.get('kind') === 'mcp' ? 'mcp' : 'agents', q.get('source') || 'nexus', q.get('id') || ''));
+route('GET', '/api/market/item', ({ q }) => market.item(['mcp', 'skills'].includes(q.get('kind')) ? q.get('kind') : 'agents', q.get('source') || 'nexus', q.get('id') || ''));
+// Skills go to ~/.nexus/skills for every project, or this project's .nexus/skills.
+route('POST', '/api/projects/:name/skills', async ({ req, p }) => {
+  const { repo, dir = '', scope } = await body(req);
+  const root = scope === 'project' ? path.join(projects.projectDir(need(p.name)), '.nexus') : NEXUS_HOME;
+  return { name: await market.installSkill(String(repo || ''), String(dir), root) };
+});
+route('DELETE', '/api/projects/:name/skills/:skill', ({ p }) => { removeSkill(projects.projectDir(need(p.name)), decodeURIComponent(p.skill)); return {}; });
+// One skill's instructions, and the GitHub folder it was installed from, which Update downloads again.
+route('GET', '/api/projects/:name/skills/:skill', ({ p }) => {
+  const k = skills(projects.projectDir(need(p.name)), true).find(x => x.name === decodeURIComponent(p.skill));
+  if (!k) throw fail(404, 'No such skill.');
+  return { body: k.body, source: readJson(path.join(k.dir, '.nexus-source.json'), null) };
+});
+// Turning a skill off is by name and applies in every project, like the rest of settings.json.
+route('PUT', '/api/skills/:skill', async ({ req, p }) => {
+  const name = decodeURIComponent(p.skill), { off } = await body(req);
+  let settings = {};
+  // A settings.json that doesn't parse is left alone rather than replaced, so nothing in it is lost.
+  try { settings = JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) || {}; } catch (err) { if (err.code !== 'ENOENT') throw fail(400, `Fix ~/.nexus/settings.json first: ${err.message}`); }
+  const list = (Array.isArray(settings.skillsOff) ? settings.skillsOff : []).filter(n => n !== name);
+  writeAtomic(settingsPath(), JSON.stringify({ ...settings, skillsOff: off ? [...list, name] : list }, null, 2) + '\n');
+  return {};
+});
 route('POST', '/api/mcp-servers', async ({ req }) => {
   const { name, config } = await body(req);
   mcp.addServer(name, config);
@@ -226,6 +266,12 @@ route('POST', '/api/shells/:id/kill', ({ p }) => {
 });
 
 route('GET', '/api/spending', () => agent.spending());
+// API keys pasted into Settings. Only whether each one is set goes back to the page, never the key.
+route('GET', '/api/keys', () => {
+  const saved = readJson(keysPath(), {});
+  return KEY_NAMES.map(name => ({ name, env: Boolean(process.env[name]), saved: Boolean(saved[name]) }));
+});
+route('PUT', '/api/keys/:key', async ({ req, p }) => { saveKey(p.key, (await body(req)).value); return {}; });
 route('GET', '/api/settings', () => ({
   text: fs.existsSync(settingsPath()) ? fs.readFileSync(settingsPath(), 'utf8') : '{\n  "hooks": {},\n  "mcpServers": {}\n}\n',
   mcp: mcp.status(),
@@ -283,8 +329,9 @@ route('POST', '/api/self-improve', async ({ req }) => {
 
 let modelCache = { at: 0, list: [] };
 async function openaiModels() {
+  if (!apiKey('OPENAI_API_KEY')) return [];
   if (Date.now() - modelCache.at > 3600_000) {
-    const res = await fetch('https://api.openai.com/v1/models', { headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}` } });
+    const res = await fetch('https://api.openai.com/v1/models', { headers: { authorization: `Bearer ${apiKey('OPENAI_API_KEY')}` } });
     if (!res.ok) throw fail(502, `OpenAI returned ${res.status} when listing models.`);
     const list = (await res.json()).data.map(m => m.id)
       .filter(id => /^(gpt-[4-9]|o\d)/.test(id) && !/audio|realtime|image|tts|transcribe|search|embed|moderation|-\d{4}-\d\d-\d\d$/.test(id))
@@ -331,7 +378,17 @@ async function api(req, res, url) {
     for (const c of [...wss.clients, ...termWss.clients]) if (c.token === token) c.close();
     return {};
   }
-  if (url.pathname === '/api/me') return { build: BUILD, user: process.env.NEXUS_USER, defaultModel: projects.DEFAULT_MODEL, autoCompact: readSettings().autoCompactTokens || 300000 };
+  // Chat images are named by their content, so a browser may keep each one for good.
+  const image = req.method === 'GET' && /^\/api\/projects\/([^/]+)\/images\/([^/]+)$/.exec(url.pathname);
+  if (image) {
+    const name = decodeURIComponent(image[1]), file = image[2];
+    if (!projects.exists(name) || !projects.IMAGE_FILE.test(file)) throw fail(404, 'Not found.');
+    const data = await fs.promises.readFile(path.join(projects.projectDir(name), '.nexus', 'images', file));
+    res.writeHead(200, { 'content-type': IMAGE_TYPES[path.extname(file)], 'cache-control': 'private, max-age=31536000, immutable' }).end(data);
+    return RAW;
+  }
+  if (url.pathname === '/api/me') return { build: BUILD, user: process.env.NEXUS_USER, defaultModel: projects.DEFAULT_MODEL, autoCompact: readSettings().autoCompactTokens || 300000, pickFolder: projects.canPickNatively(req.headers),
+    desktopNotify: projects.localBrowser(req.headers) ? (notify.available() ? notify.enabled() : null) : null };
   for (const r of routes) {
     if (r.method !== req.method) continue;
     const m = r.re.exec(url.pathname);
@@ -383,7 +440,7 @@ async function handle(req, res) {
     try {
       if (req.method !== 'GET' && !originOk(req)) throw fail(403, 'Cross-origin request refused.');
       const result = await api(req, res, url);
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
+      if (result !== RAW) res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
     } catch (err) {
       if (!err.status) console.error(req.method, url.pathname, err);
       const status = err.status || (err.code === 'ENOENT' ? 404 : 500);
@@ -399,7 +456,7 @@ async function handle(req, res) {
     serveStatic(res, path.join(NM, file), true);
     return;
   }
-  const rel = { '/app.js': 'app.js', '/sw.js': 'sw.js', '/style.css': 'style.css', '/icon.svg': 'icon.svg', '/icon-180.png': 'icon-180.png', '/manifest.webmanifest': 'manifest.webmanifest' }[url.pathname] || 'index.html';
+  const rel = { '/app.js': 'app.js', '/sw.js': 'sw.js', '/hljs-worker.js': 'hljs-worker.js', '/style.css': 'style.css', '/icon.svg': 'icon.svg', '/icon-180.png': 'icon-180.png', '/manifest.webmanifest': 'manifest.webmanifest' }[url.pathname] || 'index.html';
   if (rel !== 'index.html') return serveStatic(res, path.join(PUBLIC, rel));
   // Cloudflare gives static files a 4h browser TTL whatever we send, so each build needs its own URLs.
   const html = fs.readFileSync(path.join(PUBLIC, rel), 'utf8').replace(/"\/(app\.js|style\.css)"/g, `"/$1?v=${BUILD}"`);
@@ -424,6 +481,7 @@ server.on('upgrade', (req, socket, head) => {
   }
   target.handleUpgrade(req, socket, head, ws => {
     ws.token = token;
+    ws.local = projects.localBrowser(req.headers); // a browser at this computer's screen, for desktop notifications
     ws.alive = true;
     ws.on('pong', () => { ws.alive = true; });
     ws.on('error', () => {});
@@ -447,6 +505,7 @@ wss.on('connection', ws => {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
     try {
+      if (m.t === 'visible') { ws.visible = Boolean(m.on); return; }
       if (m.t === 'open') {
         need(m.name);
         ws.project = m.name;
@@ -468,16 +527,26 @@ wss.on('connection', ws => {
 const busy = new Set(), pinged = new WeakSet();
 const ping = (title, body, project) => push.notify({ title, body, project }, auth.liveSessionKey).catch(err => console.error('Web Push:', err.message));
 const asks = { AskUserQuestion: 'has a question for you', ExitPlanMode: 'has a plan for you to approve' };
+// A notification on this computer itself, unless you're looking at Nexus in a browser here, which shows its own toast.
+const pcNotify = (title, body, name) => {
+  if (![...wss.clients].some(ws => ws.local && ws.visible)) notify.desktopNotify(title, body, `http://127.0.0.1:${PORT}/#/p/${encodeURIComponent(name)}/chat`);
+};
 agent.hub.on('project', (name, ev) => {
   for (const ws of wss.clients) if (ws.project === name) sendTo(ws, ev);
   if (ev.t === 'status') broadcast({ t: 'projects' });
   if (ev.t === 'status' && ev.running) busy.add(name);
   else if (ev.t === 'status' && busy.delete(name)) {
     const reply = agent.getSession(name).state.log.findLast(e => e.type === 'assistant')?.text || '';
-    ping(`${name} finished`, reply.replace(/\s+/g, ' ').slice(0, 140) || 'The agent is done.', name);
+    const body = reply.replace(/\s+/g, ' ').slice(0, 140) || 'The agent is done.';
+    ping(`${name} finished`, body, name);
+    pcNotify(`${name} finished`, body, name);
+    broadcast({ t: 'alert', project: name, kind: 'finished', body }); // every open page, which shows it unless you're watching that chat
   } else if (ev.t === 'entry' && ev.entry.status === 'awaiting' && !pinged.has(ev.entry)) {
     pinged.add(ev.entry);
-    ping(`${name} needs you`, `The agent ${asks[ev.entry.name] || `wants to run ${ev.entry.name}`}.`, name);
+    const body = `The agent ${asks[ev.entry.name] || `wants to run ${ev.entry.name}`}.`;
+    ping(`${name} needs you`, body, name);
+    pcNotify(`${name} needs you`, body, name);
+    broadcast({ t: 'alert', project: name, kind: 'waiting', body });
   }
 });
 agent.hub.on('agent', ({ agent: a }) => broadcast({ t: 'agent', agent: a }));

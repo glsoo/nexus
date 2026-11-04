@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isAnthropic } from './anthropic.js';
-import { postWithRetry, readSettings, sseEvents } from './util.js';
+import { apiKey, postWithRetry, readSettings, sseEvents } from './util.js';
 
 // Any OpenAI-compatible Chat Completions server: OpenRouter, Ollama, LM Studio, or one added under "providers" in settings.json.
 // Model ids are "<provider>:<model>", so "ollama:qwen3-coder:30b" is the model "qwen3-coder:30b" on Ollama.
@@ -11,17 +11,20 @@ const PRESETS = {
   deepseek: { name: 'DeepSeek', baseURL: 'https://api.deepseek.com/v1', keyEnv: 'DEEPSEEK_API_KEY' },
   mistral: { name: 'Mistral', baseURL: 'https://api.mistral.ai/v1', keyEnv: 'MISTRAL_API_KEY' },
   xai: { name: 'xAI', baseURL: 'https://api.x.ai/v1', keyEnv: 'XAI_API_KEY' },
+  // A DashScope key works only in the region that issued it: Singapore, US (Virginia), Beijing or Hong Kong.
+  dashscope: { name: 'Alibaba Qwen', baseURL: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', keyEnv: 'DASHSCOPE_API_KEY',
+    regions: ['dashscope-intl', 'dashscope-us', 'dashscope', 'cn-hongkong.dashscope'].map(h => `https://${h}.aliyuncs.com/compatible-mode/v1`) },
   ollama: { name: 'Ollama', baseURL: 'http://127.0.0.1:11434/v1', local: true },
   lmstudio: { name: 'LM Studio', baseURL: 'http://127.0.0.1:1234/v1', local: true },
 };
 
 export function providers() {
   const out = {};
-  for (const [id, p] of Object.entries(PRESETS)) out[id] = { ...p, apiKey: process.env[p.keyEnv] };
+  for (const [id, p] of Object.entries(PRESETS)) out[id] = { ...p, apiKey: p.keyEnv && apiKey(p.keyEnv) };
   const custom = readSettings().providers;
   for (const [id, c] of Object.entries(custom && typeof custom === 'object' ? custom : {})) {
     if (!/^[a-z][a-z0-9-]*$/.test(id) || !c || typeof c !== 'object') continue;
-    out[id] = { ...out[id], ...c, name: String(c.name || out[id]?.name || id) };
+    out[id] = { ...out[id], ...c, ...(c.baseURL ? { regions: undefined } : {}), name: String(c.name || out[id]?.name || id) };
   }
   return out;
 }
@@ -38,24 +41,39 @@ const headers = (id, p) => ({
   ...(id === 'openrouter' ? { 'http-referer': 'https://github.com/glsoo/nexus', 'x-title': 'Nexus' } : {}),
 });
 
+// The first region that accepts a key is remembered for it. A baseURL in settings.json skips the search.
+const regionOf = new Map();
+async function located(id, p) {
+  if (!p?.regions) return p;
+  if (!regionOf.has(p.apiKey)) {
+    for (const base of p.regions) {
+      const res = await fetch(`${base}/models`, { headers: headers(id, p), signal: AbortSignal.timeout(10_000) }).catch(() => null);
+      if (res?.ok) { regionOf.set(p.apiKey, base); break; }
+    }
+  }
+  return { ...p, baseURL: regionOf.get(p.apiKey) || p.baseURL };
+}
+
 // ---- models ----
 const lists = new Map();
 // Per-token prices become per-million. Routers list -1 ("varies") and other servers use other shapes, so anything else is no price.
 const perM = v => { const n = Number(v) * 1e6; return v !== null && v !== '' && Number.isFinite(n) && n >= 0 ? n : undefined; };
 async function listModels(id, p) {
-  const hit = lists.get(id);
-  if (hit && Date.now() - hit.at < (p.local ? 15_000 : 3600_000)) return hit.list;
+  // A list belongs to the key and server that fetched it, so a replaced key is checked again right away.
+  const hit = lists.get(id), from = `${p.apiKey}\0${p.baseURL}`;
+  if (hit && hit.from === from && Date.now() - hit.at < (p.local ? 15_000 : 3600_000)) return hit.list;
+  p = await located(id, p);
   const res = await fetch(`${p.baseURL}/models`, { headers: headers(id, p), signal: AbortSignal.timeout(p.local ? 1500 : 10_000) });
   if (!res.ok) throw new Error(`${p.name} returned ${res.status} when listing models.`);
   const { data = [] } = await res.json();
   // An agent needs to chat and call tools, so models known not to (embeddings, speech, moderation) are left out.
-  const list = data.filter(m => (!m.supported_parameters || m.supported_parameters.includes('tools')) && !/embed|moderation|whisper|tts|transcri|dall-e|imagen|veo|guard/i.test(m.id)).map(m => ({
+  const list = data.filter(m => (!m.supported_parameters || m.supported_parameters.includes('tools')) && !/embed|moderation|whisper|tts|transcri|dall-e|imagen|image|veo|guard|realtime|audio|rerank|wanx?\d|paraformer|cosyvoice|sambert|asr\b/i.test(m.id)).map(m => ({
     id: `${id}:${m.id.replace(/^models\//, '')}`, name: m.name || m.id, provider: id, providerName: p.local ? `${p.name} · this computer` : p.name,
     context: m.context_length || undefined, efforts: [],
     ...(perM(m.pricing?.prompt) !== undefined && perM(m.pricing?.completion) !== undefined
       ? { price: [perM(m.pricing.prompt), perM(m.pricing.completion)], cachedPrice: perM(m.pricing.input_cache_read) } : p.local ? { price: [0, 0] } : {}),
   }));
-  lists.set(id, { at: Date.now(), list });
+  lists.set(id, { at: Date.now(), list, from });
   return list;
 }
 
@@ -153,7 +171,7 @@ function geminiSchema(schema) {
 }
 
 export async function callCompat({ model, instructions, input, tools, toolChoice }, sink, signal) {
-  const id = providerOf(model), p = providers()[id];
+  const id = providerOf(model), p = await located(id, providers()[id]);
   const fns = tools.filter(t => t.type === 'function').map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: id === 'gemini' ? geminiSchema(t.parameters) : t.parameters } }));
   const body = {
     model: model.slice(id.length + 1), messages: toMessages(instructions, input, id, model), stream: true, stream_options: { include_usage: true },

@@ -9,7 +9,9 @@ import { childEnv } from './util.js';
 // ponytail: node_modules/.venv are excluded, so rewind doesn't restore them; reinstall after rewinding.
 const run = promisify(execFile);
 const EXCLUDE = '.nexus/\nnode_modules/\n.venv/\n__pycache__/\n';
-const ID = ['-c', 'user.name=nexus', '-c', 'user.email=nexus@localhost', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+// A snapshot keeps files byte for byte: no line-ending conversion from a global core.autocrlf (Git for Windows turns it on) or a project's .gitattributes.
+const ID = ['-c', 'user.name=nexus', '-c', 'user.email=nexus@localhost', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.autocrlf=false'];
+const ATTRIBUTES = '* -text\n';
 // What git init writes. A shadow repo whose config says more (a filter, diff driver or fsmonitor runs a command) came from
 // somewhere else, such as a repo that committed its own .nexus, so it's set aside instead of used.
 const INIT_CONFIG = /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|symlinks|ignorecase|precomposeunicode|worktree)|extensions\.objectformat)=/;
@@ -24,7 +26,10 @@ async function ensure(cwd) {
   const dir = path.join(cwd, '.nexus', 'checkpoints.git');
   if (fs.existsSync(path.join(dir, 'HEAD'))) {
     const keys = await run('git', ['config', '--file', path.join(dir, 'config'), '--list'], { env: childEnv(), windowsHide: true }).then(r => r.stdout.split('\n').filter(Boolean), () => ['unreadable']);
-    if (keys.every(k => INIT_CONFIG.test(k))) return;
+    if (keys.every(k => INIT_CONFIG.test(k))) {
+      fs.writeFileSync(path.join(dir, 'info', 'attributes'), ATTRIBUTES); // shadow repos made before this get it too
+      return;
+    }
     console.warn(`Set aside ${dir}: its git config holds more than git init writes.`);
     fs.renameSync(dir, `${dir}.untrusted-${Date.now()}`);
   }
@@ -32,6 +37,7 @@ async function ensure(cwd) {
   await git(cwd, 'init', '-q');
   fs.mkdirSync(path.join(dir, 'info'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'info', 'exclude'), EXCLUDE);
+  fs.writeFileSync(path.join(dir, 'info', 'attributes'), ATTRIBUTES);
 }
 
 export async function snapshot(cwd, message = 'checkpoint') {
@@ -58,10 +64,11 @@ export async function restoreFile(cwd, sha, file) {
   else fs.rmSync(path.join(cwd, file), { force: true });
 }
 
-export async function diff(cwd, sha) {
+// prefix: a folder written before each path (with forward slashes, which git doesn't quote), for a diff shown beside another folder's.
+export async function diff(cwd, sha, prefix = '') {
   await ensure(cwd);
   await git(cwd, 'add', '-A');
   // No rename detection and no quoting, so every header names one real path that Undo file can put back.
-  const out = await git(cwd, '-c', 'core.quotePath=false', 'diff', '--no-color', '--no-renames', '--no-ext-diff', sha);
+  const out = await git(cwd, '-c', 'core.quotePath=false', 'diff', '--no-color', '--no-renames', '--no-ext-diff', ...(prefix ? [`--src-prefix=a/${prefix}/`, `--dst-prefix=b/${prefix}/`] : []), sha);
   return out.length > 2_000_000 ? `${out.slice(0, 2_000_000)}\n… diff truncated …` : out;
 }

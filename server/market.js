@@ -1,5 +1,8 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import agentCatalog, { CATEGORIES } from '../catalog/agents.js';
 import mcpCatalog from '../catalog/mcp.js';
+import { parseFrontmatter } from './extensions.js';
 
 // The marketplace: hand-picked agents and MCP servers that ship with Nexus, plus live listings from
 // aiagentslist.com and Hugging Face. Listing text comes from the internet: the page shows it as plain text,
@@ -14,10 +17,12 @@ const fail = (status, message) => Object.assign(new Error(message), { status });
 export const SOURCES = {
   agents: [['nexus', 'Nexus picks'], ['aiagentslist', 'aiagentslist.com'], ['huggingface', 'Hugging Face']],
   mcp: [['nexus', 'Nexus picks'], ['huggingface', 'Hugging Face'], ['aiagentslist', 'aiagentslist.com']],
+  skills: [['anthropic', 'Anthropic'], ['collections', 'Collections'], ['skillssh', 'skills.sh']],
 };
 export const LINKS = {
   agents: [['aiagentslist.com/agents', `${AAL}/agents`], ['Hugging Face tiny-agents', `${HF}/datasets/tiny-agents/tiny-agents`]],
   mcp: [['aiagentslist.com/mcp-servers', `${AAL}/mcp-servers`], ['Hugging Face MCP Spaces', `${HF}/spaces?filter=mcp-server`], ['MCP servers on GitHub', 'https://github.com/modelcontextprotocol/servers']],
+  skills: [['skills.sh', 'https://skills.sh'], ['Anthropic skills on GitHub', 'https://github.com/anthropics/skills'], ['agent-skills by Addy Osmani', 'https://github.com/addyosmani/agent-skills']],
 };
 
 async function get(url, json = false) {
@@ -239,16 +244,132 @@ async function huggingfaceItem(kind, id) {
   };
 }
 
+// ---- skills: a folder with a SKILL.md. Every list points at GitHub, so that is where they are read from ----
+// ponytail: unauthenticated GitHub API (60 requests an hour); one tree request per repo, cached, and files come from raw.githubusercontent.com.
+const GH = 'https://api.github.com';
+const RAW = 'https://raw.githubusercontent.com';
+const REPO = /^[\w.-]+\/[\w.-]+$/;
+const MAX_FILES = 200, MAX_BYTES = 10 * 1024 * 1024;
+const rawUrl = (repo, file) => `${RAW}/${repo}/HEAD/${file.split('/').map(encodeURIComponent).join('/')}`;
+const repoFiles = async repo => {
+  if (!REPO.test(repo)) throw fail(400, 'Bad GitHub repository.');
+  return (await get(`${GH}/repos/${repo}/git/trees/HEAD?recursive=1`, true)).tree.filter(f => f.type === 'blob');
+};
+// '' for a repo whose root is the skill
+const skillDirs = files => files.filter(f => f.path === 'SKILL.md' || f.path.endsWith('/SKILL.md')).map(f => f.path.slice(0, -'SKILL.md'.length).replace(/\/$/, ''));
+
+async function skillAt(repo, dir, source) {
+  const { meta } = parseFrontmatter(await get(rawUrl(repo, dir ? `${dir}/SKILL.md` : 'SKILL.md')).catch(() => ''));
+  return { source, kind: 'skills', id: `${repo}:${dir}`, name: meta.name || dir.split('/').pop() || repo.split('/')[1], author: repo.split('/')[0],
+    description: meta.description || '', url: `https://github.com/${repo}/tree/HEAD/${dir}`, installable: true };
+}
+
+// Every SKILL.md is its own download, so big collections are read 16 at a time. ponytail: capped at 400 skills per repo.
+async function batched(items, fn, size = 16) {
+  const out = [];
+  for (let i = 0; i < items.length; i += size) out.push(...await Promise.all(items.slice(i, i + size).map(fn)));
+  return out;
+}
+
+async function repoSkills(repo, under, terms, source) {
+  const dirs = skillDirs(await repoFiles(repo)).filter(d => !under || d === under || d.startsWith(`${under}/`));
+  const found = await batched(dirs.slice(0, 400), d => skillAt(repo, d, source));
+  return found.filter(i => matches(terms, i.name, i.description));
+}
+
+// Well-known GitHub repos full of skills. Picking one lists its skills, the same way a pasted link does.
+const COLLECTIONS = [
+  ['obra/superpowers', 'Superpowers', 'A way of working for coding agents: brainstorm, plan, test first, debug systematically, review.'],
+  ['addyosmani/agent-skills', 'Agent Skills by Addy Osmani', 'Production-grade engineering skills: specs, testing, performance, accessibility, shipping.'],
+  ['vercel-labs/agent-skills', 'Vercel', "Vercel's skills for React and Next.js best practices, web design and deploying."],
+  ['openai/skills', 'OpenAI', 'The skills catalog for Codex: documents, spreadsheets, GitHub, deploys and more.'],
+  ['huggingface/skills', 'Hugging Face', 'Train and evaluate models, work with datasets, and publish to the Hugging Face Hub.'],
+  ['trailofbits/skills', 'Trail of Bits', 'Security research, vulnerability detection and audit workflows.'],
+  ['K-Dense-AI/scientific-agent-skills', 'Scientific skills by K-Dense', 'Science: bioinformatics, chemistry, data analysis, papers and lab databases.'],
+];
+
+// A GitHub link pasted into the search box, to a repo, a folder or a SKILL.md: what lists like awesome-skills point at.
+const githubLink = q => /github\.com\/([\w.-]+\/[\w.-]+?)(?:\.git)?(?:\/(?:tree|blob)\/[^/\s]+\/?([^\s?#]*))?\/?(?:[?#]\S*)?$/.exec(String(q || '').trim());
+
+async function skillssh(terms) {
+  const q = terms.join(' ');
+  if (q.length < 2) throw fail(400, 'Type at least two letters to search skills.sh, or paste a GitHub link to a skill.');
+  const { skills = [] } = await get(`https://skills.sh/api/search?q=${encodeURIComponent(q)}`, true);
+  return skills.filter(s => REPO.test(s.source)).slice(0, 60).map(s => ({
+    source: 'skillssh', kind: 'skills', id: `${s.source}/${s.skillId}`, name: s.name, author: s.source, stats: `↓ ${compact(s.installs || 0)}`,
+    description: `From ${s.source} on GitHub.`, url: `https://skills.sh/${s.source}/${s.skillId}`, installable: true,
+  }));
+}
+
+// "owner/repo:dir" from a GitHub listing, or "owner/repo/skill" from skills.sh, which names the skill but not its folder.
+async function skillItem(source, id) {
+  let repo, dir;
+  if (id.includes(':')) [repo, dir] = [id.slice(0, id.indexOf(':')), id.slice(id.indexOf(':') + 1)];
+  else {
+    const [owner, name, ...rest] = id.split('/');
+    repo = `${owner}/${name}`;
+    const want = rest.join('/'), dirs = skillDirs(await repoFiles(repo));
+    dir = dirs.find(d => d.split('/').pop() === want);
+    if (dir === undefined) dir = (await batched(dirs.slice(0, 400), async d => [d, (await skillAt(repo, d)).name])).find(([, n]) => n === want)?.[0];
+    if (dir === undefined) throw fail(404, `Couldn't find the skill ${want} in ${repo}.`);
+  }
+  if (!REPO.test(repo) || dir.split('/').includes('..')) throw fail(400, 'Bad skill location.');
+  const files = (await repoFiles(repo)).filter(f => !dir || f.path.startsWith(`${dir}/`));
+  if (!files.some(f => f.path === (dir ? `${dir}/SKILL.md` : 'SKILL.md'))) throw fail(404, 'No SKILL.md there.');
+  const size = files.reduce((a, f) => a + (f.size || 0), 0);
+  const info = await skillAt(repo, dir, source);
+  return {
+    ...info, files: files.map(f => (dir ? f.path.slice(dir.length + 1) : f.path)), size, skill: { repo, dir }, links: [['GitHub', info.url]],
+    installable: files.length <= MAX_FILES && size <= MAX_BYTES,
+    notes: 'A skill is instructions plus any scripts or files it brings. The agent reads it when a task fits, and runs its scripts only with your approval, unless autopilot or bypass is on. Check the source first.',
+  };
+}
+
+// Downloads the folder into <root>/skills/<name>, replacing an older copy only once the new one is complete.
+export async function installSkill(repo, dir, root) {
+  const it = await skillItem('github', `${repo}:${dir}`);
+  if (!it.installable) throw fail(400, `${it.name} is too big to install (${it.files.length} files, ${Math.round(it.size / 1024)} KB).`);
+  const name = it.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+|-+$/g, '').slice(0, 64) || 'skill';
+  const dest = path.join(root, 'skills', name), part = `${dest}.part-${Date.now()}`;
+  try {
+    for (const rel of it.files) {
+      if (path.isAbsolute(rel) || rel.split('/').some(p => p === '..' || p === '')) throw fail(400, `Unsafe path in the skill: ${rel}`);
+      let res;
+      try { res = await fetch(rawUrl(repo, dir ? `${dir}/${rel}` : rel), { headers: UA, signal: AbortSignal.timeout(30000) }); } catch (err) { throw fail(502, `Couldn't download ${rel}: ${err.message}`); }
+      if (!res.ok) throw fail(502, `GitHub answered ${res.status} for ${rel}.`);
+      const file = path.join(part, ...rel.split('/'));
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+    }
+    fs.writeFileSync(path.join(part, '.nexus-source.json'), JSON.stringify({ repo, dir })); // where Update downloads from
+    fs.rmSync(dest, { recursive: true, force: true });
+    fs.renameSync(part, dest);
+  } finally {
+    fs.rmSync(part, { recursive: true, force: true });
+  }
+  return name;
+}
+
 // ---- entry points ----
 export async function search(kind, source, q) {
   if (!SOURCES[kind]?.some(([id]) => id === source)) throw fail(400, 'Unknown marketplace source.');
   const terms = words(q);
+  if (kind === 'skills') {
+    const link = githubLink(q);
+    if (link) return repoSkills(link[1], (link[2] || '').replace(/\/?SKILL\.md$/, '').replace(/\/$/, ''), [], source);
+    if (source === 'collections') {
+      return COLLECTIONS.filter(([repo, name, description]) => matches(terms, repo, name, description)).map(([repo, name, description]) => ({
+        source, kind: 'skills', id: repo, name, author: repo.split('/')[0], description, url: `https://github.com/${repo}`, collection: true }));
+    }
+    return source === 'anthropic' ? repoSkills('anthropics/skills', 'skills', terms, source) : skillssh(terms);
+  }
   if (source === 'nexus') return nexus(kind, terms);
   return (source === 'aiagentslist' ? aiagentslist : huggingface)(kind, terms);
 }
 
 export async function item(kind, source, id) {
   if (!SOURCES[kind]?.some(([s]) => s === source)) throw fail(400, 'Unknown marketplace source.');
+  if (kind === 'skills') return skillItem(source, String(id));
   if (source === 'nexus') return nexusItem(kind, id);
   return (source === 'aiagentslist' ? aiagentslistItem : huggingfaceItem)(kind, String(id));
 }

@@ -10,8 +10,9 @@ import { agentDefs, commands, instructions, runHooks, skills } from './extension
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
+import { HIGH_RISK, parseRisk, RISK_PROMPT, riskInput, riskRules } from './risk.js';
 import { decide, execTool, findAIComments, hasTool, killGroup, ruleKey, shells, TOOL_DEFS } from './tools.js';
-import { childEnv, clip, NEXUS_HOME, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
+import { apiKey, childEnv, clip, isInside, NEXUS_HOME, realish, newId, postWithRetry, readJson, readSettings, slug, sseEvents, writeAtomic } from './util.js';
 
 export const hub = new EventEmitter();
 hub.setMaxListeners(0);
@@ -28,13 +29,29 @@ const compactAt = s => {
   return context ? Math.min(limit, Math.floor(context * 0.85)) : limit;
 };
 
+// Chats stay loaded while in use. Past a few, the least recently used idle ones are saved and let go, and load again when opened,
+// so memory doesn't grow with every chat opened since the server started.
+const KEEP_SESSIONS = 6;
+export const loadedSessions = () => [...sessions.keys()];
+const idle = s => !s.running && !s.queue.length && !s.pending.size && !s.controller && !s.watching && !s.naming
+  && ![...agents.values()].some(a => a.project === s.name && a.status === 'running')
+  && ![...shells.values()].some(sh => sh.project === s.name && sh.status === 'running');
+function trimSessions() {
+  const watching = watched();
+  for (const s of sessions.values()) { // oldest first
+    if (sessions.size <= KEEP_SESSIONS) return;
+    if (!idle(s) || watching.includes(s.name)) continue;
+    if (s.state.log.length) persist(s);
+    sessions.delete(s.name);
+  }
+}
 export function getSession(name) {
   let s = sessions.get(name);
-  if (!s) {
-    s = { name, state: projects.load(name), queue: [], pending: new Map(), running: false, controller: null };
-    sessions.set(name, s);
-    distrustCommitted(s);
-  }
+  if (s) { sessions.delete(name); sessions.set(name, s); return s; } // most recently used last
+  s = { name, state: projects.load(name), queue: [], pending: new Map(), running: false, controller: null };
+  sessions.set(name, s);
+  distrustCommitted(s);
+  trimSessions();
   return s;
 }
 
@@ -46,11 +63,13 @@ function distrustCommitted(s) {
   } catch { return; } // not a git repository
   if (!tracked.split('\n').some(f => f && !projects.SHARED.some(d => f.startsWith(`.nexus/${d}/`)))) return;
   const st = s.state;
-  if (st.mode === 'default' && !st.autopilot && !st.allow?.length && !st.check) return;
-  Object.assign(st, { mode: 'default', autopilot: false, allow: [], check: '' });
-  st.log.push({ id: newId(), type: 'system', text: "This project's git repository tracks Nexus chat data in .nexus, so the mode, approvals, autopilot and /check saved there were reset. Stop tracking .nexus (keep only agents, skills and commands) to keep your settings." });
+  if (st.mode === 'default' && !st.autopilot && !st.allow?.length && !st.check && !st.dirs?.length) return;
+  Object.assign(st, { mode: 'default', autopilot: false, allow: [], check: '', dirs: [] });
+  st.log.push({ id: newId(), type: 'system', text: "This project's git repository tracks Nexus chat data in .nexus, so the mode, approvals, autopilot, /check and added folders saved there were reset. Stop tracking .nexus (keep only agents, skills and commands) to keep your settings." });
 }
 const cwdOf = s => projects.projectDir(s.name);
+// Waiting on the user: a question, a plan or a tool call to approve.
+export const isWaiting = name => Boolean(sessions.get(name)?.pending.size);
 export const isBusy = name => {
   const s = sessions.get(name);
   return Boolean(s?.running)
@@ -58,19 +77,29 @@ export const isBusy = name => {
     || [...shells.values()].some(sh => sh.project === name && sh.status === 'running');
 };
 
+// A long chat's whole log is megabytes on every open and reconnect, so the page gets the newest entries
+// and asks for older ones (olderEntries) when you scroll back.
+export const LOG_WINDOW = 300;
 export function publicState(s) {
-  const { items, ...rest } = s.state;
-  return { ...rest, name: s.name, running: s.running, compactAt: compactAt(s) };
+  const { items, log, ...rest } = s.state;
+  return { ...rest, log: log.slice(-LOG_WINDOW), older: Math.max(0, log.length - LOG_WINDOW), name: s.name, running: s.running, compactAt: compactAt(s) };
+}
+// The entries just before the one with this id.
+export function olderEntries(name, before) {
+  const { log } = getSession(name).state, end = log.findIndex(e => e.id === before);
+  if (end < 0) throw projects.httpError(404, 'That message is no longer in this chat. Reload the page.');
+  const start = Math.max(0, end - LOG_WINDOW);
+  return { entries: log.slice(start, end), older: start };
 }
 
 const persist = s => projects.save(s.name, s.state);
-const status = s => hub.emit('project', s.name, { t: 'status', running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), budget: s.state.budget || 0, compactAt: compactAt(s) });
+const status = s => hub.emit('project', s.name, { t: 'status', running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), budget: s.state.budget || 0, compactAt: compactAt(s), dirs: s.state.dirs || [] });
 const send = (s, ev) => hub.emit('project', s.name, ev);
 
 function addEntry(s, entry) {
   entry.id ||= newId();
   s.state.log.push(entry);
-  send(s, { t: 'entry', entry });
+  send(s, { t: 'entry', entry, added: true });
   return entry;
 }
 const note = (s, text, type = 'system') => { addEntry(s, { type, text }); persist(s); };
@@ -94,7 +123,7 @@ export function requestBody({ model, effort, instructions: sys, input, tools, to
   };
 }
 
-const fetchStream = (body, signal) => postWithRetry('OpenAI', 'https://api.openai.com/v1/responses', { authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'content-type': 'application/json' }, body, signal);
+const fetchStream = (body, signal) => postWithRetry('OpenAI', 'https://api.openai.com/v1/responses', { authorization: `Bearer ${apiKey('OPENAI_API_KEY')}`, 'content-type': 'application/json' }, body, signal);
 
 // Each request's estimated cost rides on its usage, so conversations, subagents and compaction all count it.
 async function callModel(params, sink, signal) {
@@ -166,7 +195,7 @@ function systemPrompt(s, extra = '', sub = false, dir = cwdOf(s)) {
 
 # Environment
 Project directory: ${dir}
-The conversation is stored in .nexus/ inside it. Leave that folder alone.
+The conversation is stored in .nexus/ inside it. Leave that folder alone.${s.state.dirs?.length ? `\nAlso part of this project, to read and edit the same way (each has a .nexus/ to leave alone): ${s.state.dirs.join(', ')}` : ''}
 Platform: ${process.platform}. Date: ${new Date().toISOString().slice(0, 10)}. Permission mode: ${s.state.mode}.
 
 # Available subagent types
@@ -228,7 +257,7 @@ async function runTool(s, call, ctx) {
   const finish = (output, status = 'done') => {
     const text = typeof output === 'string';
     // The user sees the images the agent looked at (screenshots, image files), as with their own attachments.
-    setEntry(s, sink, entry, { status, output: text ? clip(output, 60000) : '', images: text ? undefined : output.map(o => o.image_url) });
+    setEntry(s, sink, entry, { status, output: text ? clip(output, 60000) : '', images: text ? undefined : output.map(o => projects.storeImage(s.name, o.image_url)) });
     return output;
   };
   if (!args) return finish('Tool arguments were not valid JSON. Retry with valid JSON.', 'error');
@@ -238,10 +267,24 @@ async function runTool(s, call, ctx) {
   if (verdict.action === 'deny') return finish(verdict.reason, 'denied');
   const pre = await runHooks('PreToolUse', { tool: call.name, input: args }, cwd);
   if (pre.blocked) return finish(`Blocked by hook: ${pre.reason}`, 'denied');
+  // A high-risk call is held once so the agent can look for a safer way. Made again, it runs on autopilot or bypass, and asks you otherwise.
+  const risk = await assessRisk(s, call.name, args, cwd);
+  if (risk) {
+    const key = `${call.name}\0${JSON.stringify(args)}`, goAhead = s.state.autopilot || s.state.mode === 'bypass';
+    s.riskHeld ||= new Set();
+    if (!s.riskHeld.has(key)) {
+      s.riskHeld.add(key);
+      setEntry(s, sink, entry, { risk });
+      return finish(`Nexus held this call because it rates it high risk (${risk.score}/10). ${risk.why}${risk.safer ? ` A safer way may be: ${risk.safer}` : ''}\nThink it over before going on. If a safer way gets the same result, use it instead. If this exact call really is needed, make it again unchanged and ${goAhead ? 'it will run' : 'the user will be asked to approve it'}.`, 'held');
+    }
+    s.riskHeld.delete(key);
+    entry.risk = risk;
+    if (!goAhead) verdict = { action: 'ask' };
+  }
   if (verdict.action === 'ask') {
     const answer = await askUser(s, sink, entry, signal);
     if (answer.decision === 'deny') return finish(answer.message ? `User denied this: ${answer.message}` : 'User denied this tool call.', 'denied');
-    if (answer.decision === 'always') s.state.allow.push(ruleKey(call.name, args, cwd));
+    if (answer.decision === 'always') s.state.allow.push(ruleKey(call.name, args, cwd, s.state.dirs));
     setEntry(s, sink, entry, { status: 'running', autopilot: answer.decision === 'auto' || undefined });
     persist(s);
   }
@@ -369,12 +412,18 @@ export function listAgents() {
       const id = f.replace(/\.json$/, '');
       if (agents.has(id)) continue;
       const a = readJson(path.join(dir, f));
-      if (a) agents.set(id, { ...a, project: name, status: a.status === 'running' ? 'interrupted' : a.status });
+      if (a) agents.set(id, { ...agentPublic(a), project: name, status: a.status === 'running' ? 'interrupted' : a.status });
     }
   }
   return [...agents.values()].map(agentPublic).sort((x, y) => y.started - x.started);
 }
-export const getAgent = id => agents.get(id);
+// A finished agent's log and model context are read from its file when asked for, rather than held in memory.
+export function getAgent(id) {
+  const a = agents.get(id);
+  if (!a || a.log) return a;
+  const { log = [] } = readJson(agentFile(a), {});
+  return { ...a, log };
+}
 export function stopAgent(id) { agents.get(id)?.controller?.abort(); }
 
 export async function runSubagent(s, args, parentSignal) {
@@ -429,6 +478,8 @@ export async function runSubagent(s, args, parentSignal) {
     a.ended = Date.now();
     saveAgent(a);
     announce(a);
+    delete a.log;
+    delete a.items;
     return text;
   });
   a.work = work;
@@ -611,8 +662,10 @@ async function drainQueue(s) {
       text = withInjection(text, inject);
       Object.assign(m.entry, { queued: false, itemsLen: s.state.items.length, gen: s.state.gen, injected: Boolean(inject) || undefined });
       s.checkFixes = 0;
+      s.riskHeld = null; // a call held in an earlier turn is held again if it comes back
       s.autoSteps = 0;
       m.entry.cp = await checkpoint.snapshot(cwdOf(s), m.entry.text.slice(0, 72) || 'prompt');
+      if (s.state.dirs?.length) m.entry.cps = Object.fromEntries(await Promise.all(s.state.dirs.map(async d => [d, await checkpoint.snapshot(d, m.entry.text.slice(0, 72) || 'prompt')])));
       send(s, { t: 'entry', entry: m.entry });
       if (s.state.agentSwitch !== undefined) {
         const to = s.state.agentSwitch;
@@ -666,11 +719,11 @@ async function startTurn(s) {
 // /check: after a turn that changed files, run the user's command and hand failures back, a few rounds at most.
 const CHECK_FIXES = 3;
 async function autoCheck(s, signal) {
-  const cp = lastCheckpoint(s)?.cp;
-  if (!s.state.check || !cp || signal.aborted || !(await checkpoint.diff(cwdOf(s), cp))) return;
+  const last = lastCheckpoint(s);
+  if (!s.state.check || !last || signal.aborted || !(await diffSince(s, last))) return;
   const command = s.state.check;
   const entry = addEntry(s, { type: 'tool', name: 'Bash', args: { command }, status: 'running', output: '' });
-  const output = await execTool('Bash', { command, timeout: 600000 }, { cwd: cwdOf(s), session: s, signal, progress: t => { entry.output += t; send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
+  const output = await execTool('Bash', { command, timeout: 600000 }, { cwd: cwdOf(s), session: s, signal, progress: t => { entry.output = (entry.output + t).slice(-60000); send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
   const failed = /^Failed to start|\n\[(exit code \d+|Timed out after \d+ ms)\]$/.test(output);
   Object.assign(entry, { status: failed ? 'error' : 'done', output });
   send(s, { t: 'entry', entry });
@@ -712,9 +765,9 @@ Panels: \`/files\` \`/changes\` \`/terminal\` \`/agents\` \`/settings\` · Hover
 
 **Keys** Enter send · Shift+Enter newline · Shift+Tab cycle mode · Esc interrupt
 
-Custom commands live in \`.nexus/commands/*.md\` or \`~/.nexus/commands/*.md\` (\`$ARGUMENTS\` is substituted), and every skill is also a command.
+Custom commands live in \`.nexus/commands/*.md\` or \`~/.nexus/commands/*.md\` (\`$ARGUMENTS\` is substituted); Claude Code's \`.claude/commands\` and VS Code's \`.github/prompts/*.prompt.md\` work too. Every skill is also a command, and the marketplace's Skills tab installs more.
 
-**Agents and prompts** \`/create-agent <what it does>\` has the AI write a new agent type · the Agent button next to the model switches this chat to one · the Prompts button edits the system prompt and text injected into every message, for this chat, this project or everywhere.`;
+**Agents and prompts** \`/create-agent <what it does>\` has the AI write a new agent type · \`/create-skill <what it does>\` has it write a skill · the Agent button next to the model switches this chat to one · the Prompts button edits the system prompt and text injected into every message, for this chat, this project or everywhere.`;
 
 const MODES = ['default', 'acceptEdits', 'plan', 'bypass'];
 
@@ -736,6 +789,29 @@ export function setOption(s, key, value) {
   if (key === 'autopilot' && value) { s.autoSteps = 0; for (const resolve of s.pending.values()) resolve({ decision: 'auto' }); }
   persist(s);
   status(s);
+}
+
+// Other folders a chat works in besides its own: the tools treat them as the project, and each prompt checkpoints them for rewind.
+export function folders(name) {
+  const s = getSession(name);
+  return { main: fs.realpathSync.native(cwdOf(s)), dirs: s.state.dirs || [] };
+}
+export function addFolder(name, dir) {
+  const s = getSession(name), real = projects.folderPath(dir), { main, dirs } = folders(name);
+  const have = [main, ...dirs].find(d => isInside(d, real) || isInside(real, d));
+  if (have) throw projects.httpError(409, have === real ? 'That folder is already part of this chat.' : `That folder overlaps ${have}, which this chat already has.`);
+  projects.excludeNexus(real);
+  s.state.dirs = [...dirs, real];
+  persist(s);
+  status(s);
+  return folders(name);
+}
+export function removeFolder(name, dir) {
+  const s = getSession(name);
+  s.state.dirs = (s.state.dirs || []).filter(d => d !== dir);
+  persist(s);
+  status(s);
+  return folders(name);
 }
 
 // ---- prompts ----
@@ -763,6 +839,19 @@ tools: <comma-separated tool names; leave this line out to allow every tool>
 
 Tools you can list: Bash, BashOutput, KillShell, Read, Write, Edit, NotebookEdit, Glob, Grep, WebFetch, Screenshot, web_search, TodoWrite, Task, Skill, and any mcp__ tools that are connected. Give it only what it needs: a read-only reviewer gets Read, Glob and Grep.
 Look at this project first if that helps tailor the instructions. Don't overwrite an existing agent type unless asked. Finish by saying its name, and that the Agent button next to the model switches this chat to it.`;
+
+const createSkillPrompt = (request, cwd) => `Create a new Agent Skill for this request: ${request}
+
+A skill is a folder with a SKILL.md. Write it to ${path.join(cwd, '.nexus', 'skills')}/<name>/SKILL.md, or to ${path.join(NEXUS_HOME, 'skills')}/<name>/SKILL.md if the request says it is for every project. Use this format:
+
+---
+name: <short-lowercase-name-with-hyphens, the same as the folder>
+description: <one or two sentences: what it does and when to use it, since that is how the agent decides to read it>
+---
+<the instructions: when it applies, the steps, what to check, and an example or two>
+
+Keep SKILL.md short. Put long reference material or helper scripts in files beside it and say in SKILL.md when to read or run them.
+Look at this project first if that helps tailor it. Don't overwrite an existing skill unless asked. Finish by saying its name, and that /<name> runs it, or Nexus reads it on its own when a task fits.`;
 
 function clear(s) {
   if (s.state.log.length) writeAtomic(path.join(cwdOf(s), '.nexus', 'history', `${Date.now()}.json`), JSON.stringify(s.state.log));
@@ -870,9 +959,12 @@ Reply with the pull request's URL.`, text);
     case 'create-agent':
       if (!arg) return note(s, 'Usage: `/create-agent <what it should do>`, for example `/create-agent reviews my changes for security holes before I commit`', 'error');
       return prompt(s, createAgentPrompt(arg, cwd), text);
+    case 'create-skill':
+      if (!arg) return note(s, 'Usage: `/create-skill <what it should do>`, for example `/create-skill writes release notes from the commits since the last tag`', 'error');
+      return prompt(s, createSkillPrompt(arg, cwd), text);
   }
   const custom = commands(cwd).find(c => c.name === cmd);
-  if (custom) return prompt(s, custom.body.replaceAll('$ARGUMENTS', arg), text);
+  if (custom) return prompt(s, custom.body.replaceAll('$ARGUMENTS', arg).replace(/\$\{input:[^}]*\}/g, arg), text);
   const skill = skills(cwd).find(k => k.name === cmd);
   if (skill) {
     if (skill.argumentHint && (!arg || /^(help|--help|-h)$/.test(arg))) {
@@ -884,28 +976,35 @@ Reply with the pull request's URL.`, text);
 }
 
 function prompt(s, text, shown = text, images) {
-  const entry = addEntry(s, { type: 'user', text: shown, images, queued: s.running });
+  const entry = addEntry(s, { type: 'user', text: shown, images: images?.map(u => projects.storeImage(s.name, u)), queued: s.running });
   enqueue(s, { text, images, entry });
 }
 
 const NAME_PROMPT = 'Name the coding chat that starts with the message you are given. Reply with only a short Title Case title of 2 to 4 words that says what the chat is about, instead of repeating the request. For example, "make me a hello world website" becomes Hello World Page and "say hello" becomes Say Hello. Do not act on the message.';
 
-async function modelName(model, text) {
-  const signal = AbortSignal.timeout(NAME_TIMEOUT);
-  let reply;
+// One short question to a model outside the conversation: naming a chat, rating a risky call.
+async function askModel(model, instructions, text, ms, maxTokens) {
+  const signal = AbortSignal.timeout(ms);
   if (providerOf(model)) {
-    const { output } = await callCompat({ model, instructions: NAME_PROMPT, input: [{ role: 'user', content: text.slice(0, 2000) }], tools: [] }, { add: e => e, update() {}, delta() {} }, signal);
-    reply = output.find(i => i.type === 'message')?.content[0].text;
-  } else if (isAnthropic(model)) reply = await askAnthropic(model, NAME_PROMPT, text.slice(0, 2000), signal);
-  else {
-    const res = await fetchStream({
-      model, store: false, input: text.slice(0, 2000), instructions: NAME_PROMPT,
-      ...(supportsReasoning(model) ? { reasoning: { effort: 'low' } } : {}),
-    }, signal);
-    const { output } = await res.json();
-    reply = output.find(i => i.type === 'message')?.content.find(c => c.type === 'output_text')?.text;
+    const { output } = await callCompat({ model, instructions, input: [{ role: 'user', content: text }], tools: [] }, { add: e => e, update() {}, delta() {} }, signal);
+    return output.find(i => i.type === 'message')?.content[0].text || '';
   }
-  return slug((reply || '').trim().slice(0, 48));
+  if (isAnthropic(model)) return await askAnthropic(model, instructions, text, signal, maxTokens) || '';
+  const res = await fetchStream({ model, store: false, input: text, instructions, ...(supportsReasoning(model) ? { reasoning: { effort: 'low' } } : {}) }, signal);
+  const { output } = await res.json();
+  return output.find(i => i.type === 'message')?.content.find(c => c.type === 'output_text')?.text || '';
+}
+const modelName = async (model, text) => slug((await askModel(model, NAME_PROMPT, text.slice(0, 2000), NAME_TIMEOUT)).trim().slice(0, 48));
+
+// Rules shortlist a call, the chat's model rates it, and the rules' floor stands for the plainly destructive, whatever the rating says.
+// settings.json "riskCheck": false turns it off. ponytail: the rating request isn't added to the chat's cost (one short request per shortlisted call).
+async function assessRisk(s, tool, args, cwd) {
+  const flag = riskRules(tool, args, [cwd, ...(s.state.dirs || [])]);
+  if (!flag || readSettings().riskCheck === false) return null;
+  const rated = parseRisk(await askModel(s.state.model, RISK_PROMPT, riskInput(tool, args, cwd, flag), 20000, 400).catch(() => ''));
+  const score = Math.max(rated?.score ?? 0, flag.floor);
+  if (score < HIGH_RISK) return null;
+  return { score, why: rated && rated.score >= flag.floor && rated.why ? rated.why : `It ${flag.why}.`, safer: rated?.safer || '' };
 }
 
 // Runs before the first turn starts, because a project can't be renamed while its agent works in that directory.
@@ -1014,7 +1113,7 @@ async function direct(s, command) {
   if (s.running) return note(s, 'Stop the agent before running a shell command directly.', 'error');
   const cwd = cwdOf(s);
   const entry = addEntry(s, { type: 'tool', name: 'Bash', args: { command }, status: 'running', output: '', direct: true });
-  const output = await execTool('Bash', { command }, { cwd, session: s, progress: t => { entry.output += t; send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
+  const output = await execTool('Bash', { command }, { cwd, session: s, progress: t => { entry.output = (entry.output + t).slice(-60000); send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
   Object.assign(entry, { status: 'done', output });
   send(s, { t: 'entry', entry });
   s.state.items.push({ role: 'user', content: `I ran this shell command myself:\n$ ${command}\n${output}` });
@@ -1030,6 +1129,8 @@ export async function rewind(name, id, { files = true, conversation = true }) {
   if (files) {
     if (!entry.cp) throw projects.httpError(409, 'That prompt has no file checkpoint.');
     await checkpoint.restore(cwdOf(s), entry.cp);
+    // Added folders rewind too, unless they were taken out of the chat since.
+    for (const [d, cp] of Object.entries(entry.cps || {})) if (cp && s.state.dirs?.includes(d)) await checkpoint.restore(d, cp);
   }
   if (conversation) {
     if (entry.gen !== s.state.gen) throw projects.httpError(409, 'The conversation was compacted after this prompt, so only its files can be rewound.');
@@ -1061,30 +1162,52 @@ export function exportMarkdown(name) {
   return `${out.join('\n\n')}\n`;
 }
 
-const lastCheckpoint = s => [...s.state.log].reverse().find(e => e.type === 'user' && e.cp);
+const lastCheckpoint = s => s.state.log.findLast(e => e.type === 'user' && e.cp);
+// What changed since a prompt, in the main folder and in added folders. Their files are named by full path, so Undo file can find them.
+async function diffSince(s, last) {
+  const parts = [await checkpoint.diff(cwdOf(s), last.cp)];
+  for (const [d, cp] of Object.entries(last.cps || {})) if (cp && s.state.dirs?.includes(d)) parts.push(await checkpoint.diff(d, cp, d.split(path.sep).join('/')));
+  return parts.join('');
+}
+
 export async function changes(name) {
   const s = getSession(name);
   const last = lastCheckpoint(s);
   if (!last) return { since: null, diff: '' };
-  return { since: last.text.slice(0, 80), diff: await checkpoint.diff(cwdOf(s), last.cp) };
+  return { since: last.text.slice(0, 80), id: last.id, kept: last.kept || [], diff: await diffSince(s, last) };
 }
 
+// Keep, in the review bar above the message box: these files stop asking for review and stay as they are.
+export function keepChanges(name, files) {
+  const s = getSession(name), last = lastCheckpoint(s);
+  if (!last || !Array.isArray(files)) return;
+  last.kept = [...new Set([...(last.kept || []), ...files.map(String)])];
+  persist(s);
+}
+
+// file: relative to the main folder, or a full path in it or in an added one.
 export async function undoFile(name, file) {
   const s = getSession(name);
+  file = path.resolve(cwdOf(s), file);
   if (s.running) throw projects.httpError(409, 'Stop the agent before undoing a file.');
   const last = lastCheckpoint(s);
   if (!last) throw projects.httpError(409, 'There is no checkpoint to go back to yet.');
-  await checkpoint.restoreFile(cwdOf(s), last.cp, file);
+  const root = [cwdOf(s), ...(s.state.dirs || [])].find(d => isInside(d, file));
+  // From real paths on both sides: a folder reached through a link (macOS /var is /private/var) would otherwise give ../ paths.
+  const rel = root && path.relative(realish(root), realish(file)).split(path.sep).join('/');
+  if (!rel || rel === '..' || rel.startsWith('../') || path.isAbsolute(rel) || /^\.nexus(\/|$)/.test(rel)) throw projects.httpError(400, 'That file cannot be undone.');
+  const cp = root === cwdOf(s) ? last.cp : last.cps?.[root];
+  if (!cp) throw projects.httpError(409, 'That folder was added after your last prompt, so it has no checkpoint yet.');
+  await checkpoint.restoreFile(root, cp, rel);
 }
 
 // Finds what was said in any chat, newest first, plus chats whose name matches.
-// ponytail: reads every conversation.json per query; keep an index if that ever gets slow.
 export function search(q) {
   const terms = String(q).toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   const out = [];
   for (const { name } of projects.list()) {
-    const log = sessions.get(name)?.state.log ?? projects.load(name).log;
+    const log = sessions.get(name)?.state.log ?? projects.peek(name).log;
     const hits = [];
     for (let i = log.length - 1; i >= 0 && hits.length < 3; i--) {
       const e = log[i];
@@ -1102,7 +1225,7 @@ export function search(q) {
 // Settings shows what every chat has cost, from the same estimates as each chat's meter.
 export function spending() {
   const chats = projects.list().map(({ name }) => {
-    const { cost = 0, unpriced = 0 } = (sessions.get(name)?.state ?? projects.load(name)).usage;
+    const { cost = 0, unpriced = 0 } = (sessions.get(name)?.state ?? projects.peek(name)).usage;
     return { name, cost, unpriced };
   });
   const sum = key => chats.reduce((a, c) => a + c[key], 0);

@@ -1,10 +1,13 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { childEnv, PROJECTS, readJson, validName, writeAtomic } from './util.js';
+import { childEnv, HOME, isInside, PROJECTS, readJson, validName, writeAtomic } from './util.js';
 
 // One project = one conversation = one directory: ~/projects/<name>, which is also the agent's cwd.
+// A folder opened from elsewhere is a link there (a junction on Windows), so every project still has a name in ~/projects.
 export const DEFAULT_MODEL = process.env.NEXUS_MODEL || 'gpt-6.1-sol';
 const blank = () => ({
   model: DEFAULT_MODEL, effort: 'medium', mode: 'default', gen: 0,
@@ -20,14 +23,90 @@ const stateFile = name => path.join(projectDir(name), '.nexus', 'conversation.js
 export function list() {
   fs.mkdirSync(PROJECTS, { recursive: true });
   return fs.readdirSync(PROJECTS, { withFileTypes: true })
-    .filter(d => (d.isDirectory() || d.name === SELF) && validName(d.name))
-    .map(d => {
+    .filter(d => (d.isDirectory() || d.isSymbolicLink()) && validName(d.name))
+    .flatMap(d => {
+      // A linked folder that has gone away (a drive unplugged, a folder moved) is left out until it is back.
+      let stat;
+      try { stat = fs.statSync(projectDir(d.name)); } catch { return []; }
+      if (!stat.isDirectory()) return [];
       const file = stateFile(d.name);
-      const mtime = fs.statSync(fs.existsSync(file) ? file : projectDir(d.name)).mtimeMs;
-      return { name: d.name, updated: mtime };
+      const mtime = fs.existsSync(file) ? fs.statSync(file).mtimeMs : stat.mtimeMs;
+      return [{ name: d.name, updated: mtime, ...(d.isSymbolicLink() ? { dir: fs.realpathSync.native(projectDir(d.name)) } : {}) }];
     })
     .sort((a, b) => b.updated - a.updated);
 }
+
+// The folders inside one folder, for picking a project folder anywhere on this computer. ~ is the home folder.
+export function folders(dir) {
+  dir = path.resolve(HOME, String(dir || '~').trim().replace(/^~(?=$|[\\/])/, HOME));
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (err) { throw httpError(400, `Can't open ${dir} (${err.code}).`); }
+  const isDir = d => d.isDirectory() || (d.isSymbolicLink() && (() => { try { return fs.statSync(path.join(dir, d.name)).isDirectory(); } catch { return false; } })());
+  const names = entries.filter(d => !/^[.$]/.test(d.name) && isDir(d)).map(d => d.name).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  return { path: dir, parent: path.dirname(dir) === dir ? null : path.dirname(dir), folders: names.slice(0, 1000).map(name => ({ name, path: path.join(dir, name) })) };
+}
+
+// The real path of a folder a chat may work in. Checkpoints snapshot it before each prompt, which would never finish on a drive or a home folder.
+export function folderPath(dir) {
+  dir = String(dir || '').trim();
+  let real = null;
+  try { if (path.isAbsolute(dir) && fs.statSync(dir).isDirectory()) real = fs.realpathSync.native(dir); } catch { /* not there */ }
+  if (!real) throw httpError(400, `There's no folder at ${dir || 'that path'}.`);
+  if (path.parse(real).root === real || isInside(real, HOME) || isInside(real, PROJECTS)) {
+    throw httpError(400, 'Pick a project folder, not a whole drive, your home folder or the folder that holds your projects. Nexus snapshots the folder before each prompt.');
+  }
+  return real;
+}
+
+// As with a cloned repo, the chat's own files (.nexus) stay out of a git repo's commits.
+export function excludeNexus(dir) {
+  const exclude = path.join(dir, '.git', 'info', 'exclude');
+  if (!fs.existsSync(path.join(dir, '.git', 'HEAD')) || readText(exclude).split(/\r?\n/).includes('.nexus/')) return;
+  fs.mkdirSync(path.dirname(exclude), { recursive: true });
+  fs.appendFileSync(exclude, '\n.nexus/\n');
+}
+
+// Windows' own Select Folder dialog, which the launcher shows (windows/Nexus.exe --pick-folder) for a browser on this same PC.
+const PICKER = fileURLToPath(new URL('../windows/Nexus.exe', import.meta.url));
+// The browser reached Nexus by its loopback name with no tunnel or proxy headers, so it is at this computer's screen.
+export const localBrowser = h => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(h.host || '')
+  && !['cf-connecting-ip', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip', 'forwarded'].some(k => h[k]);
+export const canPickNatively = headers => process.platform === 'win32' && localBrowser(headers) && fs.existsSync(PICKER);
+let picking = false;
+// done: the chosen folder, or null when cancelled. stop() closes the dialog, for when the page stops waiting.
+export function pickFolder({ title = '', button = '', start = '' } = {}, command = [PICKER]) {
+  if (picking) throw httpError(409, 'A Windows folder dialog is already open. Choose a folder in it or cancel it first.');
+  picking = true;
+  let child;
+  const done = new Promise((resolve, reject) => {
+    child = execFile(command[0], [...command.slice(1), '--pick-folder', title, button, start], { encoding: 'utf8', timeout: 15 * 60_000 }, (err, out, errOut) => {
+      picking = false;
+      if (!err) return resolve(out.trim() || null);
+      if (err.code === 1 || err.killed || err.signal) return resolve(null); // cancelled, or closed because the page stopped waiting
+      reject(httpError(500, `The Windows folder dialog failed: ${String(errOut || err.message).trim()}`));
+    });
+  });
+  return { done, stop: () => child.kill() };
+}
+
+// Opens a folder from anywhere as a project, or returns the project that already has it. The chat's files go in its .nexus.
+export function open(dir) {
+  const real = folderPath(dir);
+  const known = list().find(p => (p.dir || fs.realpathSync.native(projectDir(p.name))) === real);
+  if (known) return known.name;
+  const base = path.basename(real).replace(/[^\w.-]+/g, '-').replace(/^[^a-zA-Z0-9]+/, '').slice(0, 60) || 'folder';
+  fs.mkdirSync(PROJECTS, { recursive: true });
+  let name = base;
+  for (let n = 2; ; n++) {
+    try { fs.symlinkSync(real, projectDir(name), process.platform === 'win32' ? 'junction' : 'dir'); break; } catch (err) {
+      if (err.code !== 'EEXIST') throw httpError(400, `Couldn't open that folder: ${err.message}`);
+      name = `${base}-${n}`;
+    }
+  }
+  excludeNexus(real);
+  return name;
+}
+const readText = file => { try { return fs.readFileSync(file, 'utf8'); } catch { return ''; } };
 
 export const exists = name => validName(name) && fs.existsSync(projectDir(name));
 
@@ -83,17 +162,41 @@ export function rename(from, to) {
 }
 
 // Deleting moves to ~/projects/.trash so a misclick can be undone by hand.
+// A folder opened from elsewhere only loses its link: the folder, and the chat in its .nexus, stay where they are.
 export function trash(name) {
   if (!exists(name)) throw httpError(404, 'Project not found.');
+  if (fs.lstatSync(projectDir(name)).isSymbolicLink()) return fs.unlinkSync(projectDir(name));
   const bin = path.join(PROJECTS, '.trash');
   fs.mkdirSync(bin, { recursive: true });
   fs.renameSync(projectDir(name), path.join(bin, `${name}-${Date.now()}`));
 }
 
+// Images in the chat log are files named by their content in .nexus/images, so the log keeps a short name,
+// saves and reconnects don't carry megabytes of base64, and the browser caches each image for good.
+// The model's own copy (items) keeps the data URL, since the API needs it; compaction drops those.
+const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+export const IMAGE_FILE = /^[a-f0-9]{32}\.(png|jpg|gif|webp)$/;
+export function storeImage(name, url) {
+  const m = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(url));
+  if (!m) return url; // a web link or anything else stays as it is
+  const data = Buffer.from(m[2], 'base64');
+  const file = `${createHash('sha256').update(data).digest('hex').slice(0, 32)}.${IMAGE_EXT[m[1]]}`;
+  const full = path.join(projectDir(name), '.nexus', 'images', file);
+  if (!fs.existsSync(full)) writeAtomic(full, data, 0o644);
+  return `images/${file}`;
+}
+
 export function load(name) {
-  const state = { ...blank(), ...readJson(stateFile(name), {}) };
+  let saved = {};
+  try { saved = JSON.parse(fs.readFileSync(stateFile(name), 'utf8')); } catch (err) {
+    // A chat file that doesn't parse is moved aside rather than overwritten by the next save, so it can still be recovered by hand.
+    if (err.code !== 'ENOENT') fs.renameSync(stateFile(name), `${stateFile(name)}.broken-${Date.now()}`);
+  }
+  const state = { ...blank(), ...saved };
   // Anything mid-flight when the server last stopped can never finish.
   for (const e of state.log) if (['running', 'awaiting'].includes(e.status)) e.status = 'interrupted';
+  // Chats saved before images became files move theirs out on the way in.
+  for (const e of state.log) if (e.images?.some(u => String(u).startsWith('data:'))) e.images = e.images.map(u => storeImage(name, u));
   repairItems(state.items);
   return state;
 }
@@ -118,6 +221,19 @@ export function dropImages(items) {
 }
 
 export const save = (name, state) => writeAtomic(stateFile(name), JSON.stringify(state));
+
+// What search and Settings need from a chat that isn't open: its messages and usage, kept until the file changes,
+// so they don't parse every chat in full each time.
+const peeks = new Map();
+export function peek(name) {
+  let mtime = 0;
+  try { mtime = fs.statSync(stateFile(name)).mtimeMs; } catch { /* no chat saved yet */ }
+  if (peeks.get(name)?.mtime === mtime) return peeks.get(name);
+  const { log = [], usage = {} } = mtime ? readJson(stateFile(name), {}) : {};
+  const out = { mtime, usage, log: log.filter(e => ['user', 'assistant'].includes(e.type) && typeof e.text === 'string').map(({ id, type, text }) => ({ id, type, text })) };
+  peeks.set(name, out);
+  return out;
+}
 
 export function httpError(status, message) {
   return Object.assign(new Error(message), { status });

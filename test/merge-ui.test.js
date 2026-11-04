@@ -102,7 +102,8 @@ test('merged sidebar keeps clone, search, marketplace and the accessible drawer 
   assert.equal(find(side, el => el['aria-label'] === 'Search chats').length, 1);
   assert.equal(find(side, el => el.id === 'nav-market').length, 1);
   const row = find(side, el => hasClass(el, 'newrow'))[0];
-  assert.equal(find(row, el => el.tag === 'button').length, 2);
+  assert.equal(find(row, el => el.tag === 'button').length, 3);
+  assert.equal(find(row, el => el['aria-label'] === 'Open a folder').length, 1);
   assert.equal(find(row, el => el['aria-label'] === 'Clone a git repository').length, 1);
   assert.equal(find(side, el => hasClass(el, 'side-label')).length, 0, 'the default sidebar has no custom Projects heading');
   const projects = find(side, el => hasClass(el, 'plist'));

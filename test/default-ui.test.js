@@ -20,10 +20,14 @@ const mountChat = (context, view) => {
   const end = app.indexOf('\nlet following', start);
   assert.ok(start >= 0 && end > start);
   context.view = view;
-  vm.runInNewContext(`${app.slice(start, end)}\nchatView(view);`, context);
+  const helloAt = app.indexOf('function hello()');
+  const helloEnd = app.indexOf('\n}\n', helloAt) + 3;
+  assert.ok(helloAt >= 0 && helloEnd > helloAt);
+  Object.assign(context, { refreshReview() {}, projectDir() {}, P: name => name, api: () => new Promise(() => {}) });
+  vm.runInNewContext(`${app.slice(start, end)}\n${app.slice(helloAt, helloEnd)}\nchatView(view);`, context);
 };
 
-test('default empty chat shows only its heading, project path and command instructions', () => {
+test('default empty chat shows its heading, project path, starters and command instructions', () => {
   const context = {
     h, entries: new Map(), S: { state: { log: [] }, project: 'fixture' },
     stopFollow() {}, composer: () => h('div', { class: 'composer' }), syncComposer() {},
@@ -37,16 +41,18 @@ test('default empty chat shows only its heading, project path and command instru
   assert.deepEqual(welcome[0].children.map(el => [el.tag, ...el.children]), [
     ['h2', 'What should we build?'],
     ['p', '~/projects/fixture'],
-    ['p', 'Type a request. / runs a command and @ points at a file.'],
+    ['div'],
+    ['p', 'Type a request. / runs a command, @ points at a file and ! runs a shell command.'],
   ]);
   assert.equal(welcome[0].children[1].class, 'mono');
   assert.equal(view.children[0], context.$log);
   assert.equal(view.children[1], context.$todos);
-  assert.equal(view.children.length, 3, 'chat contains the log, todos and composer without a loading row');
-  assert.equal(view.children[2].class, 'composer');
+  assert.equal(view.children.length, 4, 'chat contains the log, todos, review and composer without a loading row');
+  assert.equal(view.children[2].class, 'review');
+  assert.equal(view.children[3].class, 'composer');
   assert.equal(context.$log.role, 'log');
   assert.equal(context.$log['aria-live'], 'polite');
-  assert.deepEqual(context.$log.listeners, ['touchstart', 'wheel']);
+  assert.deepEqual(context.$log.listeners, ['touchstart', 'wheel', 'scroll', 'load', 'error']);
   assert.equal(context.$todos.hidden, true);
 });
 
@@ -64,10 +70,11 @@ test('loading and populated chats retain the default structure without a decorat
     const view = h('div');
     mountChat(context, view);
     assert.equal(context.entries.size, 0, 'each chat view discards stale entry nodes');
-    assert.equal(view.children.length, 3);
+    assert.equal(view.children.length, 4);
     assert.equal(view.children[0], context.$log);
     assert.equal(view.children[1], context.$todos);
-    assert.equal(view.children[2].class, 'composer');
+    assert.equal(view.children[2].class, 'review');
+    assert.equal(view.children[3].class, 'composer');
     assert.equal(find(view, el => el.id === 'hello').length, state && !state.log.length ? 1 : 0);
     assert.deepEqual(rendered, state?.log.length ? [[entry, false]] : []);
     assert.equal(synced, 1);

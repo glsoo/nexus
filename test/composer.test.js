@@ -120,7 +120,7 @@ test('same-project state snapshots refresh the transcript without detaching the 
     syncComposer() { context.synced = (context.synced || 0) + 1; },
     render() { assert.fail('replacing the composer between pointerdown and pointerup loses the first click'); },
     syncTitle() { context.titleSynced = true; },
-    motion() {}, FADE: [], jumpTo: id => { context.jumped = id; },
+    motion() {}, FADE: [], jumpTo: id => { context.jumped = id; }, refreshReview() {}, hello: () => node('div', { id: 'hello' }),
   };
   vm.runInNewContext(section('function syncChat()', '\nlet following'), context);
   vm.runInNewContext(section('function onEvent(', '\n// ---- chat'), context);

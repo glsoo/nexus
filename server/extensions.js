@@ -17,9 +17,18 @@ export function parseFrontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
   const meta = {};
   if (!m) return { meta, body: text };
+  let key = null, block = '';
   for (const line of m[1].split(/\r?\n/)) {
     const kv = /^([\w-]+):\s*(.*)$/.exec(line);
-    if (kv) meta[kv[1]] = kv[2].replace(/^["']|["']$/g, '');
+    if (kv) {
+      [key, block] = [kv[1], /^[>|][-+]?$/.test(kv[2]) ? kv[2][0] : ''];
+      meta[key] = block ? '' : kv[2].replace(/^["']|["']$/g, '');
+    } else if (key && /^\s+\S/.test(line)) {
+      // A value on the indented lines below its key: a YAML > or | block, a long plain value, or a "- item" list (joined with commas).
+      const t = line.trim();
+      if (t.startsWith('- ')) meta[key] += (meta[key] ? ', ' : '') + t.slice(2).replace(/^["']|["']$/g, '');
+      else meta[key] += (meta[key] ? (block === '|' ? '\n' : ' ') : '') + t;
+    }
   }
   return { meta, body: text.slice(m[0].length) };
 }
@@ -59,27 +68,35 @@ export function deleteAgentDef(cwd, name) {
   for (const dir of [path.join(cwd, '.nexus/agents'), path.join(NEXUS_HOME, 'agents')]) fs.rmSync(path.join(dir, `${name}.md`), { force: true });
 }
 
-export function skills(cwd) {
+// Skills and commands set up for other tools work here too: Claude Code, Codex and others (.agents), and VS Code (.github).
+// Nexus's own folders come last, so a skill or command of the same name there wins.
+const OTHER_SKILLS = ['.claude/skills', '.agents/skills'];
+const SHIPPED = fileURLToPath(new URL('../skills', import.meta.url));
+// Skills turned off in Settings (settings.json "skillsOff", by name) stay out of the prompt, the Skill tool and commands; all = true lists them too.
+export function skills(cwd, all = false) {
+  const off = readSettings().skillsOff;
   const out = new Map();
-  for (const root of [fileURLToPath(new URL('../skills', import.meta.url)), ...compat(HOME, 'skills'), path.join(NEXUS_HOME, 'skills'), ...compat(cwd, 'skills'), path.join(cwd, '.nexus/skills')]) {
+  for (const root of [SHIPPED, ...OTHER_SKILLS.map(d => path.join(HOME, d)), ...compat(HOME, 'skills'), path.join(NEXUS_HOME, 'skills'),
+    ...[...OTHER_SKILLS, '.github/skills'].map(d => path.join(cwd, d)), ...compat(cwd, 'skills'), path.join(cwd, '.nexus/skills')]) {
     let names = [];
     try { names = fs.readdirSync(root); } catch { continue; }
     for (const n of names) {
       const file = path.join(root, n, 'SKILL.md');
       if (!fs.existsSync(file)) continue;
       const { meta, body } = parseFrontmatter(fs.readFileSync(file, 'utf8'));
-      out.set(meta.name || n, { name: meta.name || n, description: (meta.description || '').slice(0, 300), argumentHint: meta['argument-hint'] || '', usage: meta.usage || '', body, dir: path.dirname(file) });
+      out.set(meta.name || n, { name: meta.name || n, description: (meta.description || '').slice(0, 300), argumentHint: meta['argument-hint'] || '', usage: meta.usage || '', body, dir: path.dirname(file), off: Array.isArray(off) && off.includes(meta.name || n) });
     }
   }
-  return [...out.values()];
+  return [...out.values()].filter(k => all || !k.off);
 }
 
 export function commands(cwd) {
   const out = new Map();
-  for (const dir of [...compat(HOME, 'commands'), path.join(NEXUS_HOME, 'commands'), ...compat(cwd, 'commands'), path.join(cwd, '.nexus/commands')]) {
+  for (const dir of [path.join(HOME, '.claude/commands'), ...compat(HOME, 'commands'), path.join(NEXUS_HOME, 'commands'),
+    path.join(cwd, '.claude/commands'), path.join(cwd, '.github/prompts'), ...compat(cwd, 'commands'), path.join(cwd, '.nexus/commands')]) {
     for (const file of mdFiles(dir)) {
       const { meta, body } = parseFrontmatter(fs.readFileSync(file, 'utf8'));
-      const name = path.basename(file, '.md');
+      const name = path.basename(file, '.md').replace(/\.prompt$/, ''); // VS Code prompt files are name.prompt.md
       out.set(name, { name, description: meta.description || 'Custom command', body });
     }
   }
@@ -88,6 +105,15 @@ export function commands(cwd) {
 
 // A repo set up for another tool keeps its rules. AGENTS.md is the shared standard, so it wins over these to avoid reading the same rules twice.
 const BORROWED = ['CLAUDE.md', 'GEMINI.md', '.cursorrules', '.windsurfrules', '.github/copilot-instructions.md', 'CONVENTIONS.md'];
+
+// Removes a skill installed into Nexus's own folders; skills shipped with Nexus or kept by other tools stay.
+export function removeSkill(cwd, name) {
+  const skill = skills(cwd, true).find(k => k.name === name);
+  const mine = [path.join(NEXUS_HOME, 'skills'), path.join(cwd, '.nexus', 'skills')];
+  if (!skill || !mine.includes(path.dirname(skill.dir))) throw Object.assign(new Error(`${name} isn't a skill installed in Nexus.`), { status: 404 });
+  fs.rmSync(skill.dir, { recursive: true, force: true });
+}
+export const skillScope = (cwd, dir) => ({ [path.join(NEXUS_HOME, 'skills')]: 'user', [path.join(cwd, '.nexus', 'skills')]: 'project', [SHIPPED]: 'nexus' })[path.dirname(dir)] || 'other';
 
 export function instructions(cwd) {
   const parts = [];

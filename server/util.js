@@ -31,11 +31,25 @@ export function slug(text) {
 
 export const newId = (prefix = 'e') => `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
+export const KEY_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY', 'XAI_API_KEY', 'DASHSCOPE_API_KEY'];
+// Keys pasted into Settings live in their own file, so the settings.json editor never shows them. Nexus's environment wins over them.
+export const keysPath = () => path.join(NEXUS_HOME, 'keys.json');
+export const apiKey = name => process.env[name] || readJson(keysPath(), {})[name] || '';
+// An empty value removes the key. writeAtomic keeps the file private to this user (0600).
+export function saveKey(name, value) {
+  if (!KEY_NAMES.includes(name)) throw Object.assign(new Error('Unknown key.'), { status: 404 });
+  const v = String(value ?? '').trim();
+  if (v.length > 500 || /\s/.test(v)) throw Object.assign(new Error("That doesn't look like an API key."), { status: 400 });
+  const keys = readJson(keysPath(), {});
+  if (v) keys[name] = v; else delete keys[name];
+  writeAtomic(keysPath(), JSON.stringify(keys, null, 2));
+}
+
 // Everything the agent or terminal spawns runs without the panel's own secrets.
 export function childEnv() {
   const env = { ...process.env };
   env.HOME ||= HOME;
-  for (const key of Object.keys(env)) if (['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GROQ_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY', 'XAI_API_KEY'].includes(key) || (key.startsWith('NEXUS_') && key !== 'NEXUS_URL')) delete env[key];
+  for (const key of Object.keys(env)) if (KEY_NAMES.includes(key) || key === 'GOOGLE_API_KEY' || (key.startsWith('NEXUS_') && key !== 'NEXUS_URL')) delete env[key];
   return env;
 }
 
@@ -51,11 +65,13 @@ export function readJson(file, fallback) {
 }
 
 // realpath that also works for paths that don't exist yet (resolves the nearest existing ancestor).
+// The native one, like everywhere else paths are compared: it also expands Windows short names (RUNNER~1) and fixes letter case,
+// which the JS one leaves alone, so two spellings of one folder always compare equal.
 export function realish(p) {
   const rest = [];
   let cur = path.resolve(p);
   for (;;) {
-    try { return path.join(fs.realpathSync(cur), ...rest); } catch {
+    try { return path.join(fs.realpathSync.native(cur), ...rest); } catch {
       const up = path.dirname(cur);
       if (up === cur) return path.resolve(p);
       rest.unshift(path.basename(cur));
