@@ -2280,6 +2280,7 @@ async function settingsPage(hamb) {
     riskCard(area),
     reliabilityCard(area),
     typeCheckCard(area),
+    githubCard(area),
     permissionsCard(area, mcp),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact and Notification; a hook exiting with 2 blocks a tool call or prompt. MCP servers reconnect within seconds of saving.'),
@@ -2381,6 +2382,24 @@ function autopilotCard(area) {
   return [h('h2', {}, h('label', { htmlFor: 'apreq' }, 'Autopilot request limit')),
     h('div', { class: 'card' }, h('div', { class: 'rowline' }, input, h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Save')),
       h('p', { class: 'small muted', id: 'apreq-hint' }, 'How many model requests autopilot makes, subagents included, before it pauses until your next message. Long tasks may need 500 or more. 0 means no limit, so set a budget with /budget to cap the cost. Applies right away, even to a running chat.'))];
+}
+
+// Off by default; settings.json "githubTriggers": true turns it on.
+function githubCard(area) {
+  const box = h('input', { type: 'checkbox', id: 'ghtrig', 'aria-describedby': 'ghtrig-hint' });
+  const who = h('span', { class: 'small muted' });
+  guard(async () => {
+    const g = await api('GET', '/api/github');
+    box.checked = g.enabled;
+    who.textContent = g.login ? `gh is signed in as @${g.login}, so only @${g.login}'s comments count.` : 'The GitHub CLI (gh) is not signed in here. Install it and run gh auth login first.';
+  })();
+  box.onchange = guard(async () => {
+    await putSettings(area, { githubTriggers: box.checked || undefined });
+    toast(box.checked ? 'Write @nexus in a comment on an issue or pull request to start a chat. Nexus looks every two minutes.' : 'GitHub triggers are off.');
+  });
+  return [h('h2', {}, 'GitHub'),
+    h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'ghtrig' }, box, h('span', { class: 'grow' }, 'Start a chat when I write @nexus on an issue or pull request')),
+      h('p', { class: 'small muted', id: 'ghtrig-hint' }, "Every two minutes Nexus checks the GitHub repositories of your projects for new comments of yours that mention @nexus, starts a chat in that project with the comment as the task, and posts the agent's summary back as a reply. Nobody else's comments count. The chat works in the project's usual mode, so it may wait for your approval. ", who))];
 }
 
 // On by default; settings.json "typeCheck": false turns it off.

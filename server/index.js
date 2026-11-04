@@ -22,6 +22,7 @@ import * as vscode from './vscode.js';
 import * as preview from './preview.js';
 import * as repo from './git.js';
 import * as memory from './memory.js';
+import * as github from './github.js';
 import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -147,6 +148,8 @@ route('POST', '/api/projects/:name/git', async ({ req, p }) => {
   if (['switch', 'create', 'pull'].includes(args.action) && agent.projectBusy(projects.baseOf(need(p.name)))) throw fail(409, 'An agent is working in this folder. Stop it first.');
   return { output: String(await repo.act(projects.projectDir(p.name), args)).trim() };
 });
+// GitHub triggers: whether they're on, and which account gh is signed in as, for Settings.
+route('GET', '/api/github', async () => ({ enabled: readSettings().githubTriggers === true, login: await github.login() }));
 // The project's memory: notes chats saved for later chats, which the user can read, add to and prune.
 route('GET', '/api/projects/:name/memory', ({ p }) => ({ notes: memory.list(projects.projectDir(need(p.name))) }));
 route('POST', '/api/projects/:name/memory', async ({ req, p }) => ({ note: memory.add(projects.projectDir(need(p.name)), (await body(req)).fact) }));
@@ -679,3 +682,6 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 server.listen(process.env.LISTEN_FDS ? { fd: 3 } : { port: PORT, host: '127.0.0.1' }, () => console.log(`Nexus on http://127.0.0.1:${PORT}`));
 preview.startPreview([PORT, preview.PREVIEW_PORT]);
+// Every two minutes, @nexus comments on GitHub start chats (off unless settings.json "githubTriggers" is true).
+setInterval(() => github.poll({ projects: projects.list().filter(p => !p.parent && p.name !== projects.SELF).map(p => ({ name: p.name, dir: projects.projectDir(p.name) })), start: agent.githubChat })
+  .catch(err => console.error('GitHub triggers:', err.message)), 120_000).unref();
