@@ -5,6 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { browserTool } from './browser.js';
 import { syntax } from './diagnose.js';
+import * as sandbox from './sandbox.js';
 import { childEnv, clip, HOME, isInside, newId, readSettings, shellCommand } from './util.js';
 
 const obj = (properties, required = []) => ({ type: 'object', properties, required });
@@ -61,9 +62,16 @@ export function killGroup(proc, signal = 'SIGTERM') {
   } catch { /* already gone */ }
 }
 
+// The agent's own commands run in the sandbox when it's on (sandbox.js); those the user runs (!cmd, /check) say direct.
+function shellArgs(command, ctx) {
+  if (ctx.direct || !ctx.session || !sandbox.enabled()) return [shellCommand(), ['-c', command]];
+  return sandbox.wrap(shellCommand(), ['-c', command], [ctx.cwd, ...(ctx.session.state?.dirs || [])]);
+}
+
 function startBackground(command, ctx) {
   const id = newId('sh');
-  const proc = spawn(shellCommand(), ['-c', command], { cwd: ctx.cwd, env: childEnv(), detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const [cmd, args] = shellArgs(command, ctx);
+  const proc = spawn(cmd, args, { cwd: ctx.cwd, env: childEnv(), detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const shell = { id, project: ctx.session.name, command, proc, output: '', read: 0, status: 'running', started: Date.now() };
   const add = d => { shell.output = (shell.output + d).slice(-1_000_000); };
   proc.stdout.on('data', add);
@@ -77,8 +85,9 @@ function startBackground(command, ctx) {
 function bash({ command, timeout = 120000, run_in_background }, ctx) {
   if (run_in_background) return `Started background shell ${startBackground(command, ctx)}`;
   const limit = Math.min(Math.max(Number(timeout) || 120000, 1000), 600000);
+  const [cmd, args] = shellArgs(command, ctx);
   return new Promise(done => {
-    const proc = spawn(shellCommand(), ['-c', command], { cwd: ctx.cwd, env: childEnv(), detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(cmd, args, { cwd: ctx.cwd, env: childEnv(), detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '', ended = '';
     const add = d => {
       const s = d.toString();

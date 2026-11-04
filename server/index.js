@@ -23,6 +23,7 @@ import * as preview from './preview.js';
 import * as repo from './git.js';
 import * as memory from './memory.js';
 import * as github from './github.js';
+import * as sandbox from './sandbox.js';
 import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -148,6 +149,8 @@ route('POST', '/api/projects/:name/git', async ({ req, p }) => {
   if (['switch', 'create', 'pull'].includes(args.action) && agent.projectBusy(projects.baseOf(need(p.name)))) throw fail(409, 'An agent is working in this folder. Stop it first.');
   return { output: String(await repo.act(projects.projectDir(p.name), args)).trim() };
 });
+// Which sandbox this system has for the agent's commands, if any, for Settings.
+route('GET', '/api/sandbox', () => ({ available: sandbox.available(), enabled: sandbox.enabled(), platform: process.platform }));
 // GitHub triggers: whether they're on, and which account gh is signed in as, for Settings.
 route('GET', '/api/github', async () => ({ enabled: readSettings().githubTriggers === true, login: await github.login() }));
 // The project's memory: notes chats saved for later chats, which the user can read, add to and prune.

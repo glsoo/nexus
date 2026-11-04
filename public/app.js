@@ -2281,6 +2281,7 @@ async function settingsPage(hamb) {
     reliabilityCard(area),
     typeCheckCard(area),
     githubCard(area),
+    sandboxCard(area),
     permissionsCard(area, mcp),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact and Notification; a hook exiting with 2 blocks a tool call or prompt. MCP servers reconnect within seconds of saving.'),
@@ -2382,6 +2383,25 @@ function autopilotCard(area) {
   return [h('h2', {}, h('label', { htmlFor: 'apreq' }, 'Autopilot request limit')),
     h('div', { class: 'card' }, h('div', { class: 'rowline' }, input, h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Save')),
       h('p', { class: 'small muted', id: 'apreq-hint' }, 'How many model requests autopilot makes, subagents included, before it pauses until your next message. Long tasks may need 500 or more. 0 means no limit, so set a budget with /budget to cap the cost. Applies right away, even to a running chat.'))];
+}
+
+// Off by default; settings.json "sandbox": true and "sandboxNetwork": false.
+function sandboxCard(area) {
+  const box = h('input', { type: 'checkbox', id: 'sbox', 'aria-describedby': 'sbox-hint' });
+  const net = h('input', { type: 'checkbox', id: 'snet' });
+  const status = h('p', { class: 'small muted' });
+  guard(async () => {
+    const [sb, st] = await Promise.all([api('GET', '/api/sandbox'), api('GET', '/api/settings').then(r => JSON.parse(r.text))]);
+    box.checked = sb.enabled; net.checked = st.sandboxNetwork === false;
+    box.disabled = !sb.available && !sb.enabled; net.disabled = !sb.available;
+    status.textContent = sb.available ? `This computer has ${sb.available}.` : sb.platform === 'win32' ? 'Not available on Windows yet: Nexus sandboxes commands on Linux and macOS.' : sb.platform === 'linux' ? 'Install bubblewrap (apt install bubblewrap) to use it.' : 'Not available on this system.';
+  })();
+  box.onchange = guard(async () => { await putSettings(area, { sandbox: box.checked || undefined }); toast(box.checked ? "The agent's commands now run in the sandbox." : 'The sandbox is off.'); });
+  net.onchange = guard(async () => { await putSettings(area, { sandboxNetwork: net.checked ? false : undefined }); toast(net.checked ? 'Sandboxed commands have no network now.' : 'Sandboxed commands can use the network.'); });
+  return [h('h2', {}, 'Sandbox'),
+    h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'sbox' }, box, h('span', { class: 'grow' }, "Run the agent's shell commands in a sandbox")),
+      h('p', { class: 'small muted', id: 'sbox-hint' }, "They can only write inside the chat's folders, the temp folder and package caches, so a bad command in bypass or on autopilot can't change the rest of the computer. Your own commands (!cmd, /check) aren't sandboxed. Add more writable folders under \"sandboxWritable\" in settings.json."),
+      h('label', { class: 'rowline', htmlFor: 'snet' }, net, h('span', { class: 'grow' }, 'No network for sandboxed commands')), status)];
 }
 
 // Off by default; settings.json "githubTriggers": true turns it on.

@@ -776,7 +776,7 @@ async function autoCheck(s, signal) {
   if (!s.state.check || !last || signal.aborted || !(await diffSince(s, last))) return;
   const command = s.state.check;
   const entry = addEntry(s, { type: 'tool', name: 'Bash', args: { command }, status: 'running', output: '' });
-  const output = await execTool('Bash', { command, timeout: 600000 }, { cwd: cwdOf(s), session: s, signal, progress: t => { entry.output = (entry.output + t).slice(-60000); send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
+  const output = await execTool('Bash', { command, timeout: 600000 }, { cwd: cwdOf(s), session: s, signal, direct: true, progress: t => { entry.output = (entry.output + t).slice(-60000); send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
   const failed = /^Failed to start|\n\[(exit code \d+|Timed out after \d+ ms)\]$/.test(output);
   Object.assign(entry, { status: failed ? 'error' : 'done', output });
   send(s, { t: 'entry', entry });
@@ -1252,7 +1252,7 @@ async function direct(s, command) {
   if (s.running) return note(s, 'Stop the agent before running a shell command directly.', 'error');
   const cwd = cwdOf(s);
   const entry = addEntry(s, { type: 'tool', name: 'Bash', args: { command }, status: 'running', output: '', direct: true });
-  const output = await execTool('Bash', { command }, { cwd, session: s, progress: t => { entry.output = (entry.output + t).slice(-60000); send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
+  const output = await execTool('Bash', { command }, { cwd, session: s, direct: true, progress: t => { entry.output = (entry.output + t).slice(-60000); send(s, { t: 'delta', id: entry.id, kind: 'output', text: t }); } });
   Object.assign(entry, { status: 'done', output });
   send(s, { t: 'entry', entry });
   s.state.items.push({ role: 'user', content: `I ran this shell command myself:\n$ ${command}\n${output}` });
