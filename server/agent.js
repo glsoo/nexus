@@ -11,7 +11,7 @@ import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
 import { HIGH_RISK, parseRisk, RISK_PROMPT, riskInput, riskRules } from './risk.js';
-import { decide, execTool, findAIComments, hasTool, killGroup, ruleKey, shells, TOOL_DEFS } from './tools.js';
+import { decide, execTool, findAIComments, hasTool, killGroup, ruleKey, shells, TOOL_DEFS, toolDenied } from './tools.js';
 import { apiKey, childEnv, clip, isInside, NEXUS_HOME, outOfCredit, realish, newId, postWithRetry, readJson, readSettings, sleep, slug, sseEvents, writeAtomic } from './util.js';
 
 export const hub = new EventEmitter();
@@ -205,7 +205,7 @@ ${skillList ? `\n# Available skills (load with the Skill tool)\n${skillList}\n` 
 }
 
 async function toolList(filter) {
-  const defs = [...TOOL_DEFS, { type: 'web_search' }, ...await mcp.toolDefs()];
+  const defs = [...TOOL_DEFS, { type: 'web_search' }, ...await mcp.toolDefs()].filter(t => !toolDenied(t.name || t.type));
   return filter ? defs.filter(filter) : defs;
 }
 

@@ -2146,6 +2146,7 @@ async function settingsPage(hamb) {
     autopilotCard(area),
     riskCard(area),
     reliabilityCard(area),
+    permissionsCard(area, mcp),
     h('h2', {}, h('label', { htmlFor: 'set' }, '~/.nexus/settings.json')),
     h('p', { class: 'small muted' }, 'Hooks run on PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact and Notification; a hook exiting with 2 blocks a tool call or prompt. MCP servers reconnect within seconds of saving.'),
     h('p', { class: 'small muted' }, 'Models: add any other OpenAI-compatible server under "providers", as in the example.'),
@@ -2288,6 +2289,74 @@ function reliabilityCard(area) {
   };
   guard(async () => render(JSON.parse((await api('GET', '/api/settings')).text)))();
   return [h('h2', {}, 'Reliability'), card];
+}
+
+// settings.json "permissions", like VS Code's approvals. The default (ask, or on for tools that never ask) is stored as no entry.
+const TOOL_GROUPS = [
+  ['Run commands', ['Bash'], 'The command rules below can allow or block single commands.'],
+  ['Edit files', ['Write', 'Edit', 'NotebookEdit'], 'Allow is Accept edits in every chat. Files in .nexus and .git still ask.'],
+  ['Read files outside the project', ['Read', 'Glob', 'Grep'], 'Reading inside the project never asks.'],
+  ['Fetch web pages', ['WebFetch']], ['Screenshots', ['Screenshot']],
+  ['Search the web', ['web_search'], '', true], ['Subagents', ['Task'], '', true], ['Skills', ['Skill'], '', true],
+];
+function permissionsCard(area, mcp) {
+  const card = h('div', { class: 'card form' });
+  const render = st => {
+    const p = st.permissions && typeof st.permissions === 'object' ? st.permissions : {};
+    const tools = { ...p.tools }, commands = { ...p.commands };
+    const save = async (msg) => {
+      const clean = o => (Object.keys(o).length ? o : undefined);
+      const next = clean({ ...p, tools: clean(tools), commands: clean(commands) });
+      render(await putSettings(area, { permissions: next }));
+      if (msg) toast(msg);
+    };
+    const groups = [...TOOL_GROUPS, ...mcp.map(s => [`MCP server ${s.name}`, [`mcp__${s.name}`]])];
+    const toolRow = ([label, names, hint, quiet]) => {
+      const id = `perm-${names[0]}`;
+      const pick = h('select', { class: 'field perm', id, onchange: guard(() => {
+        for (const n of names) if (pick.value) tools[n] = pick.value; else delete tools[n];
+        return save(`${label}: ${pick.selectedOptions[0].textContent}.`);
+      }) }, (quiet ? [['', 'On'], ['deny', 'Off']] : [['', 'Ask'], ['allow', 'Allow'], ['deny', 'Off']]).map(([v, t]) => h('option', { value: v, selected: (tools[names[0]] || '') === v }, t)));
+      return h('div', {}, h('div', { class: 'rowline' }, h('label', { class: 'grow', htmlFor: id }, label), pick), hint && h('p', { class: 'small muted' }, hint));
+    };
+    const rule = h('input', { class: 'field mono grow', id: 'perm-rule', placeholder: 'npm test, or /^git (status|diff)\\b/', spellcheck: false, autocapitalize: 'off', 'aria-describedby': 'perm-hint' });
+    const how = h('select', { class: 'field perm', 'aria-label': 'What the rule does' }, h('option', { value: 'allow' }, 'Allow'), h('option', { value: 'ask' }, 'Always ask'), h('option', { value: 'deny' }, 'Block'));
+    const add = guard(() => {
+      const r = rule.value.trim();
+      if (!r) return toast('Type the start of a command, or a /regular expression/.');
+      if (/^\/.+\/[a-z]*$/s.test(r)) { try { new RegExp(r.slice(1, r.lastIndexOf('/')), r.slice(r.lastIndexOf('/') + 1)); } catch (e) { return toast(`That regular expression doesn't work: ${e.message}`); } }
+      commands[r] = how.value;
+      return save(`Added the rule for ${r}.`);
+    });
+    const importVS = guard(async () => {
+      const { sources } = await api('GET', '/api/vscode/permissions');
+      if (!sources.length) return toast('No terminal approval rules (chat.tools.terminal.autoApprove) found in VS Code, Cursor, Windsurf or VSCodium settings on this computer.');
+      const fresh = Object.assign({}, ...sources.map(s => s.commands));
+      for (const r of Object.keys(commands)) delete fresh[r]; // rules you already have here stay as they are
+      const n = Object.keys(fresh).length;
+      const ok = await dialog({ title: 'Import from VS Code', wide: true,
+        body: h('div', { class: 'form' }, sources.map(s => h('p', { class: 'small muted' }, `${s.app}: ${Object.keys(s.commands).length} rules in ${s.file}`)),
+          n ? h('div', { class: 'out' }, Object.entries(fresh).map(([r, v]) => `${v === 'allow' ? 'Allow ' : 'Always ask'}  ${r}`).join('\n')) : h('p', {}, 'You already have all of these rules.'),
+          h('p', { class: 'small muted' }, "VS Code's true becomes Allow and false becomes Always ask.")),
+        actions: [{ label: 'Cancel' }, ...(n ? [{ label: `Add ${n} rule${n === 1 ? '' : 's'}`, class: 'primary', value: true }] : [])] });
+      if (!ok) return;
+      Object.assign(commands, fresh);
+      await save(`Imported ${n} rule${n === 1 ? '' : 's'} from VS Code.`);
+    });
+    const list = Object.entries(commands);
+    card.replaceChildren(...[
+      h('div', { class: 'title' }, 'Tools'),
+      ...groups.map(toolRow),
+      h('div', { class: 'rowline' }, h('label', { class: 'title grow', htmlFor: 'perm-rule' }, 'Command rules'), h('button', { class: 'btn small', type: 'button', onclick: importVS }, 'Import from VS Code')),
+      h('p', { class: 'small muted', id: 'perm-hint' }, 'A rule is the start of a command (npm test) or a /regular expression/. Commands joined with ; && || or | each need an allow rule, and a command with $( ), backticks or redirection is never allowed by a rule. Block stops a command in every mode, even bypass, but it is a guard rail rather than a sandbox: it matches how a command is written.'),
+      list.length > 0 && h('div', { class: 'permlist' }, list.map(([r, v]) => h('div', { class: 'rowline' }, h('span', { class: 'grow mono' }, r),
+        h('span', { class: `ptag ${v}` }, v === 'allow' ? 'Allow' : v === 'ask' ? 'Always ask' : 'Block'),
+        h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove the rule ${r}`, onclick: guard(() => { delete commands[r]; return save(`Removed the rule for ${r}.`); }) }, 'Remove')))),
+      h('div', { class: 'rowline' }, rule, how, h('button', { class: 'btn', type: 'button', onclick: add }, 'Add')),
+    ].filter(Boolean));
+  };
+  guard(async () => render(JSON.parse((await api('GET', '/api/settings')).text)))();
+  return [h('h2', {}, 'Permissions'), h('p', { class: 'small muted' }, 'What the AI may do without asking, in every chat. Approvals you give in a chat, the risk check and plan mode still apply.'), card];
 }
 
 function notifyCard() {

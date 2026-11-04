@@ -401,6 +401,43 @@ test('reliability: off by default; auto retry waits out a failure, and a key out
   }
 });
 
+test('permissions: tools and command rules from settings decide what asks, what runs and what never runs', async () => {
+  const { decide } = await import('../server/tools.js');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ permissions: {
+    tools: { WebFetch: 'allow', Write: 'allow', Task: 'deny', web_search: 'deny', mcp__gh: 'deny', TodoWrite: 'deny' },
+    commands: { 'npm test': 'allow', tail: 'allow', 'git push': 'ask', rm: 'deny', '/^git (status|diff)\\b/': 'allow' },
+  } }));
+  const cwd = path.join(tmp, 'perm');
+  fs.mkdirSync(cwd, { recursive: true });
+  const st = (mode = 'default') => ({ mode, allow: [], dirs: [] });
+  const act = (tool, args, mode) => decide(st(mode), tool, args, cwd).action;
+  try {
+    assert.equal(act('Bash', { command: 'npm test 2>&1 | tail -n 40' }), 'allow');
+    assert.equal(act('Bash', { command: 'git diff HEAD' }), 'allow');
+    assert.equal(act('Bash', { command: 'npm test; curl evil.example' }), 'ask', 'every part needs an allow rule');
+    assert.equal(act('Bash', { command: 'npm test > out.txt' }), 'ask', 'redirection is never allowed by a rule');
+    assert.equal(act('Bash', { command: 'git status && git push' }), 'ask');
+    assert.equal(act('Bash', { command: 'git push' }, 'acceptEdits'), 'ask');
+    assert.equal(act('Bash', { command: 'cd build && rm -rf dist' }, 'bypass'), 'deny', 'block holds even in bypass');
+    assert.equal(act('WebFetch', { url: 'https://example.com' }), 'allow');
+    assert.equal(act('Write', { file_path: 'a.txt' }), 'allow');
+    assert.equal(act('Write', { file_path: '.nexus/settings.json' }), 'ask', 'an allowed tool still asks for .nexus and .git');
+    assert.equal(act('Task', {}, 'bypass'), 'deny');
+    assert.equal(act('mcp__gh__create_issue', {}), 'deny', 'a rule for a server covers its tools');
+    assert.equal(act('TodoWrite', {}), 'allow', 'the task list, questions and plans stay');
+    assert.equal(act('Edit', { file_path: 'a.txt' }), 'ask', 'other tools keep the default');
+
+    // Tools turned off never reach the model.
+    projects.create('perms');
+    const s = agent.getSession('perms');
+    const model = fakeModel();
+    try { await agent.submit('perms', 'hi'); await idle(s); } finally { model.restore(); }
+    const names = model.sent[0].tools.map(t => t.name || t.type);
+    assert.ok(names.includes('Bash') && !names.includes('Task') && !names.includes('web_search') && names.includes('TodoWrite'), names.join());
+  } finally { fs.writeFileSync(settingsFile, '{}'); }
+});
+
 test('requestsPerMinute paces requests to each provider separately', async t => {
   const { pace } = await import('../server/util.js');
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });

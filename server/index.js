@@ -18,6 +18,7 @@ import { findFiles } from './tools.js';
 import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
 import * as push from './push.js';
 import * as notify from './notify.js';
+import * as vscode from './vscode.js';
 import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -276,6 +277,8 @@ route('GET', '/api/settings', () => ({
   text: fs.existsSync(settingsPath()) ? fs.readFileSync(settingsPath(), 'utf8') : '{\n  "hooks": {},\n  "mcpServers": {}\n}\n',
   mcp: mcp.status(),
 }));
+// Command rules from VS Code-family editors' own settings, shown for the user to add to Settings → Permissions.
+route('GET', '/api/vscode/permissions', () => ({ sources: vscode.terminalRules() }));
 route('PUT', '/api/settings', async ({ req }) => {
   const { text } = await body(req);
   try { JSON.parse(text); } catch (err) { throw fail(400, `Not valid JSON: ${err.message}`); }

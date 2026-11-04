@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { childEnv, clip, HOME, isInside, newId, shellCommand } from './util.js';
+import { childEnv, clip, HOME, isInside, newId, readSettings, shellCommand } from './util.js';
 
 const obj = (properties, required = []) => ({ type: 'object', properties, required });
 const fn = (name, description, parameters) => ({ type: 'function', name, description, strict: false, parameters });
@@ -293,7 +293,39 @@ export function ruleKey(tool, args, cwd, dirs) {
   return tool;
 }
 
+// settings.json "permissions", like VS Code's chat.tools approvals. "tools" sets a tool, or every tool of an MCP server ("mcp__github"),
+// to "allow" (never asks) or "deny" (never runs, even in bypass). "commands" sets shell commands to "allow", "ask" or "deny" by their
+// start ("npm test") or a /regex/. Only the user's own settings count: nothing in a repo can grant itself rights.
+const permissions = () => { const p = readSettings().permissions; return p && typeof p === 'object' ? p : {}; };
+const KEEP = new Set(['TodoWrite', 'AskUserQuestion', 'ExitPlanMode']); // a chat can always plan, ask and keep its list
+const toolRule = (tools, tool) => (tools && typeof tools === 'object' ? tools[tool] ?? (tool.startsWith('mcp__') ? tools[tool.split('__', 2).join('__')] : undefined) : undefined);
+export const toolDenied = tool => !KEEP.has(tool) && toolRule(permissions().tools, tool) === 'deny';
+
+const ruleHits = (rule, cmd) => {
+  const re = /^\/(.+)\/([a-z]*)$/s.exec(rule);
+  if (!re) return cmd === rule || cmd.startsWith(`${rule} `);
+  try { return new RegExp(re[1], re[2]).test(cmd); } catch { return false; }
+};
+// Like VS Code, a command line is judged part by part, cut at ; && || | & and new lines, so "npm test; rm -rf ~" needs both allowed.
+// Substitution and redirection hide what runs or what gets written, so a line with them is never allowed by a rule (2>&1 and >/dev/null are fine).
+// shortcut: deny rules match how a command is written (rm, not \rm or sudo rm), so they are a guard rail, not a sandbox.
+export function commandRule(rules, command) {
+  if (!rules || typeof rules !== 'object') return null;
+  const line = String(command).replace(/\s\d?>&\d\b/g, ' ').replace(/\s\d?>\s*\/dev\/null\b/g, ' ').trim();
+  const parts = line.split(/&&|\|\||[;|&\n]/).map(p => p.trim()).filter(Boolean);
+  const set = v => Object.keys(rules).filter(r => rules[r] === v && r.trim());
+  const hit = r => ruleHits(r, line) || parts.some(p => ruleHits(r, p));
+  if (set('deny').some(hit)) return 'deny';
+  if (set('ask').some(hit)) return 'ask';
+  if (parts.length && !/[`<>]|\$\(/.test(line) && parts.every(p => set('allow').some(r => ruleHits(r, p)))) return 'allow';
+  return null;
+}
+
 export function decide(state, tool, args, cwd) {
+  const { tools, commands } = permissions();
+  if (toolDenied(tool)) return { action: 'deny', reason: `The user turned ${tool} off in Settings → Permissions. Do the task without it.` };
+  const command = tool === 'Bash' ? commandRule(commands, args.command || '') : null;
+  if (command === 'deny') return { action: 'deny', reason: "The user's permission rules (Settings → Permissions) block this command. Don't work around them; do without it or ask the user." };
   if (ALWAYS_OK.has(tool)) return { action: 'allow' };
   if (state.mode === 'bypass') return { action: 'allow' };
   if (READS.has(tool) && inProject(cwd, tool, args, state.dirs)) return { action: 'allow' };
@@ -302,7 +334,10 @@ export function decide(state, tool, args, cwd) {
   if (state.mode === 'plan' && !READS.has(tool) && tool !== 'WebFetch' && tool !== 'Screenshot' && !tool.startsWith('mcp__')) {
     return { action: 'deny', reason: 'Plan mode is read-only. Finish the plan and call ExitPlanMode.' };
   }
+  if (command === 'ask') return { action: 'ask' };
   if (state.allow.includes(ruleKey(tool, args, cwd, state.dirs))) return { action: 'allow' };
+  // An allowed tool still asks before writing into .nexus or .git, where a file can run commands.
+  if (command === 'allow' || (toolRule(tools, tool) === 'allow' && !(EDITS.has(tool) && inNexus(cwd, args, state.dirs)))) return { action: 'allow' };
   if (state.mode === 'acceptEdits' && EDITS.has(tool) && inProject(cwd, tool, args, state.dirs) && !inNexus(cwd, args, state.dirs)) return { action: 'allow' };
   return { action: 'ask' };
 }
