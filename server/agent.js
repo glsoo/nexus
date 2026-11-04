@@ -9,6 +9,7 @@ import { callCompat, compatContext, costOf, providerOf } from './compat.js';
 import { agentDefs, commands, instructions, runHooks, skills } from './extensions.js';
 import * as repo from './git.js';
 import { typeErrors } from './diagnose.js';
+import * as memory from './memory.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
@@ -23,7 +24,7 @@ export const agents = new Map();
 const NAME_TIMEOUT = 8000;
 const REPO = fs.realpathSync(new URL('..', import.meta.url));
 const PARALLEL = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'Screenshot', 'Task', 'BashOutput', 'Skill']);
-const SUB_EXCLUDED = new Set(['Task', 'TodoWrite', 'AskUserQuestion', 'ExitPlanMode']);
+const SUB_EXCLUDED = new Set(['Task', 'TodoWrite', 'AskUserQuestion', 'ExitPlanMode', 'Memory']);
 // 0 means off. Leaves room under the model's limit, because the summary request has to fit too.
 const compactAt = s => {
   const limit = s.state.autoCompact ?? (readSettings().autoCompactTokens || 300000);
@@ -179,6 +180,7 @@ function addUsage(s, u) {
 }
 
 // ---- system prompt ----
+const projectMemory = cwd => { try { return memory.promptSection(cwd); } catch { return ''; } };
 // The agent type a chat has switched to, if it still exists. Built-in types are written for subagents, so a chat can't take them.
 function activeAgent(s) {
   return s.state.agent ? agentDefs(cwdOf(s)).find(d => d.name === s.state.agent && !d.builtin) || null : null;
@@ -190,6 +192,7 @@ function systemPrompt(s, extra = '', sub = false, dir = cwdOf(s)) {
   const skillList = skills(cwd).map(k => `- ${k.name}: ${k.description}`).join('\n');
   const agentList = agentDefs(cwd).map(a => `- ${a.name}: ${a.description}`).join('\n');
   const memory = instructions(cwd);
+  const notes = readSettings().memory === false ? '' : projectMemory(cwd);
   const { base, custom } = promptParts(cwd, s.state);
   const role = sub ? null : activeAgent(s);
   const planning = s.state.mode === 'plan'
@@ -206,7 +209,7 @@ Platform: ${process.platform}. Date: ${new Date().toISOString().slice(0, 10)}. P
 
 # Available subagent types
 ${agentList}
-${skillList ? `\n# Available skills (load with the Skill tool)\n${skillList}\n` : ''}${memory ? `\n# Project and user instructions\n${memory}\n` : ''}${custom}${role ? `\n# Your role: ${role.name}\nThe user switched this chat to the "${role.name}" agent. Work as it describes.\n\n${role.prompt.trim()}\n` : ''}${planning}${autopilot}${extra}`;
+${skillList ? `\n# Available skills (load with the Skill tool)\n${skillList}\n` : ''}${memory ? `\n# Project and user instructions\n${memory}\n` : ''}${notes}${custom}${role ? `\n# Your role: ${role.name}\nThe user switched this chat to the "${role.name}" agent. Work as it describes.\n\n${role.prompt.trim()}\n` : ''}${planning}${autopilot}${extra}`;
 }
 
 async function toolList(filter) {
@@ -330,6 +333,13 @@ async function execute(s, name, args, entry, ctx) {
       entry.autopilot = true;
       addEntry(s, { type: 'system', text: 'Autopilot approved the plan and switched to **Accept edits**.' });
       return 'Plan approved automatically, because autopilot is on and the user is away. Plan mode is off and file edits in the project are accepted. Implement the whole plan now, then verify it.';
+    }
+    case 'Memory': {
+      if (readSettings().memory === false) return 'Project memory is turned off in Settings.';
+      const dir = cwdOf(s);
+      if (args.action === 'remove') { memory.remove(dir, String(args.id || '')); return 'Removed that note.'; }
+      const note = memory.add(dir, args.fact);
+      return `Saved as note ${note.id}. Every chat in this project will see it.`;
     }
     case 'Skill': {
       const skill = skills(cwdOf(s)).find(k => k.name === args.name);

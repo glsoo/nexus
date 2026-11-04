@@ -43,6 +43,8 @@ export const TOOL_DEFS = [
   fn('AskUserQuestion', 'Ask the user a question when blocked on a decision only they can make.', obj({ question: str('The question'), options: { type: 'array', items: { type: 'string' }, description: 'Suggested answers' } }, ['question'])),
   fn('ExitPlanMode', 'In plan mode, present the finished plan for the user to approve.', obj({ plan: str('The plan, in markdown') }, ['plan'])),
   fn('Skill', 'Load the full instructions of a listed skill.', obj({ name: str('Skill name') }, ['name'])),
+  fn('Memory', "Save a durable fact about this project that later chats will need: how to build, test or run it, conventions, where things live, decisions, the user's preferences. Not secrets, not what the code already makes obvious, not task progress. Remove a saved note that turns out wrong.",
+    obj({ action: { type: 'string', enum: ['add', 'remove'] }, fact: str('For add: the fact, in one or two sentences'), id: str('For remove: the note id shown in brackets') }, ['action'])),
 ];
 
 const resolve = (cwd, p) => path.resolve(cwd, String(p).replace(/^~(?=$|\/)/, HOME));
@@ -286,7 +288,7 @@ export const hasTool = name => name in IMPL;
 export const execTool = (name, args, ctx) => IMPL[name](args, ctx);
 
 // ---- permissions ----
-const ALWAYS_OK = new Set(['TodoWrite', 'AskUserQuestion', 'ExitPlanMode', 'Skill', 'Task', 'BashOutput']);
+const ALWAYS_OK = new Set(['TodoWrite', 'AskUserQuestion', 'ExitPlanMode', 'Skill', 'Task', 'BashOutput', 'Memory']);
 const READS = new Set(['Read', 'Glob', 'Grep']);
 const EDITS = new Set(['Write', 'Edit', 'NotebookEdit']);
 const targetPath = (tool, a) => a.file_path ?? a.path ?? '.';

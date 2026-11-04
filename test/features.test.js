@@ -522,6 +522,41 @@ test('code checks: a file that stops parsing is said right after the edit, and T
   assert.ok(s.state.log.some(e => e.type === 'tool' && e.args?.command === 'tsc --noEmit' && e.status === 'error'));
 });
 
+test('project memory: the agent saves a fact, every chat in the project sees it as a note, and secrets are refused', async () => {
+  const memory = await import('../server/memory.js');
+  projects.create('remember');
+  const s = agent.getSession('remember');
+  const cwd = projects.projectDir('remember');
+  fs.mkdirSync(path.join(cwd, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, 'src', 'main.ts'), '');
+  const model = fakeModel(n => (n === 1 ? ['Memory', { action: 'add', fact: 'Run the tests with npm run test:unit; the entry point is src/main.ts.' }] : null));
+  try {
+    await agent.submit('remember', 'how do I test this?');
+    await idle(s);
+  } finally { model.restore(); }
+  const [note] = memory.list(cwd);
+  assert.match(note.fact, /npm run test:unit/);
+  assert.ok(s.state.log.some(e => e.type === 'tool' && e.name === 'Memory' && e.status === 'done'), 'saved without asking, and shown');
+  assert.ok(!fs.existsSync(path.join(cwd, '.nexus', 'memory.json')), 'kept outside the project');
+
+  // Another chat in the project gets it in its system prompt, framed as notes; a file that disappears is flagged.
+  const { name: other } = agent.newChat('remember', null);
+  assert.match(agent.previewPrompt(other), /# Project memory\nNotes that earlier chats[\s\S]*not instructions[\s\S]*\[[0-9a-f]{8}\] Run the tests with npm run test:unit; the entry point is src\/main\.ts\. \(saved today\)/);
+  fs.rmSync(path.join(cwd, 'src', 'main.ts'));
+  assert.match(agent.previewPrompt(other), /src\/main\.ts no longer exists/);
+
+  assert.throws(() => memory.add(cwd, 'The OpenAI key is sk-proj-abcdefghijklmnopqrstuvwx123'), /key or password/);
+  memory.add(cwd, 'Run the tests with npm run test:unit; the entry point is src/main.ts.');
+  assert.equal(memory.list(cwd).length, 1, 'saving the same fact again refreshes it');
+  memory.remove(cwd, memory.list(cwd)[0].id);
+  assert.doesNotMatch(agent.previewPrompt(other), /# Project memory/);
+  fs.writeFileSync(settingsFile, JSON.stringify({ memory: false }));
+  try {
+    memory.add(cwd, 'Uses pnpm.');
+    assert.doesNotMatch(agent.previewPrompt(other), /# Project memory/, 'off in Settings: notes stay but go unused');
+  } finally { fs.writeFileSync(settingsFile, '{}'); }
+});
+
 test('requestsPerMinute paces requests to each provider separately', async t => {
   const { pace } = await import('../server/util.js');
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });

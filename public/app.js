@@ -367,6 +367,7 @@ function projectMenu(anchor, name) {
   !name.includes('~') && h('button', { role: 'menuitem', onclick: () => { close(); newChat(name); } }, icon('plus'), 'New chat'),
   h('button', { role: 'menuitem', onclick: () => { close(); renameDialog(name); } }, icon('pen'), 'Rename'),
   h('button', { role: 'menuitem', onclick: () => { close(); guard(foldersDialog)(name); } }, icon('folder'), 'Folders'),
+  h('button', { role: 'menuitem', onclick: () => { close(); memoryDialog(name); } }, icon('bot'), 'Memory'),
   h('button', { role: 'menuitem', onclick: () => { close(); exportChat(name); } }, icon('download'), 'Export chat'),
   S.me?.local && h('button', { role: 'menuitem', onclick: guard(async () => {
     close();
@@ -415,6 +416,27 @@ const previewDialog = guard(async () => {
     h('p', { class: 'small muted' }, `The app runs on Nexus's port ${previewPort}, apart from Nexus itself. To open it from a phone through a tunnel, give that port a public address too and set NEXUS_PREVIEW_URL to it.`)),
   actions: [{ label: 'Close' }] });
   if (start) show();
+});
+
+// The project's memory: what chats saved for later chats in this folder (Memory tool), to read, add to and prune.
+const memoryDialog = guard(async name => {
+  const body = h('div', { class: 'form' });
+  const ago = at => { const d = Math.floor((Date.now() - at) / 86_400_000); return d ? `${d} day${d === 1 ? '' : 's'} ago` : 'today'; };
+  const render = async () => {
+    const { notes } = await api('GET', `${P(name)}/memory`);
+    const fact = h('input', { class: 'field grow', id: 'memadd', placeholder: 'Something every chat here should know', maxlength: 400 });
+    const add = guard(async () => { await api('POST', `${P(name)}/memory`, { fact: fact.value }); await render(); });
+    fact.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+    body.replaceChildren(...[
+      h('p', { class: 'small muted' }, 'Chats save what later chats in this project should know, like how to run the tests or what you prefer, and every chat here sees these notes. They stay on this computer, outside the project, for six months after they were last saved.'),
+      notes.length ? h('div', { class: 'permlist' }, notes.map(n => h('div', { class: 'rowline' }, h('span', { class: 'grow' }, n.fact, h('span', { class: 'small muted' }, ` · ${ago(n.at)}`)),
+        h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Forget: ${n.fact}`, onclick: guard(async () => { await api('DELETE', `${P(name)}/memory/${n.id}`); await render(); }) }, 'Forget'))))
+        : h('p', { class: 'muted' }, 'Nothing saved yet.'),
+      h('div', { class: 'rowline' }, h('label', { class: 'sr', htmlFor: 'memadd' }, 'Add a note'), fact, h('button', { class: 'btn', type: 'button', onclick: add }, 'Add')),
+    ]);
+  };
+  await render();
+  dialog({ title: `Memory · ${pretty(name.split('~')[0])}`, wide: true, body, actions: [{ label: 'Close' }] });
 });
 
 function renameDialog(name) {
@@ -2369,9 +2391,18 @@ function typeCheckCard(area) {
     await putSettings(area, { typeCheck: box.checked ? undefined : false });
     toast(box.checked ? 'TypeScript projects are type checked after changes again.' : 'The type check after changes is off.');
   });
+  const mem = h('input', { type: 'checkbox', id: 'memon', 'aria-describedby': 'memon-hint' });
+  guard(async () => { mem.checked = JSON.parse((await api('GET', '/api/settings')).text).memory !== false; })();
+  mem.onchange = guard(async () => {
+    await putSettings(area, { memory: mem.checked ? undefined : false });
+    toast(mem.checked ? 'Chats remember what they learn about each project again.' : 'Project memory is off. Saved notes stay, unused.');
+  });
   return [h('h2', {}, 'Code checks'),
     h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'tcheck' }, box, h('span', { class: 'grow' }, 'Type check TypeScript projects after the agent changes code')),
-      h('p', { class: 'small muted', id: 'tcheck-hint' }, "After a turn that changed code in a project with a tsconfig.json and its own typescript, Nexus runs tsc and hands errors the change caused back to the agent, twice at most. A JavaScript, JSON or Python file that stops parsing is caught right after each edit, always. A /check command in a chat replaces the type check."))];
+      h('p', { class: 'small muted', id: 'tcheck-hint' }, "After a turn that changed code in a project with a tsconfig.json and its own typescript, Nexus runs tsc and hands errors the change caused back to the agent, twice at most. A JavaScript, JSON or Python file that stops parsing is caught right after each edit, always. A /check command in a chat replaces the type check.")),
+    h('h2', {}, 'Project memory'),
+    h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'memon' }, mem, h('span', { class: 'grow' }, 'Let chats remember what they learn about each project')),
+      h('p', { class: 'small muted', id: 'memon-hint' }, "The agent saves facts later chats need, like how to run the tests, and every chat in that project sees them as notes to check. Read or prune a project's notes from its menu → Memory. Keys and passwords are never kept."))];
 }
 
 // All off by default: settings.json "requestsPerMinute", "autoRetry", "notifyErrors" and "fallbackModels". The server reads them on each request.

@@ -21,6 +21,7 @@ import * as notify from './notify.js';
 import * as vscode from './vscode.js';
 import * as preview from './preview.js';
 import * as repo from './git.js';
+import * as memory from './memory.js';
 import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -146,6 +147,10 @@ route('POST', '/api/projects/:name/git', async ({ req, p }) => {
   if (['switch', 'create', 'pull'].includes(args.action) && agent.projectBusy(projects.baseOf(need(p.name)))) throw fail(409, 'An agent is working in this folder. Stop it first.');
   return { output: String(await repo.act(projects.projectDir(p.name), args)).trim() };
 });
+// The project's memory: notes chats saved for later chats, which the user can read, add to and prune.
+route('GET', '/api/projects/:name/memory', ({ p }) => ({ notes: memory.list(projects.projectDir(need(p.name))) }));
+route('POST', '/api/projects/:name/memory', async ({ req, p }) => ({ note: memory.add(projects.projectDir(need(p.name)), (await body(req)).fact) }));
+route('DELETE', '/api/projects/:name/memory/:id', ({ p }) => { memory.remove(projects.projectDir(need(p.name)), p.id); return {}; });
 // A new chat in this chat's project, or a fork of this chat from one of its messages ("from": the message's id).
 route('POST', '/api/projects/:name/chats', async ({ req, p }) => {
   const { from } = await body(req);
