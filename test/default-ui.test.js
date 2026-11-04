@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n'); // a Windows checkout has CRLF
 const h = (tag, props = {}, ...children) => ({
   tag, ...props, children: children.flat(Infinity).filter(c => c !== false && c != null), style: {}, listeners: [],
   addEventListener(name) { this.listeners.push(name); },

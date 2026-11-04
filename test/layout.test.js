@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n'); // a Windows checkout has CRLF
+const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const token = name => {
   const value = css.match(new RegExp(`--${name}:\\s*(#[a-f0-9]{6})\\b`, 'i'));
   assert.ok(value, `Missing ${name} token`);
