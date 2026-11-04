@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import { presentSocket } from '../server/util.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'present-'));
@@ -27,7 +28,7 @@ const get = (id, url, headers = {}) => new Promise((resolve, reject) => {
   http.get({ socketPath: presentSocket(id, env.NEXUS_HOME), path: url, headers }, res => {
     let body = '';
     res.on('data', d => { body += d; });
-    res.on('end', () => resolve({ status: res.statusCode, body, type: res.headers['content-type'] }));
+    res.on('end', () => resolve({ status: res.statusCode, body, type: res.headers['content-type'], disposition: res.headers['content-disposition'] }));
   }).on('error', reject);
 });
 
@@ -56,6 +57,10 @@ test('a single file serves only itself, and a bad ttl is refused', async () => {
   const id = /present\/([\w-]{16})\//.exec(run(path.join(site, 'a.md'), '--ttl', '5m'))[1];
   assert.equal((await get(id, '/')).status, 200);
   assert.equal((await get(id, '/.env')).status, 404);
+  const saved = await get(id, '/?download');
+  assert.equal(saved.body, '# Hi');
+  assert.match(saved.disposition, /^attachment; filename\*=UTF-8''a\.md$/);
+  assert.equal((await get(id, '/')).disposition, undefined);
   run('stop', id);
   assert.throws(() => run(site, '--ttl', '9d'));
 });
@@ -81,4 +86,26 @@ test('directory finds and shows listings', async () => {
     assert.match(out, /npx -y pg-mcp --flag/);
     assert.equal((await run(['show', '../secret'])).code, 1);
   } finally { srv.close(); }
+});
+
+test('the chat turns a download link into a file card with the real name and size', async () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const code = app.slice(app.indexOf('const bytes ='), app.indexOf('// The clipboard API'));
+  const h = (tag, props, ...kids) => ({ tag, ...props, kids, remove() { this.removed = true; } });
+  const card = async (head, a = { pathname: '/present/abcdefghijklmnop/', search: '?download', textContent: 'Download guess.txt' }) => {
+    const context = { h, icon: () => ({}), fetch: async () => head, Number, Math, decodeURIComponent };
+    vm.runInNewContext(code, context);
+    const el = context.fileCard(a);
+    await new Promise(setImmediate);
+    const [name, meta] = el.kids[1].kids;
+    return { name, meta, save: el.kids[2] };
+  };
+  const headers = values => ({ get: key => values[key] ?? null });
+  const live = await card({ ok: true, headers: headers({ 'content-disposition': "attachment; filename*=UTF-8''my%20report.pdf", 'content-length': '2048' }) });
+  assert.equal(live.name.textContent, 'my report.pdf');
+  assert.equal(live.meta.textContent, '2.0 KB · Temporary link');
+  assert.equal(live.save.href, '/present/abcdefghijklmnop/?download');
+  const ended = await card({ ok: false });
+  assert.equal(ended.meta.textContent, 'This link has ended');
+  assert.equal(ended.save.removed, true);
 });

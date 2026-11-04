@@ -109,6 +109,11 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .md h1, .md h2, .md h3 { margin: 14px 0 6px; font-size: 15px; }
 .md pre { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; overflow-x: auto; }
 .md pre code.hljs { background: none; padding: 0; }
+.filecard { display: flex; align-items: center; gap: 12px; max-width: 440px; margin: 0 0 10px; padding: 12px; background: var(--card); border: 1px solid var(--line-strong); border-radius: 14px; }
+.fc-icon { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; background: var(--raised); color: var(--fg); }
+.fc-text { flex: 1; min-width: 0; }
+.fc-name { font-weight: 600; }
+.filecard .btn { flex: none; color: var(--on-accent); text-decoration: none; }
 .md :not(pre) > code { background: var(--raised); border-radius: 4px; padding: 1px 5px; }
 .md table { border-collapse: collapse; display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--line-strong); padding: 4px 8px; }

@@ -26,6 +26,7 @@ const ICONS = {
   ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>', back: '<path d="M15 18l-6-6 6-6"/>',
   close: '<path d="M6 6l12 12M6 18L18 6"/>',
+  file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
   plane: '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.3c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
 };
@@ -60,7 +61,27 @@ const guard = fn => async (...a) => { try { return await fn(...a); } catch (e) {
 function markdown(el, text, final = true) {
   el.innerHTML = DOMPurify.sanitize(marked.parse(text || ''));
   if (final) el.querySelectorAll('pre code').forEach(c => { hljs.highlightElement(c); c.parentElement.append(copyButton(() => c.textContent)); });
-  el.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
+  el.querySelectorAll('a').forEach(a => {
+    if (final && /^\/present\/[\w-]{16}\//.test(a.pathname) && /[?&]download\b/.test(a.search)) a.replaceWith(fileCard(a));
+    else { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+  });
+}
+
+const bytes = n => { const i = n ? Math.min(Math.floor(Math.log(n) / Math.log(1024)), 3) : 0; return `${i ? (n / 1024 ** i).toFixed(1) : n} ${['B', 'KB', 'MB', 'GB'][i]}`; };
+// A temporary download link (scripts/present.js) becomes a card. A HEAD request gives the file's real name and size, and shows when the link has ended.
+function fileCard(a) {
+  const href = a.pathname + a.search; // This server's own path, whichever address the link was written with.
+  const name = h('div', { class: 'fc-name' }, a.textContent.replace(/^download\s+/i, ''));
+  const meta = h('div', { class: 'small muted' }, 'Temporary link');
+  const save = h('a', { class: 'btn primary', href, download: '' }, icon('download'), 'Download');
+  fetch(href, { method: 'HEAD' }).then(r => {
+    if (!r.ok) { meta.textContent = 'This link has ended'; save.remove(); return; }
+    const file = /filename\*=UTF-8''([^;]+)/.exec(r.headers.get('content-disposition') || '');
+    if (file) name.textContent = decodeURIComponent(file[1]);
+    const size = r.headers.get('content-length');
+    if (size) meta.textContent = `${bytes(Number(size))} · Temporary link`;
+  }).catch(() => {});
+  return h('div', { class: 'filecard' }, h('span', { class: 'fc-icon' }, icon('file')), h('div', { class: 'fc-text' }, name, meta), save);
 }
 
 // The clipboard API needs a secure context; plain http on a LAN address falls back to a selection copy.

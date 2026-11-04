@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Temporary host. `present.js <file|folder> [--ttl 1h]` prints a secret link, `present.js stop <id>` ends one early.
+// Adding ?download to any file's link saves it instead of opening it.
 // Each presentation is its own small process on a unix socket; server/index.js proxies /present/<id>/ to it.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -34,7 +35,8 @@ function sendFile(req, res, file) {
   const ext = path.extname(file).toLowerCase();
   const { size } = fs.statSync(file);
   const type = TYPES[ext];
-  if (!type && size <= MAX_RENDER) {
+  const asked = new URL(req.url, 'http://x').searchParams.has('download');
+  if (!type && !asked && size <= MAX_RENDER) {
     const buf = fs.readFileSync(file);
     if (!buf.subarray(0, 8000).includes(0)) {
       const text = buf.toString('utf8');
@@ -49,7 +51,7 @@ function sendFile(req, res, file) {
   res.writeHead(range ? 206 : 200, {
     'content-type': type || 'application/octet-stream', 'content-length': end - start + 1, 'accept-ranges': 'bytes',
     ...(range ? { 'content-range': `bytes ${start}-${end}/${size}` } : {}),
-    ...(type ? {} : { 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file))}` }),
+    ...(!type || asked ? { 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file))}` } : {}),
   });
   if (req.method === 'HEAD' || !size) res.end();
   else fs.createReadStream(file, { start, end }).pipe(res);
@@ -108,6 +110,7 @@ function start(argv) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   }
   console.log(`${URL_BASE}/${id}/`);
+  if (!fs.statSync(target).isDirectory()) console.log(`Download: ${URL_BASE}/${id}/?download`);
   console.log(`Serving ${target} until ${new Date(Date.now() + ms).toLocaleString()}. Anyone with the link can open it.`);
   console.log(`End it early: node ${process.argv[1]} stop ${id}`);
 }
