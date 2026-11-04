@@ -19,6 +19,7 @@ import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
 import * as push from './push.js';
 import * as notify from './notify.js';
 import * as vscode from './vscode.js';
+import * as preview from './preview.js';
 import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -42,7 +43,8 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 const RAW = Symbol('answered already'); // a route that wrote its own response
 const SECURITY = {
-  'content-security-policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+  // frame-src: the live preview, on its own port of whatever host the page came from, or at NEXUS_PREVIEW_URL.
+  'content-security-policy': `default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; frame-src 'self' http://*:${preview.PREVIEW_PORT} https://*:${preview.PREVIEW_PORT}${process.env.NEXUS_PREVIEW_URL ? ` ${new URL(process.env.NEXUS_PREVIEW_URL).origin}` : ''}`,
   'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY',
 };
 
@@ -122,6 +124,17 @@ route('POST', '/api/projects/:name/rename', async ({ req, p }) => {
   if (projects.chatOf(need(p.name))) { projects.setTitle(p.name, title ?? to); broadcast({ t: 'projects' }); return { name: p.name }; }
   agent.renameProject(p.name, to);
   return { name: to };
+});
+// Live preview: the ports this project's dev server may be on, and with ?port=, a signed link to it on the preview's own origin.
+route('GET', '/api/projects/:name/preview', async ({ req, p, q }) => {
+  const name = need(p.name), own = [PORT, preview.PREVIEW_PORT];
+  const outputs = [...agent.shells.values()].filter(s => projects.baseOf(s.project) === projects.baseOf(name) && s.status === 'running').map(s => s.output.slice(-20000));
+  const out = { ports: await preview.devPorts(outputs, own), previewPort: preview.PREVIEW_PORT };
+  if (!q.has('port')) return out;
+  const port = Number(q.get('port'));
+  if (!preview.validPort(port, own)) throw fail(400, "Enter the port your app's dev server listens on.");
+  const base = process.env.NEXUS_PREVIEW_URL?.replace(/\/+$/, '') || `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${String(req.headers.host).replace(/:\d+$/, '')}:${preview.PREVIEW_PORT}`;
+  return { ...out, url: `${base}/__nexus_preview?t=${encodeURIComponent(preview.previewToken(port))}` };
 });
 // A new chat in this chat's project, or a fork of this chat from one of its messages ("from": the message's id).
 route('POST', '/api/projects/:name/chats', async ({ req, p }) => {
@@ -650,3 +663,4 @@ async function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 server.listen(process.env.LISTEN_FDS ? { fd: 3 } : { port: PORT, host: '127.0.0.1' }, () => console.log(`Nexus on http://127.0.0.1:${PORT}`));
+preview.startPreview([PORT, preview.PREVIEW_PORT]);

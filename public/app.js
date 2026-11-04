@@ -391,6 +391,32 @@ const newChat = guard(async (name, from) => {
   if (from) toast('Forked into a new chat, with your message ready to edit. Both chats share the same project files.');
 });
 
+// Live preview: the app the project's dev server serves, through Nexus, here or in its own tab (from a phone too).
+// It runs on the preview's own port, so the app can't reach Nexus's API or cookie.
+const previewDialog = guard(async () => {
+  const project = S.project, key = `nexus.preview.${project.split('~')[0]}`;
+  const { ports, previewPort } = await api('GET', `${P(project)}/preview`);
+  const start = Number(pref(key)) || ports[0] || '';
+  const port = h('input', { class: 'field pvport', type: 'number', min: 1, max: 65535, value: start, id: 'pvport', inputmode: 'numeric' });
+  const frame = h('iframe', { class: 'pvframe', title: 'Live preview of the app', hidden: true });
+  const tab = h('a', { class: 'btn', target: '_blank', rel: 'noopener', hidden: true }, icon('ext'), 'Open in a new tab');
+  const show = guard(async () => {
+    const { url } = await api('GET', `${P(project)}/preview?port=${encodeURIComponent(port.value)}`);
+    pref(key, port.value);
+    Object.assign(frame, { src: url, hidden: false });
+    Object.assign(tab, { href: url, hidden: false });
+  });
+  port.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); show(); } });
+  dialog({ title: 'Live preview', wide: true, body: h('div', { class: 'form' },
+    h('div', { class: 'rowline' }, h('label', { htmlFor: 'pvport' }, 'Port'), port, h('button', { class: 'btn primary', type: 'button', onclick: show }, 'Show'), tab),
+    ports.length ? h('div', { class: 'rowline small muted' }, 'Listening now:', ports.map(p => h('button', { class: 'btn small', type: 'button', onclick: () => { port.value = p; show(); } }, `:${p}`)))
+      : h('p', { class: 'small muted' }, 'No dev server found yet. Start one (ask Nexus to run npm run dev in the background, say), then enter its port.'),
+    frame,
+    h('p', { class: 'small muted' }, `The app runs on Nexus's port ${previewPort}, apart from Nexus itself. To open it from a phone through a tunnel, give that port a public address too and set NEXUS_PREVIEW_URL to it.`)),
+  actions: [{ label: 'Close' }] });
+  if (start) show();
+});
+
 function renameDialog(name) {
   if (name.includes('~')) return renameChat(name);
   const err = h('div', { class: 'err', role: 'alert' });
@@ -486,6 +512,7 @@ function render() {
     h('div', { class: 'ttl' }, h('h1', { title: pretty(S.project) }, pretty(S.project)), projectDir(S.project) && h('span', { class: 'sub muted', title: projectDir(S.project) }, projectDir(S.project).split(/[\\/]/).slice(-2).join('/'))),
     h('span', { class: 'spin', 'aria-hidden': 'true' }),
     h('button', { class: 'icon-btn', 'aria-label': `Options for ${pretty(S.project)}`, onclick: e => projectMenu(e.currentTarget, S.project) }, icon('dots')),
+    h('button', { class: 'icon-btn', 'aria-label': 'Live preview of the app', title: 'Live preview', onclick: () => previewDialog() }, icon('globe')),
     h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Project views', onkeydown: e => navigateTabs(e, tabs, at) }, pill,
       tabs.map(([id, label]) => h('button', { class: `tab ${S.tab === id ? 'on' : ''}`, id: `tab-${id}`, role: 'tab', 'aria-selected': String(S.tab === id), 'aria-controls': 'project-view', tabIndex: S.tab === id ? 0 : -1, onclick: () => go(S.project, null, id) }, label)))),
   view);

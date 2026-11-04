@@ -65,6 +65,7 @@
 | 👀 **It can see** | A Screenshot tool lets the agent look at the page it just built in headless Edge or Chrome, at desktop or phone width. |
 | 🗂️ **Workspace viewer** | The Files tab shows every folder in the chat, and opens code with syntax colors and line numbers for the usual languages, big files included. You can still edit and save it there. It follows changes the AI or another app makes, and asks before replacing edits you haven't saved. |
 | 📎 **Point at code** | Type `@` to pick a file from any folder in the chat, or select lines in the Files tab and press **Ask Nexus**. |
+| 🌐 **Live preview** | The globe button in a project's header shows the app its dev server is serving (Nexus finds the ports your dev servers listen on), right in Nexus or in its own tab, so you can watch it change from your phone. The preview runs on its own port, so the app can't reach Nexus or its login. |
 | 💬 **Several chats per project** | **New chat** in a project's menu starts another conversation in the same folder, listed under the project and titled by its first message. The fork button on any of your messages starts a new chat from just before it, with that message ready to edit, so you can try another way without losing this one. `/btw <question>` asks something on the side, even while the agent works, and the answer stays out of the conversation. |
 | 🎭 **Swap agents per chat** | The **Agent** button next to the model turns a chat into any agent type, with its own instructions, tools and model. |
 | ✍️ **Create agents with AI** | Type `/create-agent reviews my PRs for security holes` and the AI writes a new agent type for you, tailored to your project. |
@@ -235,6 +236,8 @@ Optional settings, in `.env` (or `windows\.env` on Windows):
 | `NEXUS_MODEL` | `gpt-6.1-sol` | Default model for new chats |
 | `NEXUS_URL` | `http://127.0.0.1:<port>` | Public address used in `present` links |
 | `NEXUS_AUTO_UPDATE` | on | Set to `0` to turn off automatic updates |
+| `NEXUS_PREVIEW_PORT` | port + 1 | Port of the live preview, which shows a project's dev server apart from Nexus itself |
+| `NEXUS_PREVIEW_URL` | | Public address of the preview port, for opening previews through a tunnel or proxy |
 | `NEXUS_COMPAT` | unset | Name of another tool whose `.name/` folders and `NAME.md` should also be read |
 
 Hooks, MCP servers, providers and the auto-compact size live in `~/.nexus/settings.json`, which you can edit on the Settings page. Hooks run on `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact` and `Notification`, and a hook that exits with 2 blocks the tool call or prompt. The global system prompt lives in `~/.nexus/prompts.json`.
