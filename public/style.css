@@ -543,6 +543,9 @@ details.fold[open] > summary::after { transform: rotate(45deg); }
 .cbox:has(textarea:placeholder-shown):not(:has(.thumbs:not([hidden]))):has(.btn.danger:not([hidden])) .btn.primary { display: none; }
 .composer .cbar > [aria-label="Permission mode"], .composer .cbar > .mbtn, .composer .cbar > .apbtn, .composer .cbar > .pbtn, .composer .cbar > .meter { order: 6; flex: 0 1 auto; align-self: center; }
 .composer .cbar > .meter { margin-left: auto; min-height: 30px; }
+.composer .cbar > .enh { order: 6; align-self: center; }
+.suggest { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 4px 8px; }
+.suggest .btn { border-radius: 999px; white-space: normal; text-align: left; }
 .cbar > [aria-label="Permission mode"] { display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 3px 6px 3px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; font-size: 12.5px; white-space: nowrap; }
 .cbar > [aria-label="Permission mode"] svg { width: 14px; height: 14px; color: var(--muted); }
 .cbar > .plan, .cbar > .readonly { color: var(--info); }

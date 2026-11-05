@@ -625,7 +625,13 @@ function connect() {
     if (S.project) ws.send(JSON.stringify({ t: 'open', name: S.project }));
     refreshSoon();
   };
-  ws.onmessage = e => { lastHeard = Date.now(); onEvent(JSON.parse(e.data)); };
+  ws.onmessage = e => {
+    lastHeard = Date.now();
+    const m = JSON.parse(e.data);
+    if (m.t === 'suggest' && S.state) S.state.suggestions = m.items;
+    onEvent(m);
+    if (['state', 'status', 'suggest'].includes(m.t)) syncSuggest();
+  };
   ws.onclose = e => {
     if (S.ws !== ws) return;
     connLost(e.code === 1012 ? 'Server restarting…' : undefined);
@@ -1121,6 +1127,14 @@ try { drafts = JSON.parse(localStorage.getItem('nexus.drafts')) || {}; } catch {
 function saveDrafts() { try { localStorage.setItem('nexus.drafts', JSON.stringify(drafts)); } catch { /* private window */ } }
 addEventListener('pagehide', saveDrafts);
 const grow = () => { if (!CSS.supports('field-sizing', 'content')) { $input.style.height = 'auto'; $input.style.height = `${$input.scrollHeight}px`; } };
+// Suggested replies from the server after a turn: tap one to send it.
+let $suggest = null;
+function syncSuggest() {
+  if (!$suggest?.isConnected) return;
+  const items = !S.state?.running && Array.isArray(S.state?.suggestions) ? S.state.suggestions : [];
+  $suggest.replaceChildren(...items.map(text => h('button', { class: 'btn small', type: 'button', onclick: () => { sendWs({ t: 'send', text }); S.state.suggestions = []; syncSuggest(); } }, text)));
+  $suggest.hidden = !items.length;
+}
 function composer() {
   fileHits = { q: null, files: [] };
   $input = h('textarea', { rows: 1, placeholder: 'Message Nexus', 'aria-label': 'Message', oninput: () => { drafts[S.project] = $input.value; grow(); updateSlash(); },
@@ -1152,12 +1166,24 @@ function composer() {
   $model = h('button', { class: 'mbtn', type: 'button', 'aria-label': 'Choose model and effort', title: 'Model and effort', onclick: modelPicker }, $modelLabel, icon('down'));
   $meter = h('button', { class: 'meter', type: 'button', onclick: tokenPanel });
   $sendBtn = h('button', { class: 'btn small primary', type: 'button', 'aria-label': 'Send', title: 'Send', onmousedown: e => e.preventDefault(), onclick: send }, 'Send');
+  $suggest = h('div', { class: 'suggest', hidden: true, role: 'group', 'aria-label': 'Suggested replies' });
+  // The prompt enhancer: rewrites the draft into a clear, specific request, which stays in the box to check before sending.
+  const enhance = h('button', { class: 'icon-btn enh', type: 'button', 'aria-label': 'Improve this prompt', title: 'Improve this prompt with AI', onclick: guard(async () => {
+    if (!$input.value.trim()) return toast('Write a request first, then this rewrites it into a clearer one.');
+    enhance.disabled = true;
+    try {
+      const before = $input.value;
+      const { text } = await api('POST', `${P(S.project)}/enhance`, { text: before });
+      $input.value = drafts[S.project] = text; grow(); $input.focus();
+      toast('Rewrote your prompt. Check it, then send.', ['Undo', () => { $input.value = drafts[S.project] = before; grow(); }], 8000);
+    } finally { enhance.disabled = false; }
+  }) }, icon('spark'));
   $stopBtn = h('button', { class: 'btn small danger', type: 'button', 'aria-label': 'Stop', title: 'Stop', hidden: true, onclick: () => sendWs({ t: 'interrupt' }) }, 'Stop');
   syncThumbs();
-  return h('div', { class: 'composer' }, $slash, h('div', { class: 'cbox' }, $thumbs, $input, h('div', { class: 'cbar' },
+  return h('div', { class: 'composer' }, $suggest, $slash, h('div', { class: 'cbox' }, $thumbs, $input, h('div', { class: 'cbar' },
     h('button', { class: 'icon-btn att', type: 'button', 'aria-label': 'Attach image', title: 'Attach image', onclick: () => file.click() }, icon('plus')), file,
     Speech && h('button', { class: 'icon-btn mic', type: 'button', 'aria-label': 'Dictate', 'aria-pressed': 'false', title: "Dictate: speak and it types (your browser's speech recognition)", onclick: e => dictate(e.currentTarget) }, icon('mic')),
-    $mode, $autoBtn, $agentBtn, $model, $promptBtn, $meter, $stopBtn, $sendBtn)));
+    $mode, $autoBtn, $agentBtn, $model, $promptBtn, enhance, $meter, $stopBtn, $sendBtn)));
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -2432,6 +2458,12 @@ function typeCheckCard(area) {
     await putSettings(area, { typeCheck: box.checked ? undefined : false });
     toast(box.checked ? 'TypeScript projects are type checked after changes again.' : 'The type check after changes is off.');
   });
+  const sug = h('input', { type: 'checkbox', id: 'sugon', 'aria-describedby': 'sugon-hint' });
+  guard(async () => { sug.checked = JSON.parse((await api('GET', '/api/settings')).text).suggestReplies === true; })();
+  sug.onchange = guard(async () => {
+    await putSettings(area, { suggestReplies: sug.checked || undefined });
+    toast(sug.checked ? 'Replies to tap now show after each answer.' : 'Suggested replies are off.');
+  });
   const mem = h('input', { type: 'checkbox', id: 'memon', 'aria-describedby': 'memon-hint' });
   guard(async () => { mem.checked = JSON.parse((await api('GET', '/api/settings')).text).memory !== false; })();
   mem.onchange = guard(async () => {
@@ -2443,7 +2475,10 @@ function typeCheckCard(area) {
       h('p', { class: 'small muted', id: 'tcheck-hint' }, "After a turn that changed code in a project with a tsconfig.json and its own typescript, Nexus runs tsc and hands errors the change caused back to the agent, twice at most. A JavaScript, JSON or Python file that stops parsing is caught right after each edit, always. A /check command in a chat replaces the type check.")),
     h('h2', {}, 'Project memory'),
     h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'memon' }, mem, h('span', { class: 'grow' }, 'Let chats remember what they learn about each project')),
-      h('p', { class: 'small muted', id: 'memon-hint' }, "The agent saves facts later chats need, like how to run the tests, and every chat in that project sees them as notes to check. Read or prune a project's notes from its menu → Memory. Keys and passwords are never kept."))];
+      h('p', { class: 'small muted', id: 'memon-hint' }, "The agent saves facts later chats need, like how to run the tests, and every chat in that project sees them as notes to check. Read or prune a project's notes from its menu → Memory. Keys and passwords are never kept.")),
+    h('h2', {}, 'Composer'),
+    h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'sugon' }, sug, h('span', { class: 'grow' }, 'Suggest replies to tap after each answer')),
+      h('p', { class: 'small muted', id: 'sugon-hint' }, 'Two or three short things you might say next, so on a phone you can tap instead of typing. Each costs one small extra request to the chat\'s model. The sparkle button by the message box rewrites a rough prompt into a clearer one, whatever this is set to.'))];
 }
 
 // All off by default: settings.json "requestsPerMinute", "autoRetry", "notifyErrors" and "fallbackModels". The server reads them on each request.

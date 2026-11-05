@@ -153,6 +153,8 @@ route('POST', '/api/projects/:name/git', async ({ req, p }) => {
 route('GET', '/api/sandbox', () => ({ available: sandbox.available(), enabled: sandbox.enabled(), platform: process.platform }));
 // GitHub triggers: whether they're on, and which account gh is signed in as, for Settings.
 route('GET', '/api/github', async () => ({ enabled: readSettings().githubTriggers === true, login: await github.login() }));
+// The prompt enhancer behind the composer's sparkle button.
+route('POST', '/api/projects/:name/enhance', async ({ req, p }) => ({ text: await agent.enhancePrompt(need(p.name), (await body(req)).text) }));
 // The project's memory: notes chats saved for later chats, which the user can read, add to and prune.
 route('GET', '/api/projects/:name/memory', ({ p }) => ({ notes: memory.list(projects.projectDir(need(p.name))) }));
 route('POST', '/api/projects/:name/memory', async ({ req, p }) => ({ note: memory.add(projects.projectDir(need(p.name)), (await body(req)).fact) }));

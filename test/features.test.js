@@ -659,6 +659,52 @@ test('/recap sums up what happened since your last message, outside the conversa
   }
 });
 
+test('suggested replies (when on) come after a turn and clear on the next message; the enhancer rewrites a draft', async () => {
+  const realFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (url, init) => {
+    url = String(url);
+    if (url === 'http://sug.test/v1/models') return Response.json({ data: [{ id: 'm' }] });
+    if (url === 'https://openrouter.ai/api/v1/models') return Response.json({ data: PRICES });
+    if (url !== 'http://sug.test/v1/chat/completions') return realFetch(url, init);
+    const body = JSON.parse(init.body);
+    bodies.push(body);
+    const sys = body.messages[0].content;
+    const content = /suggest what the user/.test(sys) ? '- Run the tests\n2. Commit this\n"Explain the change"' : /Rewrite the user's request/.test(sys) ? 'Fix the login timeout on slow networks and add a test.' : 'All done.';
+    return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\n`);
+  };
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  projects.create('suggesting');
+  const s = agent.getSession('suggesting');
+  try {
+    fs.writeFileSync(settingsFile, JSON.stringify({ providers: { sug: { baseURL: 'http://sug.test/v1' } } }));
+    agent.setOption(s, 'model', 'sug:m');
+    await agent.submit('suggesting', 'fix it');
+    await idle(s);
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(s.state.suggestions, undefined, 'off unless turned on');
+    fs.writeFileSync(settingsFile, JSON.stringify({ suggestReplies: true, providers: { sug: { baseURL: 'http://sug.test/v1' } } }));
+    await agent.submit('suggesting', 'and the other bug');
+    await idle(s);
+    for (let i = 0; i < 40 && !s.state.suggestions?.length; i++) await new Promise(r => setTimeout(r, 50));
+    assert.deepEqual(s.state.suggestions, ['Run the tests', 'Commit this', 'Explain the change']);
+    const events = [];
+    const listen = (name, ev) => { if (name === 'suggesting' && ev.t === 'suggest') events.push(ev.items.length); };
+    agent.hub.on('project', listen);
+    await agent.submit('suggesting', 'Run the tests');
+    await idle(s);
+    agent.hub.off('project', listen);
+    assert.equal(events[0], 0, 'a new message clears the old ones first');
+
+    assert.equal(await agent.enhancePrompt('suggesting', 'fix login slow'), 'Fix the login timeout on slow networks and add a test.');
+    assert.match(bodies.at(-1).messages.at(-1).content, /Request:\nfix login slow/);
+    await assert.rejects(agent.enhancePrompt('suggesting', '  '), /Write a request first/);
+  } finally {
+    globalThis.fetch = realFetch;
+    fs.writeFileSync(settingsFile, '{}');
+  }
+});
+
 test('requestsPerMinute paces requests to each provider separately', async t => {
   const { pace } = await import('../server/util.js');
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
