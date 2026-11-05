@@ -2,6 +2,8 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import * as sandbox from './sandbox.js';
+import { childEnv } from './util.js';
 import { parseJsonc } from './vscode.js';
 
 // Right after the agent writes or edits a file, a quick check that it still parses, so a broken file is fixed in the same
@@ -50,8 +52,13 @@ export async function syntax(file) {
 export async function typeErrors(cwd, changed, seen, signal) {
   const bin = path.join(cwd, 'node_modules', 'typescript', 'bin', 'tsc');
   if (!fs.existsSync(path.join(cwd, 'tsconfig.json')) || !fs.existsSync(bin)) return null;
-  const out = await promisify(execFile)(process.execPath, [bin, '--noEmit', '--pretty', 'false'], { cwd, signal, timeout: 300_000, maxBuffer: 20 * 1024 * 1024, windowsHide: true })
-    .then(r => r.stdout, err => { if (signal?.aborted) throw err; return String(err.stdout || err.message); });
+  const argv = [bin, '--noEmit', '--pretty', 'false'];
+  const [cmd, args] = sandbox.enabled() ? sandbox.wrap(process.execPath, argv, [cwd]) : [process.execPath, argv];
+  const out = await promisify(execFile)(cmd, args, { cwd, env: childEnv(), signal, timeout: 300_000, maxBuffer: 20 * 1024 * 1024, windowsHide: true })
+    .then(r => r.stdout, err => {
+      if (signal?.aborted || err.signal || err.killed || typeof err.code !== 'number' || !/error TS\d+:/.test(err.stdout || '')) throw err;
+      return err.stdout;
+    });
   const all = out.split(/\r?\n/).filter(l => /error TS\d+:/.test(l));
   const key = l => l.replace(/\(\d+,\d+\)/, '').replaceAll('\\', '/');
   const touched = l => changed.some(f => key(l).startsWith(`${f}:`));

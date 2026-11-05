@@ -49,7 +49,10 @@ export function saveKey(name, value) {
 export function childEnv() {
   const env = { ...process.env };
   env.HOME ||= HOME;
-  for (const key of Object.keys(env)) if (KEY_NAMES.includes(key) || key === 'GOOGLE_API_KEY' || (key.startsWith('NEXUS_') && key !== 'NEXUS_URL')) delete env[key];
+  for (const key of Object.keys(env)) {
+    const name = key.toUpperCase(); // Windows environment names are case-insensitive.
+    if (KEY_NAMES.includes(name) || name === 'GOOGLE_API_KEY' || (name.startsWith('NEXUS_') && name !== 'NEXUS_URL')) delete env[key];
+  }
   return env;
 }
 

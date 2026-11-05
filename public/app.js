@@ -2485,7 +2485,7 @@ function typeCheckCard(area) {
   });
   return [h('h2', {}, 'Code checks'),
     h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'tcheck' }, box, h('span', { class: 'grow' }, 'Type check TypeScript projects after the agent changes code')),
-      h('p', { class: 'small muted', id: 'tcheck-hint' }, "After a turn that changed code in a project with a tsconfig.json and its own typescript, Nexus runs tsc and hands errors the change caused back to the agent, twice at most. A JavaScript, JSON or Python file that stops parsing is caught right after each edit, always. A /check command in a chat replaces the type check.")),
+      h('p', { class: 'small muted', id: 'tcheck-hint' }, "After a turn that changed code in a project with a tsconfig.json and its own typescript, Nexus runs tsc and hands errors the change caused back to the agent, twice at most. A JavaScript, JSON or Python file that stops parsing is caught right after each edit, always. A /check command in a chat replaces the type check. With the sandbox on, the automatic compiler runs inside it too; if it cannot start, no successful check is shown.")),
     h('h2', {}, 'Project memory'),
     h('div', { class: 'card' }, h('label', { class: 'rowline', htmlFor: 'memon' }, mem, h('span', { class: 'grow' }, 'Let chats remember what they learn about each project')),
       h('p', { class: 'small muted', id: 'memon-hint' }, "The agent saves facts later chats need, like how to run the tests, and every chat in that project sees them as notes to check. Read or prune a project's notes from its menu → Memory. Keys and passwords are never kept.")),
