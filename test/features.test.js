@@ -602,6 +602,28 @@ test('GitHub triggers: only my @nexus comments start a chat, once each, and the 
   assert.equal(typeof replied, 'string');
 });
 
+test('secrets pasted into a chat stay out of its transcript: provider keys go to Settings, others to $NEXUS_SECRET_n for commands', async () => {
+  const { execTool } = await import('../server/tools.js');
+  projects.create('vault');
+  const s = agent.getSession('vault');
+  const anthropic = 'sk-ant-api03-' + 'a'.repeat(40), token = 'ghp_' + 'B'.repeat(36);
+  const model = fakeModel();
+  try {
+    await agent.submit('vault', `here is my key ${anthropic} and use ${token} to call the GitHub API`);
+    await idle(s);
+  } finally { model.restore(); }
+  const saved = JSON.stringify([s.state.log, s.state.items, fs.readFileSync(path.join(projects.projectDir('vault'), '.nexus', 'conversation.json'), 'utf8'), model.sent]);
+  assert.ok(!saved.includes(anthropic) && !saved.includes(token), 'neither value is in the transcript, the history or what the model got');
+  assert.match(s.state.log.find(e => e.type === 'user').text, /\[Anthropic API key, saved in Settings\] and use \$NEXUS_SECRET_1 to call/);
+  assert.ok(s.state.log.some(e => e.type === 'system' && /Kept 2 secrets out of this chat/.test(e.text)));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(process.env.NEXUS_HOME, 'keys.json'), 'utf8')).ANTHROPIC_API_KEY, anthropic);
+  const out = await execTool('Bash', { command: 'echo "${NEXUS_SECRET_1:0:4}"' }, { cwd: projects.projectDir('vault'), session: s });
+  assert.match(out, /^ghp_/, "the chat's commands get it as an environment variable");
+  agent.trashProject('vault');
+  assert.ok(!fs.readFileSync(path.join(process.env.NEXUS_HOME, 'secrets.json'), 'utf8').includes(token), 'deleting the chat forgets it');
+  fs.rmSync(path.join(process.env.NEXUS_HOME, 'keys.json'), { force: true });
+});
+
 test('requestsPerMinute paces requests to each provider separately', async t => {
   const { pace } = await import('../server/util.js');
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });

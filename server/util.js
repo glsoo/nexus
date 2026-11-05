@@ -94,7 +94,7 @@ export function clip(text, max = 30000) {
 export const settingsPath = () => path.join(NEXUS_HOME, 'settings.json');
 export const readSettings = () => readJson(settingsPath(), {});
 // API keys, tokens and private keys by their well-known shapes, so they stay out of places that keep text around.
-export const SECRET = /\b(sk-(?:ant-|proj-|or-)?[\w-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|AKIA[0-9A-Z]{16}|xox[abprs]-[\w-]{10,}|AIza[\w-]{30,}|glpat-[\w-]{20,})|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+export const SECRET = /\b(sk-(?:ant-|proj-|or-)?[\w-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|AKIA[0-9A-Z]{16}|xox[abprs]-[\w-]{10,}|AIza[\w-]{30,}|glpat-[\w-]{20,}|gsk_\w{20,}|xai-\w{20,})|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 export const looksSecret = text => SECRET.test(String(text));
 
 // A wait that ends early, with the signal's AbortError, when the user interrupts.

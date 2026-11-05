@@ -10,6 +10,7 @@ import { agentDefs, commands, instructions, runHooks, skills } from './extension
 import * as repo from './git.js';
 import { typeErrors } from './diagnose.js';
 import * as memory from './memory.js';
+import * as secrets from './secrets.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
@@ -1221,7 +1222,8 @@ export function trashProject(name) {
   projects.trash(name);
   // Deleting a project takes its other chats with it. A new chat can reuse a name, and must not inherit these.
   const gone = k => k === name || (!chat && projects.baseOf(k) === name);
-  for (const k of [...sessions.keys()]) if (gone(k)) sessions.delete(k);
+  for (const k of [...sessions.keys()]) if (gone(k)) { sessions.delete(k); secrets.forget(k); }
+  secrets.forget(name);
   const list = schedules();
   if (list.some(x => gone(x.project))) saveSchedules(list.filter(x => !gone(x.project)));
   for (const k of watched()) if (gone(k)) setWatched(k, false);
@@ -1231,6 +1233,12 @@ export function trashProject(name) {
 
 export async function submit(name, text, images) {
   const s = getSession(name);
+  // Before anything keeps the text (naming, hooks, the log), a key or token in it is taken out (secrets.js).
+  const caught = secrets.catchSecrets(name, String(text));
+  if (caught.found.length) {
+    text = `${caught.text}${/^[/!#]/.test(caught.text) ? '' : `\n\n[Nexus took ${caught.found.length === 1 ? 'a secret' : 'secrets'} out of this message: ${caught.found.join('; ')}. You can't see the values.]`}`;
+    note(s, `Kept ${caught.found.length === 1 ? 'a secret' : `${caught.found.length} secrets`} out of this chat: ${caught.found.join('; ')}.`);
+  }
   await autoName(s, text);
   if (projects.chatOf(name) && !projects.title(name) && text.trim() && !/^[/!#]/.test(text)) projects.setTitle(name, text.split('\n')[0].slice(0, 60));
   const hook = await runHooks('UserPromptSubmit', { prompt: text }, cwdOf(s));
