@@ -624,6 +624,41 @@ test('secrets pasted into a chat stay out of its transcript: provider keys go to
   fs.rmSync(path.join(process.env.NEXUS_HOME, 'keys.json'), { force: true });
 });
 
+test('/recap sums up what happened since your last message, outside the conversation', async () => {
+  const realFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (url, init) => {
+    url = String(url);
+    if (url === 'http://recap.test/v1/models') return Response.json({ data: [{ id: 'm' }] });
+    if (url === 'https://openrouter.ai/api/v1/models') return Response.json({ data: PRICES });
+    if (url !== 'http://recap.test/v1/chat/completions') return realFetch(url, init);
+    bodies.push(JSON.parse(init.body));
+    return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: '- Fixed the parser.' }, finish_reason: 'stop' }] })}\n\n`);
+  };
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ providers: { rp: { baseURL: 'http://recap.test/v1' } } }));
+  projects.create('recapped');
+  const s = agent.getSession('recapped');
+  try {
+    agent.setOption(s, 'model', 'rp:m');
+    await agent.submit('recapped', '/recap');
+    assert.match(s.state.log.at(-1).text, /Nothing has happened/);
+    await agent.submit('recapped', 'fix the parser');
+    await idle(s);
+    const items = s.state.items.length;
+    await agent.submit('recapped', '/recap');
+    const entry = s.state.log.at(-1);
+    assert.deepEqual([entry.recap, entry.side, entry.text], [true, true, '- Fixed the parser.']);
+    assert.equal(s.state.items.length, items, 'the recap stays out of the conversation');
+    const asked = bodies.at(-1).messages;
+    assert.match(asked[0].content, /The user was away/);
+    assert.match(asked.at(-1).content, /user: fix the parser/);
+  } finally {
+    globalThis.fetch = realFetch;
+    fs.writeFileSync(settingsFile, '{}');
+  }
+});
+
 test('requestsPerMinute paces requests to each provider separately', async t => {
   const { pace } = await import('../server/util.js');
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });

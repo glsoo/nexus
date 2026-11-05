@@ -485,6 +485,8 @@ function go(project, page = null, tab = 'chat') {
   const changed = project !== S.project;
   const moved = changed || page !== S.page;
   S.project = project; S.page = page; S.tab = tab;
+  // Coming back to a chat that finished or stopped while you were elsewhere: offer a recap of what happened.
+  if (project && !page && tab === 'chat' && ['finished', 'error'].includes(S.alerts[project])) toast(`${pretty(project)} ${S.alerts[project] === 'error' ? 'stopped on an error' : 'finished'} while you were away.`, ['Recap', () => sendWs({ t: 'send', text: '/recap' })], 10000);
   if (project && !page && tab === 'chat' && S.alerts[project]) { delete S.alerts[project]; syncTitle(); }
   history.replaceState(null, '', page ? `#/${page}` : project ? `#/p/${encodeURIComponent(project)}/${tab}` : '#/');
   if (changed && project) { S.state = null; sendWs({ t: 'open', name: project }); guard(loadMeta)(); }
@@ -925,7 +927,7 @@ function renderEntry(e) {
     case 'assistant': {
       const md = h('div', { class: 'md' });
       markdown(md, e.text, e.status !== 'running');
-      return h('div', { class: `e assistant${e.side ? ' side' : ''}` }, e.side && h('div', { class: 'small muted' }, 'Side answer, not part of the conversation'), md);
+      return h('div', { class: `e assistant${e.side ? ' side' : ''}` }, e.side && h('div', { class: 'small muted' }, e.recap ? 'Recap of what happened since your last message' : 'Side answer, not part of the conversation'), md);
     }
     case 'reasoning': {
       const md = h('div', { class: 'md small muted' });
@@ -980,7 +982,7 @@ async function rewindDialog(e) {
 }
 
 const BUILTIN = [
-  ['help', 'Show commands and keys'], ['clear', 'Start over, archiving the transcript'], ['compact', 'Summarize to free up context'], ['autocompact', 'Turn auto-compact on or off, or set its size'],
+  ['help', 'Show commands and keys'], ['recap', 'Sum up what happened since your last message'], ['btw', 'Ask something on the side, even while the agent works'], ['clear', 'Start over, archiving the transcript'], ['compact', 'Summarize to free up context'], ['autocompact', 'Turn auto-compact on or off, or set its size'],
   ['model', 'Show or set the model'], ['effort', 'low, medium, high, xhigh or max'], ['mode', 'default, acceptEdits, plan, readonly or bypass'], ['plan', 'Research only, then propose a plan'],
   ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['pr', 'Commit, push and open a GitHub pull request'], ['issue', 'Fix a GitHub issue by number'], ['schedule', 'Run a prompt on a timer: cron fields, then the prompt'], ['check', 'A command, like npm test, to run after each change; Nexus fixes failures'], ['watch', 'on or off: act on comments ending in AI! saved in any editor'], ['todos', 'Show the task list'],
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
