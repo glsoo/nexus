@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isAnthropic } from './anthropic.js';
-import { apiKey, postWithRetry, readSettings, sseEvents } from './util.js';
+import { apiKey, modelError, modelFetch, postWithRetry, readSettings, sseEvents } from './util.js';
 
 // Any OpenAI-compatible Chat Completions server: OpenRouter, Ollama, LM Studio, or one added under "providers" in settings.json.
 // Model ids are "<provider>:<model>", so "ollama:qwen3-coder:30b" is the model "qwen3-coder:30b" on Ollama.
@@ -63,18 +63,26 @@ async function listModels(id, p) {
   const hit = lists.get(id), from = `${p.apiKey}\0${p.baseURL}`;
   if (hit && hit.from === from && Date.now() - hit.at < (p.local ? 15_000 : 3600_000)) return hit.list;
   p = await located(id, p);
-  const res = await fetch(`${p.baseURL}/models`, { headers: headers(id, p), signal: AbortSignal.timeout(p.local ? 1500 : 10_000) });
-  if (!res.ok) throw new Error(`${p.name} returned ${res.status} when listing models.`);
-  const { data = [] } = await res.json();
-  // An agent needs to chat and call tools, so models known not to (embeddings, speech, moderation) are left out.
-  const list = data.filter(m => (!m.supported_parameters || m.supported_parameters.includes('tools')) && !/embed|moderation|whisper|tts|transcri|dall-e|imagen|image|veo|guard|realtime|audio|rerank|wanx?\d|paraformer|cosyvoice|sambert|asr\b/i.test(m.id)).map(m => ({
-    id: `${id}:${m.id.replace(/^models\//, '')}`, name: m.name || m.id, provider: id, providerName: p.local ? `${p.name} · this computer` : p.name,
-    context: m.context_length || undefined, efforts: [],
-    ...(perM(m.pricing?.prompt) !== undefined && perM(m.pricing?.completion) !== undefined
-      ? { price: [perM(m.pricing.prompt), perM(m.pricing.completion)], cachedPrice: perM(m.pricing.input_cache_read) } : p.local ? { price: [0, 0] } : {}),
-  }));
-  lists.set(id, { at: Date.now(), list, from });
-  return list;
+  const res = await modelFetch(p.name, `${p.baseURL}/models`, { headers: headers(id, p), signal: AbortSignal.timeout(p.local ? 1500 : 10_000) });
+  try {
+    const text = await res.text();
+    if (!res.ok) throw modelError(p.name, text, res);
+    const body = JSON.parse(text);
+    if (body?.error != null || body?.response?.error != null) throw modelError(p.name, body, res);
+    const { data = [] } = body || {};
+    if (!Array.isArray(data)) throw new Error('Invalid model list response (expected a data array).');
+    // An agent needs to chat and call tools, so models known not to (embeddings, speech, moderation) are left out.
+    const list = data.filter(m => (!m.supported_parameters || m.supported_parameters.includes('tools')) && !/embed|moderation|whisper|tts|transcri|dall-e|imagen|image|veo|guard|realtime|audio|rerank|wanx?\d|paraformer|cosyvoice|sambert|asr\b/i.test(m.id)).map(m => ({
+      id: `${id}:${m.id.replace(/^models\//, '')}`, name: m.name || m.id, provider: id, providerName: p.local ? `${p.name} · this computer` : p.name,
+      context: m.context_length || undefined, efforts: [],
+      ...(perM(m.pricing?.prompt) !== undefined && perM(m.pricing?.completion) !== undefined
+        ? { price: [perM(m.pricing.prompt), perM(m.pricing.completion)], cachedPrice: perM(m.pricing.input_cache_read) } : p.local ? { price: [0, 0] } : {}),
+    }));
+    lists.set(id, { at: Date.now(), list, from });
+    return list;
+  } catch (err) {
+    throw modelError(p.name, err, res);
+  }
 }
 
 // ---- cost ----
@@ -103,14 +111,19 @@ export async function costOf(model, u) {
 }
 
 // Servers that aren't running or have no key are skipped, so they never hide the other providers.
-export async function compatModels() {
+export async function compatModels(errors = []) {
   const all = Object.entries(providers()).filter(([, p]) => p.baseURL && (!p.keyEnv || p.apiKey));
-  return (await Promise.allSettled(all.map(([id, p]) => listModels(id, p)))).flatMap(r => r.value || []);
+  return (await Promise.allSettled(all.map(([id, p]) => listModels(id, p)))).flatMap((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    errors.push({ provider: all[i][0], error: modelError(all[i][1].name, r.reason).message });
+    return [];
+  });
 }
 
 export const compatContext = model => lists.get(providerOf(model))?.list.find(m => m.id === model)?.context;
 
 // ---- requests ----
+const FINISH_REASONS = { stop: undefined, tool_calls: undefined, function_call: undefined, length: 'max_output_tokens', content_filter: 'content_filter' };
 const part = c => (c.type === 'input_image' ? { type: 'image_url', image_url: { url: c.image_url } } : { type: 'text', text: c.text });
 
 // Signatures can arrive in a later delta with no text or function arguments.
@@ -178,12 +191,18 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
     ...(fns.length ? { tools: fns, ...(toolChoice ? { tool_choice: toolChoice } : {}) } : {}),
   };
   let res;
+  const failure = detail => {
+    const err = modelError(p.name, detail, res);
+    if (/context.{0,20}(length|window)|too long|maximum context/i.test(err.message)) {
+      if (err.code !== undefined) err.providerCode ??= err.code;
+      err.code = 'context_length_exceeded'; // OpenRouter sends a numeric code
+    }
+    return err;
+  };
   try {
     res = await postWithRetry(p.name, `${p.baseURL}/chat/completions`, headers(id, p), body, signal);
   } catch (err) {
-    if (err.name === 'TypeError') throw new Error(`Couldn't reach ${p.name} at ${p.baseURL}. Is it running?`, { cause: err });
-    if (/context.{0,20}(length|window)|too long|maximum context/i.test(err.message)) err.code = 'context_length_exceeded'; // OpenRouter sends a numeric code
-    throw err;
+    throw failure(err);
   }
   const calls = [], open = {};
   let text = '', messageExtra, usage = {}, finish;
@@ -194,7 +213,7 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
   };
   try {
     for await (const ev of sseEvents(res.body)) {
-      if (ev.error) throw new Error(`${p.name}: ${ev.error.message || 'request failed'}`);
+      if (typeof ev === 'string' || ev?.error != null || ev?.response?.error != null || ev?.type === 'error') throw modelError(p.name, ev, res);
       if (ev.usage) usage = ev.usage;
       const choice = ev.choices?.[0];
       if (!choice) continue;
@@ -211,9 +230,16 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
         const a = tc.function?.arguments;
         if (a) c.args += typeof a === 'string' ? a : JSON.stringify(a);
       }
-      if (choice.finish_reason) finish = choice.finish_reason;
+      if (choice.finish_reason != null) {
+        const reason = choice.finish_reason;
+        if (typeof reason !== 'string' || !Object.hasOwn(FINISH_REASONS, reason)) throw new Error(`Unexpected model finish_reason: ${typeof reason === 'string' ? reason : 'invalid value'}.`);
+        finish = reason;
+      }
     }
     if (!finish) throw new Error('The model stream ended unexpectedly.');
+    if (FINISH_REASONS[finish] && !text.trim() && !calls.some(Boolean)) throw new Error(`The model returned no text or tool calls (finish_reason: ${finish}).`);
+  } catch (err) {
+    throw failure(err);
   } finally {
     for (const entry of Object.values(open)) { entry.status = 'done'; sink.update(entry); }
   }
@@ -231,6 +257,6 @@ export async function callCompat({ model, instructions, input, tools, toolChoice
       input_tokens_details: { cached_tokens: usage.prompt_tokens_details?.cached_tokens || 0 },
       output_tokens_details: { reasoning_tokens: usage.completion_tokens_details?.reasoning_tokens || 0 },
     },
-    incomplete: finish === 'length' ? 'max_output_tokens' : undefined,
+    incomplete: FINISH_REASONS[finish],
   };
 }

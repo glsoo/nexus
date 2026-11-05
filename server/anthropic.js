@@ -1,10 +1,14 @@
-import { apiKey, postWithRetry, sseEvents } from './util.js';
+import { apiKey, modelError, modelFetch, postWithRetry, sseEvents } from './util.js';
 
 // Conversations stay in Responses format so a chat can switch provider at any time.
 // An Anthropic turn is stored twice: raw (thinking and signatures must replay verbatim) and as flagged Responses items.
 const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MAX_PAUSES = 10;
 const CACHE_MS = 3600_000;
+const STOP_REASONS = {
+  end_turn: undefined, tool_use: undefined, stop_sequence: undefined, max_tokens: 'max_output_tokens',
+  pause_turn: 'pause_turn', refusal: 'refusal', model_context_window_exceeded: 'model_context_window_exceeded',
+};
 
 export const isAnthropic = model => !/^(gpt-|o\d)/.test(model);
 export const anthropicContext = model => cache.list.find(m => m.id === model)?.context;
@@ -13,18 +17,28 @@ const headers = () => ({ 'x-api-key': apiKey('ANTHROPIC_API_KEY'), 'anthropic-ve
 
 let cache = { at: 0, list: [] };
 export async function anthropicModels() {
-  if (!apiKey('ANTHROPIC_API_KEY') || Date.now() - cache.at < CACHE_MS) return cache.list;
-  const res = await fetch('https://api.anthropic.com/v1/models?limit=100', { headers: headers() });
-  if (!res.ok) throw new Error(`Anthropic returned ${res.status} when listing models.`);
-  const list = (await res.json()).data.map(m => ({
-    id: m.id, name: m.display_name, provider: 'anthropic', providerName: 'Anthropic', context: m.max_input_tokens, maxOutput: m.max_tokens,
-    efforts: LEVELS.filter(l => m.capabilities?.effort?.[l]?.supported),
-    thinking: m.capabilities?.thinking?.types?.adaptive?.supported ? 'adaptive' : m.capabilities?.thinking?.types?.enabled?.supported ? 'enabled' : null,
-    webSearch: Boolean(m.capabilities?.server_tools?.web_search),
-    deprecated: m.lifecycle === 'deprecated',
-  }));
-  cache = { at: Date.now(), list };
-  return list;
+  const key = apiKey('ANTHROPIC_API_KEY');
+  if (!key) return [];
+  if (cache.from === key && Date.now() - cache.at < CACHE_MS) return cache.list;
+  const res = await modelFetch('Anthropic', 'https://api.anthropic.com/v1/models?limit=100', { headers: headers() });
+  try {
+    const text = await res.text();
+    if (!res.ok) throw modelError('Anthropic', text, res);
+    const data = JSON.parse(text);
+    if (data?.error != null || data?.response?.error != null) throw modelError('Anthropic', data, res);
+    if (!Array.isArray(data?.data)) throw new Error('Invalid model list response (missing data array).');
+    const list = data.data.map(m => ({
+      id: m.id, name: m.display_name, provider: 'anthropic', providerName: 'Anthropic', context: m.max_input_tokens, maxOutput: m.max_tokens,
+      efforts: LEVELS.filter(l => m.capabilities?.effort?.[l]?.supported),
+      thinking: m.capabilities?.thinking?.types?.adaptive?.supported ? 'adaptive' : m.capabilities?.thinking?.types?.enabled?.supported ? 'enabled' : null,
+      webSearch: Boolean(m.capabilities?.server_tools?.web_search),
+      deprecated: m.lifecycle === 'deprecated',
+    }));
+    cache = { at: Date.now(), list, from: key };
+    return list;
+  } catch (err) {
+    throw modelError('Anthropic', err, res);
+  }
 }
 
 function imageBlock(url) {
@@ -98,6 +112,7 @@ async function oneRequest(body, sink, signal) {
   };
   try {
     for await (const ev of sseEvents(res.body)) {
+      if (typeof ev === 'string' || ev?.error != null || ev?.response?.error != null || ev?.type === 'error') throw modelError('Anthropic', ev, res);
       const block = blocks[ev.index];
       if (ev.type === 'message_start') usage = ev.message.usage;
       else if (ev.type === 'content_block_start') blocks[ev.index] = ev.content_block;
@@ -115,15 +130,20 @@ async function oneRequest(body, sink, signal) {
         }
         if (block.type === 'server_tool_use') sink.add({ type: 'tool', name: block.name, args: block.input, status: 'done', output: '' });
       } else if (ev.type === 'message_delta') {
-        stop = ev.delta.stop_reason;
+        if (ev.delta.stop_reason != null) {
+          const reason = ev.delta.stop_reason;
+          if (typeof reason !== 'string' || !Object.hasOwn(STOP_REASONS, reason)) throw new Error(`Unexpected model stop_reason: ${typeof reason === 'string' ? reason : 'invalid value'}.`);
+          stop = reason;
+        }
         usage = { ...usage, ...ev.usage };
-      } else if (ev.type === 'error') {
-        throw new Error(`Anthropic: ${ev.error?.message || 'request failed'}`);
       } else if (ev.type === 'message_stop') {
+        if (!stop) throw new Error('The model stream ended without a stop_reason.');
         return { stop, usage, content: blocks.filter(b => !b.cut && (b.type !== 'thinking' || b.signature) && (b.type !== 'text' || b.text.trim())) };
       }
     }
     throw new Error('The model stream ended unexpectedly.');
+  } catch (err) {
+    throw modelError('Anthropic', err, res);
   } finally {
     for (const entry of open.values()) { entry.status = 'done'; sink.update(entry); }
   }
@@ -149,7 +169,10 @@ export async function callAnthropic(params, sink, signal) {
       if (result.stop !== 'pause_turn') break; // a long server tool run asks to be resumed
     }
   } catch (err) {
-    if (/prompt is too long/i.test(err.message)) err.code = 'context_length_exceeded';
+    if (/prompt is too long/i.test(err.message)) {
+      if (err.code !== undefined) err.providerCode ??= err.code;
+      err.code = 'context_length_exceeded';
+    }
     throw err;
   }
   const text = content.filter(b => b.type === 'text');
@@ -161,11 +184,20 @@ export async function callAnthropic(params, sink, signal) {
       ...calls.map(b => ({ type: 'function_call', anthropic: true, call_id: b.id, name: b.name, arguments: JSON.stringify(b.input) })),
     ],
     usage: mapUsage({ ...result.usage, output_tokens: output }),
-    incomplete: ['end_turn', 'tool_use', 'stop_sequence'].includes(result.stop) ? undefined : result.stop === 'max_tokens' ? 'max_output_tokens' : result.stop,
+    incomplete: STOP_REASONS[result.stop],
   };
 }
 
 export async function askAnthropic(model, instructions, text, signal, maxTokens = 64) {
   const res = await post({ model, max_tokens: maxTokens, system: instructions, messages: [{ role: 'user', content: text }] }, signal);
-  return (await res.json()).content.find(b => b.type === 'text')?.text;
+  try {
+    const data = await res.json();
+    if (data?.error != null || data?.response?.error != null || data?.type === 'error') throw modelError('Anthropic', data, res);
+    if (data?.stop_reason != null && !['end_turn', 'stop_sequence'].includes(data.stop_reason)) throw modelError('Anthropic', { message: `The model stopped early: ${String(data.stop_reason)}`, code: 'incomplete_response' }, res);
+    const text = Array.isArray(data?.content) ? data.content.find(b => b?.type === 'text' && typeof b.text === 'string' && b.text.trim())?.text : undefined;
+    if (text === undefined) throw new Error('Invalid model response (missing text content).');
+    return text;
+  } catch (err) {
+    throw modelError('Anthropic', err, res);
+  }
 }

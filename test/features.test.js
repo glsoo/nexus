@@ -336,7 +336,7 @@ test('any OpenAI-compatible server: its models are listed and a chat runs tools 
     assert.deepEqual(msgs.map(m => m.role), ['system', 'assistant', 'tool', 'tool', 'user', 'user']);
     assert.deepEqual(msgs[4].content, [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } }]);
 
-    await assert.rejects(compat.callCompat({ model: 'down:x', instructions: '', input: [], tools: [] }, {}, AbortSignal.timeout(20000)), /Couldn't reach down at http:\/\/127\.0\.0\.1:9\/v1/);
+    await assert.rejects(compat.callCompat({ model: 'down:x', instructions: '', input: [], tools: [] }, {}, AbortSignal.timeout(20000)), /down: fetch failed[\s\S]*bad port/);
     assert.doesNotThrow(() => agent.setOption(s, 'model', 'openrouter:meta-llama/llama-3.3-70b-instruct:free'));
   } finally {
     server.close();
@@ -376,7 +376,7 @@ test('reliability: off by default; auto retry waits out a failure, and a key out
     await agent.submit('reliable', 'two');
     await idle(s, 8000);
     assert.equal(sent.length, 2);
-    assert.ok(s.state.log.some(e => e.type === 'system' && /Overloaded\nTrying again in 1s \(1 of 6\)/.test(e.text)));
+    assert.ok(s.state.log.some(e => e.type === 'system' && /Overloaded[\s\S]*Trying again in 1s \(1 of 6\)/.test(e.text)));
     assert.equal(s.state.items.at(-1).content[0].text, 'ok', 'the retried request answered');
 
     // The wait a server asks for comes back on the error, and a long one isn't spent in quick retries.

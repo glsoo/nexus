@@ -38,8 +38,8 @@ const icon = name => { const t = document.createElement('template'); t.innerHTML
 async function api(method, url, data) {
   const res = await fetch(url, { method, headers: data ? { 'content-type': 'application/json' } : {}, body: data ? JSON.stringify(data) : undefined });
   const json = await res.json().catch(() => ({}));
-  if (res.status === 401 && url !== '/api/login') { showLogin(); throw new Error('Signed out.'); }
-  if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
+  if (res.status === 401 && !json.provider && url !== '/api/login') { showLogin(); throw new Error('Signed out.'); }
+  if (!res.ok) throw Object.assign(new Error(json.error || `Request failed (${res.status})`), json.provider ? { provider: json.provider } : {});
   return json;
 }
 const P = name => `/api/projects/${encodeURIComponent(name)}`;
@@ -61,7 +61,13 @@ function toast(text, action, ms = 5000) {
   document.body.append(el);
   setTimeout(() => exit(el, { opacity: 0, transform: 'translate(-50%, 12px)' }, 220).then(() => el.remove()), ms);
 }
-const guard = fn => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message); } };
+const guard = fn => async (...a) => {
+  try { return await fn(...a); } catch (e) {
+    if (!e.provider) return toast(e.message);
+    return dialog({ title: `${e.provider} request failed`, wide: true, body: h('div', { class: 'out err', role: 'alert' }, e.message),
+      actions: [{ label: 'Copy', run: async () => { await copyText(e.message); toast('Copied.'); return false; } }, { label: 'Close', class: 'primary' }] });
+  }
+};
 
 function markdown(el, text, final = true) {
   el.innerHTML = DOMPurify.sanitize(marked.parse(text || ''));
@@ -571,7 +577,7 @@ document.addEventListener('visibilitychange', () => { sendWs({ t: 'visible', on:
 
 // A chat that finishes or needs an answer while you look elsewhere: a mark in the sidebar, a toast that opens it, a count in the title,
 // and a system notification when Nexus is in the background and notifications are on in Settings.
-function notice({ project, kind, body }) {
+function notice({ project, kind, body, notify }) {
   if (project === S.project && !S.page && S.tab === 'chat' && !document.hidden) return; // you're watching it
   if (kind === 'waiting' || S.alerts[project] !== 'waiting') S.alerts[project] = kind;
   refreshSoon();
@@ -579,7 +585,7 @@ function notice({ project, kind, body }) {
   const title = `${pretty(project)} ${kind === 'waiting' ? 'needs your answer' : kind === 'error' ? 'stopped on an error' : 'finished'}`;
   if (!document.hidden) return toast(`${title}. ${body}`, ['Open', () => go(project, null, 'chat')], kind === 'waiting' ? 12000 : 6000);
   // This computer shows its own notification for a browser on it, so the browser doesn't add a second one.
-  if (!S.me?.desktopNotify && pref('nexus.notify') === '1' && window.Notification?.permission === 'granted') {
+  if ((kind !== 'error' || notify === true) && !S.me?.desktopNotify && pref('nexus.notify') === '1' && window.Notification?.permission === 'granted') {
     new Notification(title, { body, icon: '/icon-180.png', tag: `nexus-${project}` }).onclick = () => { focus(); go(project, null, 'chat'); };
   }
 }
@@ -2350,35 +2356,42 @@ const KEY_INFO = {
   DASHSCOPE_API_KEY: ['Alibaba Qwen (DashScope)', 'dashscope', 'Qwen models, with a key from any region', 'https://www.alibabacloud.com/help/en/model-studio/get-api-key'],
 };
 async function modelsCard() {
-  const [keys, models] = await Promise.all([guard(() => api('GET', '/api/keys'))(), api('GET', '/api/models').catch(() => [])]);
+  const [keys, details] = await Promise.all([guard(() => api('GET', '/api/keys'))(), guard(() => api('GET', '/api/models?details=1'))()]);
   if (!keys) return [];
+  const { models, errors } = details || { models: [], errors: [] };
   S.models = models;
   const local = [...new Set(models.filter(m => /this computer/.test(m.providerName || '')).map(m => m.providerName.split(' · ')[0]))];
   const row = k => {
     const [label, provider, what, url] = KEY_INFO[k.name] || [k.name, '', '', ''];
     const n = models.filter(m => m.provider === provider).length, id = uid();
+    const failure = errors.find(e => e.provider === provider)?.error;
     const input = h('input', { class: 'field', id, type: 'password', autocomplete: 'off', spellcheck: false, placeholder: k.saved ? 'Paste a new key to replace it' : 'Paste an API key' });
     const put = guard(async value => {
       await api('PUT', `/api/keys/${k.name}`, { value });
-      S.models = await api('GET', '/api/models').catch(() => []);
+      const next = await api('GET', '/api/models?details=1');
+      S.models = next.models;
       syncComposer();
-      const got = S.models.filter(m => m.provider === provider).length;
-      toast(!value ? `Removed the ${label} key.` : got ? `${label} is connected: ${got} models are in the model picker.` : `Saved, but ${label} sent back no models. Check the key.`);
+      const got = S.models.filter(m => m.provider === provider).length, failed = next.errors.find(e => e.provider === provider);
+      toast(!value ? `Removed the ${label} key.` : failed ? `Saved the ${label} key, but its model request failed.` : got ? `${label} is connected: ${got} models are in the model picker.` : `Saved the ${label} key, but it returned no compatible models.`);
       render();
+      if (value && failed) throw Object.assign(new Error(failed.error), { provider: label });
     });
     const save = () => (input.value.trim() ? put(input.value.trim()) : toast('Paste a key first.'));
-    const status = k.env || k.saved ? (n ? `Connected · ${n} models` : 'Key set, but no models came back. Check it.') : 'Not set';
+    const status = failure ? 'Could not load models' : n ? `Connected · ${n} models` : k.env || k.saved ? 'Key set, but no compatible models came back.' : 'Not set';
     return h('div', { class: 'keyrow' },
-      h('div', { class: 'rowline' }, h('span', { class: `dot ${n ? 'done' : k.env || k.saved ? 'error' : 'idle'}`, 'aria-hidden': 'true' }),
+      h('div', { class: 'rowline' }, h('span', { class: `dot ${failure ? 'error' : n ? 'done' : k.env || k.saved ? 'error' : 'idle'}`, 'aria-hidden': 'true' }),
         h('div', { class: 'grow' }, h('label', { class: 'title', htmlFor: id }, label), h('div', { class: 'small muted' }, `${status} · ${what} · `, extLink('Get a key', url))),
         k.saved && !k.env && h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Remove the ${label} key`, onclick: () => put('') }, 'Remove')),
       k.env ? h('div', { class: 'small muted' }, `Set in Nexus's environment as ${k.name}.`)
-        : h('div', { class: 'rowline' }, input, h('button', { class: 'btn', type: 'button', onclick: save }, 'Save')));
+        : h('div', { class: 'rowline' }, input, h('button', { class: 'btn', type: 'button', onclick: save }, 'Save')),
+      failure && h('div', { class: 'out err', role: 'alert' }, failure));
   };
+  const other = errors.filter(e => !keys.some(k => KEY_INFO[k.name]?.[1] === e.provider));
   return [h('h2', {}, 'Models'),
     h('p', { class: 'small muted' }, models.length ? '' : 'Add a key for at least one provider to start chatting. ',
       `Keys stay on this machine in ~/.nexus/keys.json, and the agent's shell commands never get them. Ollama and LM Studio models appear by themselves while they run on this computer${local.length ? ` (running now: ${local.join(', ')})` : ''}.`),
-    h('div', { class: 'card' }, keys.map(row))];
+    h('div', { class: 'card' }, keys.map(row), other.length > 0 && h('details', { class: 'fold' },
+      h('summary', {}, `Other and local provider diagnostics (${other.length})`), other.map(e => h('div', { class: 'out err' }, e.error))))];
 }
 
 async function spendCard() {
@@ -2523,7 +2536,7 @@ function reliabilityCard(area) {
       h('p', { class: 'small muted', id: 'rpm-hint' }, "Paces requests so a provider's per-minute limit is never hit, counting every chat and subagent together. Set it a little under the limit your provider's console shows for your plan. 0 means no pacing."),
       ...flag('autoRetry', 'Retry automatically when a request fails', 'Rate limits, overloaded servers and dropped connections are tried again up to 6 times, waiting as long as the provider asks (up to 10 minutes each). The chat shows each wait, and Stop cancels it. A key out of credit is not retried.',
         'Failed requests are retried now.', 'Failed requests are no longer retried after the first few seconds.'),
-      ...flag('notifyErrors', 'Notify me when a chat stops on an error', 'The notification says what went wrong instead of just "finished", through every notification you have turned on.',
+      ...flag('notifyErrors', 'Notify me when a chat stops on an error', 'Send an OS or push notification when a chat fails, through the notifications you have turned on. Errors always stay visible in Nexus.',
         'Errors now come with a notification.', 'Error notifications are off.'),
       h('label', { class: 'title', htmlFor: 'fbadd' }, 'Fallback models'),
       h('p', { class: 'small muted', id: 'fb-hint' }, "When a key runs out of credit or quota, the chat switches to the first model below from a different provider and carries on. You'll see the switch in the chat. Empty means no switching."),

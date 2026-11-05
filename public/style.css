@@ -32,7 +32,7 @@ svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-widt
 input.field, select.field, textarea.field { width: 100%; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 8px 10px; }
 select.field { width: auto; }
 label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
-.err { color: var(--danger); font-size: 13px; min-height: 20px; }
+.err { color: var(--danger); font-size: 13px; min-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
 
 /* login */
@@ -117,7 +117,7 @@ label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom:
 .e.user .rw:focus-visible { opacity: 1; }
 @media (hover: none) { .e.user .rw { opacity: .75; } }
 .e.system { color: var(--muted); font-size: 13px; }
-.e.error { color: var(--danger); border-left: 2px solid var(--danger); padding-left: 10px; overflow-wrap: anywhere; }
+.e.error { color: var(--danger); border-left: 2px solid var(--danger); padding-left: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .md { overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
 .md p, .md ul, .md ol, .md pre, .md table, .md blockquote { margin: 0 0 10px; }

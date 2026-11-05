@@ -25,7 +25,7 @@ import * as repo from './git.js';
 import * as memory from './memory.js';
 import * as github from './github.js';
 import * as sandbox from './sandbox.js';
-import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
+import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, modelError, modelFetch, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -410,17 +410,24 @@ route('POST', '/api/self-improve', async ({ req }) => {
   return { name };
 });
 
-let modelCache = { at: 0, list: [] };
+let modelCache = { at: 0, list: [], from: '' };
 async function openaiModels() {
-  if (!apiKey('OPENAI_API_KEY')) return [];
-  if (Date.now() - modelCache.at > 3600_000) {
-    const res = await fetch('https://api.openai.com/v1/models', { headers: { authorization: `Bearer ${apiKey('OPENAI_API_KEY')}` } });
-    if (!res.ok) throw fail(502, `OpenAI returned ${res.status} when listing models.`);
-    const list = (await res.json()).data.map(m => m.id)
+  const key = apiKey('OPENAI_API_KEY');
+  if (!key) return [];
+  const from = createHash('sha256').update(key).digest('hex');
+  if (modelCache.from !== from || Date.now() - modelCache.at > 3600_000) {
+    const res = await modelFetch('OpenAI', 'https://api.openai.com/v1/models', { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) });
+    let data;
+    try {
+      if (!res.ok) throw modelError('OpenAI', await res.text(), res);
+      data = (await res.json())?.data;
+      if (!Array.isArray(data) || data.some(m => typeof m?.id !== 'string')) throw new Error('Invalid models response: expected a data array of model ids.');
+    } catch (err) { throw err.provider ? err : modelError('OpenAI', new Error('Could not read models response.', { cause: err }), res); }
+    const list = data.map(m => m.id)
       .filter(id => /^(gpt-[4-9]|o\d)/.test(id) && !/audio|realtime|image|tts|transcribe|search|embed|moderation|-\d{4}-\d\d-\d\d$/.test(id))
       .sort((a, b) => a.startsWith('o') - b.startsWith('o') || b.localeCompare(a, undefined, { numeric: true }))
       .map(id => ({ id, name: id.replace(/^gpt/, 'GPT').replace(/-([a-z])/g, (_, c) => ` ${c.toUpperCase()}`), provider: 'openai', providerName: 'OpenAI', efforts: agent.supportsReasoning(id) ? ['low', 'medium', 'high', 'xhigh'] : [] }));
-    modelCache = { at: Date.now(), list };
+    modelCache = { at: Date.now(), list, from };
   }
   return modelCache.list;
 }
@@ -458,10 +465,18 @@ route('GET', '/api/doctor', async () => {
   add('Updates', upstream ? 'ok' : 'warn', upstream ? `GitHub reachable; Settings → Version shows what's new` : "Couldn't reach origin. Updates need a network connection to GitHub.");
   return { checks };
 });
-route('GET', '/api/models', async () => {
-  const results = await Promise.allSettled([anthropicModels(), openaiModels(), compatModels()]);
+route('GET', '/api/models', async ({ q }) => {
+  const compatErrors = [];
+  const results = await Promise.allSettled([anthropicModels(), openaiModels(), compatModels(compatErrors)]);
   const list = results.flatMap(r => r.value || []);
-  if (!list.length) throw results.find(r => r.reason)?.reason || fail(502, 'No models available.');
+  const failures = results.flatMap((r, i) => {
+    if (r.status !== 'rejected') return [];
+    const provider = ['anthropic', 'openai', 'compat'][i];
+    return [{ provider, error: r.reason?.provider ? r.reason : modelError(provider, r.reason) }];
+  });
+  const errors = [...failures.map(f => ({ provider: f.provider, error: f.error.message })), ...compatErrors];
+  if (q.get('details') === '1') return { models: list, errors };
+  if (!list.length) throw failures[0]?.error || (errors.length ? Object.assign(new Error(errors[0].error), { provider: errors[0].provider }) : fail(502, 'No models available.'));
   return list;
 });
 
@@ -543,7 +558,8 @@ function present(req, res, url) {
 
 // Anything a handler throws ends that request, never the server.
 const server = http.createServer((req, res) => handle(req, res).catch(err => {
-  console.error(req.method, req.url, err);
+  if (err.provider) console.error(err.message);
+  else console.error(req.method, req.url, err);
   if (!res.headersSent) res.writeHead(500);
   res.end();
 }));
@@ -558,10 +574,11 @@ async function handle(req, res) {
       const result = await api(req, res, url);
       if (result !== RAW) res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
     } catch (err) {
-      if (!err.status) console.error(req.method, url.pathname, err);
-      const status = err.status || (err.code === 'ENOENT' ? 404 : 500);
+      if (err.provider) console.error(err.message);
+      else if (!err.status) console.error(req.method, url.pathname, err);
+      const status = err.provider ? 502 : err.status || (err.code === 'ENOENT' ? 404 : 500);
       if (!res.headersSent) res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      res.end(JSON.stringify({ error: err.message, ...(err.provider ? { provider: err.provider } : {}) }));
     }
     return;
   }
@@ -654,14 +671,14 @@ agent.hub.on('project', (name, ev) => {
   if (ev.t === 'status' && ev.running) busy.add(name);
   else if (ev.t === 'status' && busy.delete(name)) {
     const { log } = agent.getSession(name).state;
-    // settings.json "notifyErrors": a chat that stopped on an error says so, instead of just finished.
-    const failed = log.at(-1)?.type === 'error' && readSettings().notifyErrors ? log.at(-1) : null;
+    const failed = log.at(-1)?.type === 'error' ? log.at(-1) : null;
+    // Failure state is always visible; notifyErrors only opts into OS/push error notifications.
+    const notify = !failed || readSettings().notifyErrors === true;
     const reply = failed?.text || log.findLast(e => e.type === 'assistant')?.text || '';
     const body = reply.replace(/\s+/g, ' ').slice(0, 140) || 'The agent is done.';
     const title = `${chatLabel(name)} ${failed ? 'stopped on an error' : 'finished'}`;
-    ping(title, body, name);
-    pcNotify(title, body, name);
-    broadcast({ t: 'alert', project: name, kind: failed ? 'error' : 'finished', body }); // every open page, which shows it unless you're watching that chat
+    if (notify) { ping(title, body, name); pcNotify(title, body, name); }
+    broadcast({ t: 'alert', project: name, kind: failed ? 'error' : 'finished', body, title, notify }); // every open page, which shows it unless you're watching that chat
   } else if (ev.t === 'entry' && ev.entry.status === 'awaiting' && !pinged.has(ev.entry)) {
     pinged.add(ev.entry);
     const body = `The agent ${asks[ev.entry.name] || `wants to run ${ev.entry.name}`}.`;

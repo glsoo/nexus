@@ -112,13 +112,138 @@ export const sleep = (ms, signal) => new Promise((resolve, reject) => {
 export const outOfCredit = err => err.status === 402 || err.code === 'insufficient_quota'
   || /credit balance|insufficient.{0,12}(balance|credit|funds|quota)|exceeded your current quota|out of credits?|payment required/i.test(err.message);
 
+const header = (headers, name) => headers?.get ? headers.get(name) : Object.entries(headers || {}).find(([key]) => key.toLowerCase() === name)?.[1];
+
 // How long the server asked to wait, in ms: OpenAI's retry-after-ms, else retry-after in seconds or as a date.
 function retryAfter(headers) {
-  const ms = Number(headers.get('retry-after-ms'));
+  const ms = Number(header(headers, 'retry-after-ms'));
   if (ms > 0) return ms;
-  const v = headers.get('retry-after');
+  const v = header(headers, 'retry-after');
   if (!v) return undefined;
   return Number(v) >= 0 ? Number(v) * 1000 : Math.max(0, Date.parse(v) - Date.now()) || undefined;
+}
+
+// Model diagnostics keep credentials private, even if Settings changes while a response is streaming.
+// Neither credentials nor raw upstream objects are attached to the Error that callers may log or serialize.
+const modelCredentials = new WeakMap(), modelErrors = new WeakSet();
+const credentialName = name => /auth|api[-_]?key|token|secret|password|credential|signature|cookie|^(?:key|sig|pass|pwd)$/i.test(name);
+const scalar = value => ['string', 'number', 'boolean'].includes(typeof value) ? value : undefined;
+const decoded = value => { try { return decodeURIComponent(value); } catch { return value; } };
+const encoded = value => { try { return encodeURIComponent(value); } catch { return value; } };
+function requestCredentials(url, init) {
+  const values = [];
+  const add = value => { if (value) values.push(String(value)); };
+  const headers = init?.headers;
+  const entries = headers instanceof Headers || Array.isArray(headers) ? headers : Object.entries(headers || {});
+  for (const [name, value] of entries) {
+    if (!credentialName(name)) continue;
+    add(value);
+    const auth = /^(?:Bearer|Basic)\s+([\s\S]+)$/i.exec(String(value).trim());
+    if (auth) add(auth[1]);
+  }
+  try {
+    const u = new URL(url);
+    for (const value of [u.username, u.password]) { add(value); add(decoded(value)); }
+    for (const [name, value] of u.searchParams) if (credentialName(name)) add(value);
+    for (const field of u.search.slice(1).split('&')) {
+      const i = field.indexOf('=');
+      if (i >= 0 && credentialName(decoded(field.slice(0, i)))) add(field.slice(i + 1));
+    }
+  } catch { /* fetch will report an invalid URL */ }
+  return [...new Set(values.flatMap(value => [value, encoded(value), JSON.stringify(value).slice(1, -1)]))].sort((a, b) => b.length - a.length);
+}
+function redactModel(text, credentials) {
+  text = String(text);
+  // Replace whole values before clipping; a token crossing a clipping boundary must not leave half a key behind.
+  for (const value of credentials) text = text.split(value).join('[REDACTED]');
+  return text.replace(/(https?:\/\/)[^\s/?#@]+@/gi, '$1[REDACTED]@')
+    .replace(/([?&]([^=\s&#]+)=)([^&#\s]*)/g, (match, prefix, name) => credentialName(decoded(name)) ? `${prefix}[REDACTED]` : match)
+    .replace(/\b(Bearer|Basic)\s+[^\s,;"'<>]+/gi, '$1 [REDACTED]')
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[REDACTED]')
+    .replace(new RegExp(SECRET.source, 'g'), '[REDACTED]');
+}
+
+export async function modelFetch(label, url, init) {
+  const credentials = requestCredentials(url, init); // capture before the first await, not when the stream fails
+  try {
+    const res = await fetch(url, init);
+    modelCredentials.set(res, credentials);
+    return res;
+  } catch (err) {
+    throw modelError(label, err, undefined, credentials);
+  }
+}
+
+export function modelError(label, detail, res, credentials = modelCredentials.get(res) || []) {
+  if (detail instanceof Error && modelErrors.has(detail)) return detail;
+  const clean = value => clip(redactModel(value, credentials), 12000);
+  const safe = value => scalar(value) === undefined ? undefined : typeof value === 'string' ? clean(value) : value;
+  let body = detail;
+  if (typeof body === 'string') { try { body = JSON.parse(body); } catch { /* plain provider/proxy response */ } }
+  let source = body;
+  const envelopes = [body];
+  for (let i = 0; i < 8; i++) {
+    const next = source?.error ?? source?.response?.error;
+    if (next === undefined || next === null || next === source) break;
+    source = next;
+    envelopes.unshift(source);
+  }
+  const messageOf = (value, depth = 0) => {
+    if (scalar(value) !== undefined) return value;
+    if (!value || depth > 4) return undefined;
+    if (value instanceof SyntaxError) {
+      // Native parser snippets may contain a shortened credential that whole-value redaction cannot match.
+      const location = /(?: at position \d+(?: \(line \d+ column \d+\))?| \(line \d+ column \d+\))$/.exec(value.message)?.[0] || '';
+      return `Invalid JSON response (SyntaxError${location}); response excerpt omitted for privacy.`;
+    }
+    // Read diagnostic fields only: never stringify echoed request bodies, headers, stacks or arbitrary objects.
+    if (Array.isArray(value)) return value.slice(0, 16).map(v => messageOf(v, depth + 1)).filter(v => v !== undefined).join('; ') || undefined;
+    for (const key of ['message', 'detail', 'title', 'error_description', 'reason', 'msg', 'description', 'text', 'errors']) {
+      const text = messageOf(value[key], depth + 1);
+      if (text !== undefined) return text;
+    }
+  };
+  const provider = clean(label), message = messageOf(source) ?? 'Request failed (no provider error message).';
+  const status = [res?.status, ...envelopes.flatMap(e => [e?.status, e?.statusCode, e?.code])].find(v => Number.isInteger(v) && v >= 400 && v <= 599);
+  const err = new Error();
+  err.provider = provider;
+  if (status !== undefined) err.status = status;
+  for (const key of ['code', 'type', 'param', 'location']) {
+    const value = safe(envelopes.map(e => scalar(e?.[key])).find(v => v !== undefined));
+    if (value !== undefined) err[key] = value;
+  }
+  const semantic = envelopes.map(e => e?.status).find(v => typeof v === 'string');
+  if (semantic !== undefined) err.providerStatus = safe(semantic);
+  const id = ['request-id', 'x-request-id', 'x-goog-request-id'].map(name => header(res?.headers, name)).find(Boolean)
+    || envelopes.flatMap(e => [e?.request_id, e?.requestId, e?.response?.request_id, e?.response?.requestId]).find(v => scalar(v) !== undefined);
+  if (scalar(id) !== undefined) err.requestId = safe(id);
+  const delay = retryAfter(res?.headers) ?? envelopes.map(e => e?.retryAfter).find(v => Number.isFinite(v) && v >= 0);
+  if (delay !== undefined) err.retryAfter = delay;
+  const lines = [`${provider}${status === undefined ? '' : ` ${status}`}: ${message}`];
+  const seen = new Set();
+  let nodes = 0;
+  const causes = (value, depth = 0) => {
+    if (value == null || seen.has(value)) return;
+    if (++nodes > 64 || depth > 12) { lines.push('… [additional causes truncated]'); return; }
+    seen.add(value);
+    const text = messageOf(value), code = scalar(value?.code);
+    if (depth && (text !== undefined || code !== undefined)) lines.push(`Cause: ${text ?? 'Connection failed'}${code === undefined ? '' : ` (${code})`}`);
+    if (err.code === undefined && code !== undefined) err.code = safe(code);
+    if (value?.cause !== undefined) causes(value.cause, depth + 1);
+    if (Array.isArray(value?.errors)) for (const child of value.errors) {
+      if (nodes >= 64) { lines.push('… [additional causes truncated]'); break; }
+      causes(child, depth + 1);
+    }
+  };
+  causes(source);
+  if (err.code !== undefined) err.providerCode = err.code;
+  for (const [key, title] of [['code', 'Code'], ['type', 'Type'], ['providerStatus', 'Status'], ['param', 'Param'], ['location', 'Location'], ['requestId', 'Request ID']]) {
+    if (err[key] !== undefined) lines.push(`${title}: ${err[key]}`);
+  }
+  err.message = clean(lines.join('\n'));
+  if (source?.name === 'AbortError' || source?.name === 'TimeoutError') err.name = source.name;
+  modelErrors.add(err);
+  return err;
 }
 
 // settings.json "requestsPerMinute": at most that many requests a minute to each provider, counted across every chat and subagent,
@@ -139,12 +264,11 @@ export async function pace(label, signal) {
 export async function postWithRetry(label, url, headers, body, signal) {
   for (let attempt = 0; ; attempt++) {
     await pace(label, signal);
-    const res = await fetch(url, { method: 'POST', signal, headers, body: JSON.stringify(body) });
+    const res = await modelFetch(label, url, { method: 'POST', signal, headers, body: JSON.stringify(body) });
     if (res.ok) return res;
-    const text = await res.text();
-    let message = text.slice(0, 500), code;
-    try { const e = JSON.parse(text).error; message = typeof e === 'string' ? e : e?.message || message; code = e?.code; } catch { /* raw text */ }
-    const err = Object.assign(new Error(`${label} ${res.status}: ${message}`), { code, status: res.status, retryAfter: retryAfter(res.headers) });
+    let detail;
+    try { detail = await res.text(); } catch (err) { throw modelError(label, err, res); }
+    const err = modelError(label, detail, res);
     // A few quick retries ride out a blip. A longer wait the server asks for is left to the chat's auto retry (settings.json "autoRetry").
     if ((res.status === 429 || res.status >= 500) && attempt < 4 && !outOfCredit(err) && !(err.retryAfter > 30_000)) {
       await sleep(Math.max(2000 * 2 ** attempt, err.retryAfter || 0), signal);
@@ -162,7 +286,12 @@ export async function* sseEvents(body) {
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i).trimEnd();
       buf = buf.slice(i + 1);
-      if (line.startsWith('data: ') && line !== 'data: [DONE]') yield JSON.parse(line.slice(6));
+      if (line.startsWith('data:')) {
+        const data = line.slice(5).trimStart();
+        if (data && data !== '[DONE]') yield JSON.parse(data);
+      }
     }
   }
+  const data = buf.trimEnd().startsWith('data:') ? buf.slice(5).trim() : '';
+  if (data && data !== '[DONE]') yield JSON.parse(data);
 }
