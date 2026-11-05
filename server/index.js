@@ -2,6 +2,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
@@ -14,7 +15,7 @@ import { agentDefs, commands, deleteAgentDef, removeSkill, saveAgentDef, skills,
 import * as market from './market.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
-import { findFiles } from './tools.js';
+import { findBrowser, findFiles } from './tools.js';
 import { DEFAULT_BASE, globalPrompts, savePrompts } from './prompts.js';
 import * as push from './push.js';
 import * as notify from './notify.js';
@@ -424,6 +425,39 @@ async function openaiModels() {
   return modelCache.list;
 }
 // One provider being down must not hide the others' models.
+// /doctor: what this install needs and whether it has it, so a problem shows up with its fix instead of as a vague failure.
+// Each check is ok, warn (works without it, with less) or fail (something will break).
+const version = (cmd, args = ['--version']) => new Promise(resolve => execFile(cmd, args, { timeout: 10_000, windowsHide: true }, (err, out) => resolve(err ? null : String(out).trim().split('\n')[0])));
+route('GET', '/api/doctor', async () => {
+  const checks = [];
+  const add = (name, state, detail) => checks.push({ name, state, detail });
+  const major = Number(process.versions.node.split('.')[0]);
+  add('Node.js', major >= 24 ? 'ok' : 'fail', `${process.version}${major >= 24 ? '' : '. Nexus needs 24 or newer.'}`);
+  const [gitV, rgV, ghV] = await Promise.all([version('git'), version('rg'), version('gh')]);
+  add('Git', gitV ? 'ok' : 'fail', gitV || 'Not found. Install Git; projects, checkpoints and updates need it.');
+  add('ripgrep', rgV ? 'ok' : 'warn', rgV || 'Not found. Install ripgrep (rg): file search, @ mentions and Grep need it.');
+  let shell = null;
+  try { shell = shellCommand(); } catch (err) { add('Shell', 'fail', err.message); }
+  if (shell) add('Shell', 'ok', shell);
+  const models = (await Promise.allSettled([anthropicModels(), openaiModels(), compatModels()])).flatMap(r => r.value || []);
+  const keys = KEY_NAMES.filter(apiKey);
+  add('Models', models.length ? 'ok' : 'fail', models.length ? `${models.length} models from ${[...new Set(models.map(m => m.providerName || m.provider || 'OpenAI/Anthropic'))].slice(0, 6).join(', ')}` : keys.length ? `Keys are set (${keys.join(', ')}) but no models came back. Check the keys, or your connection.` : 'No API key and no local model. Add a key in Settings → Models, or run Ollama or LM Studio.');
+  let exe = null;
+  try { exe = findBrowser('Browser'); } catch { /* none here */ }
+  add('Browser', exe ? 'ok' : 'warn', exe || 'No Chrome, Edge or Chromium found. The Screenshot and Browser tools need one.');
+  add('GitHub CLI', ghV ? 'ok' : 'warn', ghV ? `${ghV}${(await github.login()) ? `, signed in as @${await github.login()}` : ', not signed in (gh auth login): /pr, /issue and @nexus triggers need it'}` : 'Not found. /review of pull requests, /pr, /issue and @nexus triggers need gh.');
+  let settingsOk = true;
+  try { if (fs.existsSync(settingsPath())) JSON.parse(fs.readFileSync(settingsPath(), 'utf8')); } catch (err) { settingsOk = false; add('settings.json', 'fail', `Not valid JSON: ${err.message}. Fix it in Settings.`); }
+  if (settingsOk) add('settings.json', 'ok', settingsPath());
+  const broken = mcp.status().filter(s => s.status === 'error');
+  add('MCP servers', broken.length ? 'warn' : 'ok', broken.length ? broken.map(s => `${s.name}: ${s.error}`).join('; ') : `${mcp.status().length} connected or starting`);
+  if (sandbox.enabled()) add('Sandbox', sandbox.available() ? 'ok' : 'fail', sandbox.available() || "It's on, but this system has none, so the agent's commands are refused. Turn it off in Settings.");
+  const previewUp = await new Promise(resolve => { const s = net.connect(preview.PREVIEW_PORT, '127.0.0.1', () => { s.destroy(); resolve(true); }); s.on('error', () => resolve(false)); });
+  add('Live preview', previewUp ? 'ok' : 'warn', previewUp ? `port ${preview.PREVIEW_PORT}` : `Port ${preview.PREVIEW_PORT} isn't listening (another program may have it). Set NEXUS_PREVIEW_PORT.`);
+  const upstream = await new Promise(resolve => execFile('git', ['ls-remote', '--heads', 'origin', 'main'], { cwd: ROOT, timeout: 15_000, windowsHide: true }, (err, out) => resolve(err ? null : String(out).split(/\s/)[0])));
+  add('Updates', upstream ? 'ok' : 'warn', upstream ? `GitHub reachable; Settings → Version shows what's new` : "Couldn't reach origin. Updates need a network connection to GitHub.");
+  return { checks };
+});
 route('GET', '/api/models', async () => {
   const results = await Promise.allSettled([anthropicModels(), openaiModels(), compatModels()]);
   const list = results.flatMap(r => r.value || []);

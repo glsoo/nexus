@@ -223,7 +223,7 @@ const BROWSERS = {
   linux: ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/microsoft-edge', '/snap/bin/chromium'],
 };
 
-const findBrowser = tool => {
+export const findBrowser = tool => {
   const exe = (BROWSERS[process.platform] || BROWSERS.linux).find(f => fs.existsSync(f));
   if (!exe) throw new Error(`${tool} needs Chrome, Edge or Chromium installed.`);
   return exe;

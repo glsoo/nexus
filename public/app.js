@@ -988,7 +988,7 @@ async function rewindDialog(e) {
 }
 
 const BUILTIN = [
-  ['help', 'Show commands and keys'], ['recap', 'Sum up what happened since your last message'], ['btw', 'Ask something on the side, even while the agent works'], ['clear', 'Start over, archiving the transcript'], ['compact', 'Summarize to free up context'], ['autocompact', 'Turn auto-compact on or off, or set its size'],
+  ['help', 'Show commands and keys'], ['doctor', 'Check that everything Nexus needs is set up'], ['recap', 'Sum up what happened since your last message'], ['btw', 'Ask something on the side, even while the agent works'], ['clear', 'Start over, archiving the transcript'], ['compact', 'Summarize to free up context'], ['autocompact', 'Turn auto-compact on or off, or set its size'],
   ['model', 'Show or set the model'], ['effort', 'low, medium, high, xhigh or max'], ['mode', 'default, acceptEdits, plan, readonly or bypass'], ['plan', 'Research only, then propose a plan'],
   ['cost', 'Show tokens used and cost'], ['budget', 'Dollars: stop once this chat has cost that much'], ['init', 'Write a NEXUS.md for this project'], ['pr', 'Commit, push and open a GitHub pull request'], ['issue', 'Fix a GitHub issue by number'], ['schedule', 'Run a prompt on a timer: cron fields, then the prompt'], ['check', 'A command, like npm test, to run after each change; Nexus fixes failures'], ['watch', 'on or off: act on comments ending in AI! saved in any editor'], ['todos', 'Show the task list'],
   ['files', 'Open the Files tab'], ['changes', 'Open the Changes tab'], ['terminal', 'Open the terminal'], ['agents', 'Open agent management'],
@@ -1007,6 +1007,7 @@ function localCommand(text) {
   if (['settings', 'mcp'].includes(cmd)) { go(S.project, 'settings'); return true; }
   if (cmd === 'memory') { pendingOpen = 'NEXUS.md'; go(S.project, null, 'files'); return true; }
   if (cmd === 'rewind') { toast('Use the rewind arrow on the prompt you want to go back to.'); return true; }
+  if (cmd === 'doctor') { doctorDialog(); return true; }
   const panels = { agent: agentPicker, prompts: () => promptsDialog(), marketplace: () => openMarket('agents'), export: () => exportChat(S.project) };
   if (Object.hasOwn(panels, cmd)) { guard(panels[cmd])(); return true; }
   return false;
@@ -1127,6 +1128,18 @@ try { drafts = JSON.parse(localStorage.getItem('nexus.drafts')) || {}; } catch {
 function saveDrafts() { try { localStorage.setItem('nexus.drafts', JSON.stringify(drafts)); } catch { /* private window */ } }
 addEventListener('pagehide', saveDrafts);
 const grow = () => { if (!CSS.supports('field-sizing', 'content')) { $input.style.height = 'auto'; $input.style.height = `${$input.scrollHeight}px`; } };
+// /doctor: what this install needs and whether it has it, each with its fix.
+const doctorDialog = guard(async () => {
+  const body = h('div', { class: 'form' }, h('p', { class: 'muted' }, 'Checking…'));
+  dialog({ title: 'Doctor', wide: true, body, actions: [{ label: 'Close' }] });
+  const { checks } = await api('GET', '/api/doctor');
+  const mark = { ok: ['✓', 'done'], warn: ['!', 'awaiting'], fail: ['✕', 'error'] };
+  const bad = checks.filter(c => c.state === 'fail').length, warn = checks.filter(c => c.state === 'warn').length;
+  body.replaceChildren(h('p', { class: 'title' }, bad ? `${bad} problem${bad === 1 ? '' : 's'} to fix` : warn ? 'Working, with a few things missing' : 'Everything Nexus needs is here'),
+    h('div', { class: 'permlist' }, checks.map(c => h('div', { class: 'rowline' }, h('span', { class: `dot ${mark[c.state][1]}`, 'aria-hidden': 'true' }),
+      h('span', { class: 'grow' }, h('span', { class: 'title' }, c.name), h('span', { class: 'sr' }, `: ${c.state}`), h('div', { class: 'small muted' }, c.detail))))));
+});
+
 // Suggested replies from the server after a turn: tap one to send it.
 let $suggest = null;
 function syncSuggest() {
@@ -2652,6 +2665,7 @@ async function versionCard() {
     const merge = guard(async () => { const { name } = await api('POST', '/api/update/merge', {}); await refreshProjects(); go(name); });
     card.replaceChildren(...[
       h('div', { class: 'rowline' }, h('div', { class: 'grow' }, h('div', { class: 'title mono' }, `v${v.version} · ${v.commit}`), h('div', { class: `ustate${n && !v.updating ? ' title' : ' small muted'}`, role: 'status' }, state)),
+        h('button', { class: 'btn', type: 'button', onclick: () => doctorDialog() }, 'Check setup'),
         v.canMerge && h('button', { class: 'btn', type: 'button', onclick: merge }, 'Merge with AI'),
         !v.updating && (n ? h('button', { class: 'btn primary', type: 'button', onclick: install }, `Install update${s}`) : h('button', { class: 'btn', type: 'button', onclick: check }, 'Check for updates'))),
       n > 0 && h('details', { class: 'fold', open: n <= 5 }, h('summary', {}, "What's new"),
