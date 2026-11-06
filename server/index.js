@@ -25,7 +25,7 @@ import * as repo from './git.js';
 import * as memory from './memory.js';
 import * as github from './github.js';
 import * as sandbox from './sandbox.js';
-import { QUALITY_PRESETS } from './quality.js';
+import { QUALITY_PRESETS, qualityPreset } from './quality.js';
 import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, modelError, modelFetch, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -156,7 +156,11 @@ route('GET', '/api/sandbox', () => ({ available: sandbox.available(), enabled: s
 // GitHub triggers: whether they're on, and which account gh is signed in as, for Settings.
 route('GET', '/api/github', async () => ({ enabled: readSettings().githubTriggers === true, login: await github.login() }));
 // The prompt enhancer behind the composer's sparkle button.
-route('POST', '/api/projects/:name/enhance', async ({ req, p }) => ({ text: await agent.enhancePrompt(need(p.name), (await body(req)).text) }));
+route('POST', '/api/projects/:name/enhance', async ({ req, p }) => {
+  const name = need(p.name), { text, quality } = await body(req);
+  const selected = quality === undefined ? qualityPreset(agent.getSession(name).state.quality).id : quality;
+  return { text: await agent.enhancePrompt(name, text, selected), quality: selected };
+});
 // The project's memory: notes chats saved for later chats, which the user can read, add to and prune.
 route('GET', '/api/projects/:name/memory', ({ p }) => ({ notes: memory.list(projects.projectDir(need(p.name))) }));
 route('POST', '/api/projects/:name/memory', async ({ req, p }) => ({ note: memory.add(projects.projectDir(need(p.name)), (await body(req)).fact) }));

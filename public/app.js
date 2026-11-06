@@ -704,6 +704,7 @@ function onEvent(m) {
     case 'delta': delta(m); break;
     case 'status': {
       const was = S.state?.running;
+      if (S.state && Number.isSafeInteger(m.gen) && m.gen >= 0) S.state.gen = m.gen;
       if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, quality: m.quality, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt, dirs: m.dirs, allow: m.allow });
       if (was && !m.running) { finished(); refreshReview(); filesChanged(); }
       if (m.running && $review) $review.hidden = true;
@@ -1193,15 +1194,25 @@ function composer() {
   $meter = h('button', { class: 'meter', type: 'button', onclick: tokenPanel });
   $sendBtn = h('button', { class: 'btn small primary', type: 'button', 'aria-label': 'Send', title: 'Send', onmousedown: e => e.preventDefault(), onclick: send }, 'Send');
   $suggest = h('div', { class: 'suggest', hidden: true, role: 'group', 'aria-label': 'Suggested replies' });
-  // The prompt enhancer: rewrites the draft into a clear, specific request, which stays in the box to check before sending.
-  const enhance = h('button', { class: 'icon-btn enh', type: 'button', 'aria-label': 'Improve this prompt', title: 'Improve this prompt with AI', onclick: guard(async () => {
-    if (!$input.value.trim()) return toast('Write a request first, then this rewrites it into a clearer one.');
+  // Prompt assistance stays in the composer for review; late responses must not replace newer work.
+  const enhance = h('button', { class: 'icon-btn enh', type: 'button', 'aria-label': 'Improve this prompt', title: 'Improve this prompt with AI for the selected build quality', onclick: guard(async () => {
+    const input = $input, project = S.project, quality = S.state?.quality || 'personal', gen = S.state?.gen;
+    const before = input.value;
+    if (!before.trim()) return toast('Write a rough idea first; AI will shape it for the selected build quality.');
+    if (!['personal', 'shared', 'commercial'].includes(quality)) return toast('Reconnect to load a valid build quality before improving the prompt.');
+    const label = S.meta?.qualityPresets?.find(p => p.id === quality)?.label || quality[0].toUpperCase() + quality.slice(1);
+    const current = () => S.project === project && $input === input && input.isConnected !== false && S.state?.gen === gen;
     enhance.disabled = true;
     try {
-      const before = $input.value;
-      const { text } = await api('POST', `${P(S.project)}/enhance`, { text: before });
-      $input.value = drafts[S.project] = text; grow(); $input.focus();
-      toast('Rewrote your prompt. Check it, then send.', ['Undo', () => { $input.value = drafts[S.project] = before; grow(); }], 8000);
+      const result = await api('POST', `${P(project)}/enhance`, { text: before, quality });
+      if (!current() || input.value !== before || (S.state?.quality || 'personal') !== quality) return toast('Your draft, chat or build quality changed. The newer draft was kept.');
+      const text = result?.text;
+      if (result?.quality !== quality || typeof text !== 'string' || !text.trim() || text.length > 8000) throw new Error('The prompt helper returned an invalid or mismatched result. Your original draft was kept; reload after an update or try again.');
+      input.value = drafts[project] = text; grow(); input.focus();
+      toast(`${label} prompt ready. Review it, then send.`, ['Undo', () => {
+        if (!current() || input.value !== text) return toast('The draft changed after the rewrite. Undo was not applied.');
+        input.value = drafts[project] = before; grow(); input.focus();
+      }], 8000);
     } finally { enhance.disabled = false; }
   }) }, icon('spark'));
   $stopBtn = h('button', { class: 'btn small danger', type: 'button', 'aria-label': 'Stop', title: 'Stop', hidden: true, onclick: () => sendWs({ t: 'interrupt' }) }, 'Stop');
@@ -1261,7 +1272,7 @@ function qualityPicker() {
     } },
     h('div', { class: 'mhead' }, h('h2', {}, 'Build quality'), h('button', { class: 'btn small', type: 'button', onclick: shut }, 'Done')),
     h('p', { class: 'qintro muted', id: 'quality-guidance' }, 'These guide planning and checks; permissions stay unchanged.'), list,
-    h('div', { class: 'mfoot qnotes muted', id: 'quality-notes' }, h('p', {}, 'Applies to the next AI request in this chat.'), h('p', {}, 'Commercial is not a guarantee your product is ready to sell.')));
+    h('div', { class: 'mfoot qnotes muted', id: 'quality-notes' }, h('p', {}, 'Applies to the next AI request in this chat.'), h('p', {}, 'Use ✨ Improve this prompt in the composer for AI help at this level.'), h('p', {}, 'Commercial is not a guarantee your product is ready to sell.')));
   syncQuality = () => {
     const current = S.state?.quality || 'personal';
     if (S.project !== project || !S.state || !qualityPresets().some(p => p.id === current)) return shut();
@@ -1465,6 +1476,11 @@ function syncComposer() {
   $qualityLabel.textContent = quality?.label || (st ? 'Unavailable' : 'Loading…');
   $qualityBtn.title = $qualityBtn.ariaLabel = quality ? `Build quality: ${quality.label} · ${quality.subtitle}. Planning and checks only; permissions unchanged.`
     : st ? 'Build quality is unavailable. Reconnect after the server finishes loading or updating.' : 'Build quality is loading';
+  const enhance = $input.closest?.('.composer')?.querySelector('.enh');
+  if (enhance) {
+    enhance.title = quality ? `Improve this ${quality.label} prompt with AI. Review before sending.` : 'Improve this prompt with AI for the selected build quality';
+    enhance.setAttribute('aria-description', quality ? `Uses ${quality.label} prompt guidance; does not send the message.` : 'Uses the selected build quality; does not send the message.');
+  }
   if (!st) return;
   $mode.value = st.mode;
   $mode.className = st.mode;

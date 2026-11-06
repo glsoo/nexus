@@ -63,9 +63,10 @@ test('three fixed presets expose beginner-facing metadata and scoped safety guid
   assert.deepEqual(QUALITY_PRESETS.map(p => [p.id, p.label, p.subtitle]), [
     ['personal', 'Personal', 'Vibe coding'], ['shared', 'Shared', 'Prompt engineering'], ['commercial', 'Commercial', 'Guardrails'],
   ]);
-  const metadata = QUALITY_PRESETS.map(({ prompt, ...p }) => p);
+  const metadata = QUALITY_PRESETS.map(({ prompt, assistPrompt, ...p }) => p);
   for (const [index, preset] of QUALITY_PRESETS.entries()) {
-    assert.deepEqual(Object.keys(preset).sort(), ['description', 'id', 'label', 'prompt', 'subtitle']);
+    assert.deepEqual(Object.keys(preset).sort(), ['assistPrompt', 'description', 'id', 'label', 'prompt', 'subtitle']);
+    assert.ok(typeof preset.assistPrompt === 'string' && preset.assistPrompt.length > 0);
     assert.deepEqual(Object.keys(metadata[index]).sort(), ['description', 'id', 'label', 'subtitle']);
     assert.ok(Object.values(metadata[index]).every(value => typeof value === 'string' && value.length > 0 && value.length < 150));
     assert.equal(qualityPreset(preset.id), preset);

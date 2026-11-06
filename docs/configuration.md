@@ -90,6 +90,7 @@ Live preview uses a **different origin**. To use it remotely, forward the previe
 
 - The **Agent** control changes the chat's role and tools. Official `nexus-coder` and `nexus-verifier` come with Nexus. Editing an official agent saves your own overriding copy.
 - **Build quality** selects Personal, Shared or Commercial guidance independently of the agent and permission mode. New chats/forks inherit the source chat's choice.
+- **✨ Improve this prompt** asks your selected model to rewrite a rough idea for that level. Shared/Commercial guidance leaves missing requirements as questions or open decisions rather than inventing them. The draft stays editable and is never sent automatically; Undo only restores the matching draft in its original chat. Input and generated prompts are limited to 8,000 characters, without silently truncating your request. Recognized keys/tokens/private keys are rejected, and a prior-reply excerpt containing recognized secrets is omitted; this is not a comprehensive secret scanner. Provider billing applies, and helper calls may not be included in the conversation's cost estimate.
 - The **Prompts** control edits chat/project additions and the global base prompt. Its injected-text field adds text to each message. Preview shows the assembled system prompt.
 - **Marketplace** installs agents, skills and MCP servers. Review third-party commands, files and endpoints before installing them.
 

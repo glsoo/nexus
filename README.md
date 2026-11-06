@@ -58,6 +58,8 @@ Choose the approach for each chat. New chats and forks inherit its selection.
 | **Shared · Prompt engineering** | Something other people will use | Define users, narrow the scope and agree what counts as done before substantial work |
 | **Commercial · Guardrails** | Work intended for a real-world release | Add project rules, meaningful tests, applicable security checks and an evidence-backed readiness checklist |
 
+**Need help writing the request?** Choose a level, type a rough idea and click **✨ Improve this prompt**. Personal asks for a concise prototype request; Shared adds scope and acceptance criteria; Commercial adds guardrails and release checks. Review or Undo the result before pressing Send—it is never sent automatically and uses your selected model.
+
 These are instructions for planning and verification—not a guarantee of model compliance, security certification or readiness to sell. Your model, permissions, autopilot and budget stay unchanged. Basic validation and secret protection still apply in Personal.
 
 ## What you can do
