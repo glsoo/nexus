@@ -491,11 +491,12 @@ function go(project, page = null, tab = 'chat') {
   const changed = project !== S.project;
   const moved = changed || page !== S.page;
   S.project = project; S.page = page; S.tab = tab;
+  if (changed) syncQuality?.();
   // Coming back to a chat that finished or stopped while you were elsewhere: offer a recap of what happened.
   if (project && !page && tab === 'chat' && ['finished', 'error'].includes(S.alerts[project])) toast(`${pretty(project)} ${S.alerts[project] === 'error' ? 'stopped on an error' : 'finished'} while you were away.`, ['Recap', () => sendWs({ t: 'send', text: '/recap' })], 10000);
   if (project && !page && tab === 'chat' && S.alerts[project]) { delete S.alerts[project]; syncTitle(); }
   history.replaceState(null, '', page ? `#/${page}` : project ? `#/p/${encodeURIComponent(project)}/${tab}` : '#/');
-  if (changed && project) { S.state = null; sendWs({ t: 'open', name: project }); guard(loadMeta)(); }
+  if (changed && project) { S.state = null; S.meta.qualityPresets = undefined; sendWs({ t: 'open', name: project }); guard(loadMeta)(); }
   render();
   if (moved) motion($main.lastElementChild, RISE);
   refreshSoon();
@@ -667,18 +668,22 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) { hiddenAt = Date.now(); saveDrafts(); return; }
   if (S.me && (S.ws?.readyState !== 1 || Date.now() - hiddenAt > 20000)) reconnect();
 });
-const sendWs = m => { if (S.ws?.readyState === 1) S.ws.send(JSON.stringify(m)); };
+const sendWs = m => {
+  if (S.ws?.readyState !== 1) return false;
+  S.ws.send(JSON.stringify(m));
+  return true;
+};
 
 function onEvent(m) {
   switch (m.t) {
     case 'state':
+      if (m.state.name !== S.project) return;
       { const first = !S.state;
         const prev = S.state?.name === m.state.name && $log?.isConnected && S.tab === 'chat' && !S.page
           ? { log: S.state.log, top: $log.scrollTop, bottom: nearBottom(), open: [...entries].filter(([, r]) => r.el.open).map(([id]) => id) } : null;
         S.state = m.state;
         const i = prev ? prev.log.findIndex(e => e.id === m.state.log[0]?.id) : -1;
         if (i > 0) { S.state.log = [...prev.log.slice(0, i), ...m.state.log]; S.state.older = Math.max(0, m.state.older - i); }
-        if (m.state.name !== S.project) return;
         if (S.tab === 'chat' && !S.page) {
           if ($input?.isConnected) { syncTitle(); syncChat(); } else render();
           if (first) motion($log, FADE);
@@ -699,7 +704,7 @@ function onEvent(m) {
     case 'delta': delta(m); break;
     case 'status': {
       const was = S.state?.running;
-      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt, dirs: m.dirs, allow: m.allow });
+      if (S.state) Object.assign(S.state, { running: m.running, usage: m.usage, todos: m.todos, mode: m.mode, model: m.model, effort: m.effort, quality: m.quality, agent: m.agent, autopilot: m.autopilot, budget: m.budget, compactAt: m.compactAt, dirs: m.dirs, allow: m.allow });
       if (was && !m.running) { finished(); refreshReview(); filesChanged(); }
       if (m.running && $review) $review.hidden = true;
       syncTitle();
@@ -730,7 +735,7 @@ function onEvent(m) {
 }
 
 // ---- chat ----
-let $log, $todos, $input, $sendBtn, $stopBtn, $mode, $modeLabel, $autoBtn, $model, $modelLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
+let $log, $todos, $input, $sendBtn, $stopBtn, $mode, $modeLabel, $autoBtn, $model, $modelLabel, $qualityBtn, $qualityLabel, $agentBtn, $agentLabel, $promptBtn, $meter, $thumbs, $slash;
 
 function chatView(view) {
   $log = h('div', { class: 'log', role: 'log', 'aria-live': 'polite', 'aria-relevant': 'additions' });
@@ -1183,6 +1188,8 @@ function composer() {
   $promptBtn = h('button', { class: 'icon-btn pbtn', type: 'button', 'aria-label': 'System prompts and injected text', title: 'Prompts', onclick: guard(() => promptsDialog()) }, icon('sliders'));
   $modelLabel = h('span', { class: 'mlabel' });
   $model = h('button', { class: 'mbtn', type: 'button', 'aria-label': 'Choose model and effort', title: 'Model and effort', onclick: modelPicker }, $modelLabel, icon('down'));
+  $qualityLabel = h('span', { class: 'mlabel' }, 'Loading…');
+  $qualityBtn = h('button', { class: 'mbtn qbtn', type: 'button', disabled: true, 'aria-label': 'Build quality is loading', 'aria-haspopup': 'dialog', title: 'Build quality is loading', onclick: () => qualityPicker() }, h('span', { class: 'qcaption' }, 'Build quality ·'), $qualityLabel, icon('down'));
   $meter = h('button', { class: 'meter', type: 'button', onclick: tokenPanel });
   $sendBtn = h('button', { class: 'btn small primary', type: 'button', 'aria-label': 'Send', title: 'Send', onmousedown: e => e.preventDefault(), onclick: send }, 'Send');
   $suggest = h('div', { class: 'suggest', hidden: true, role: 'group', 'aria-label': 'Suggested replies' });
@@ -1202,7 +1209,7 @@ function composer() {
   return h('div', { class: 'composer' }, $suggest, $slash, h('div', { class: 'cbox' }, $thumbs, $input, h('div', { class: 'cbar' },
     h('button', { class: 'icon-btn att', type: 'button', 'aria-label': 'Attach image', title: 'Attach image', onclick: () => file.click() }, icon('plus')), file,
     Speech && h('button', { class: 'icon-btn mic', type: 'button', 'aria-label': 'Dictate', 'aria-pressed': 'false', title: "Dictate: speak and it types (your browser's speech recognition)", onclick: e => dictate(e.currentTarget) }, icon('mic')),
-    $mode, $autoBtn, $agentBtn, $model, $promptBtn, enhance, $meter, $stopBtn, $sendBtn)));
+    $mode, $autoBtn, $agentBtn, $model, $qualityBtn, $promptBtn, enhance, $meter, $stopBtn, $sendBtn)));
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -1211,9 +1218,64 @@ const isFree = m => m.price?.length === 2 && m.price.every(p => p === 0);
 const priceText = m => (m.price?.every(p => p >= 0) && !isFree(m) ? `$${+m.price[0].toFixed(2)} in · $${+m.price[1].toFixed(2)} out per M` : '');
 const tokens = n => (n >= 1e6 ? `${n / 1e6}M` : `${n / 1e3}K`);
 function setOption(key, value) {
+  if (!S.state) return false;
+  let sent;
+  try { sent = sendWs({ t: 'option', key, value }); } catch { sent = false; }
+  if (!sent) { toast('Not connected. Reconnect, then try again.'); return false; }
   S.state[key] = value;
-  sendWs({ t: 'option', key, value });
   syncComposer();
+  return true;
+}
+
+// Public metadata only: never duplicate the server's guidance or offer unknown presets.
+function qualityPresets() {
+  const presets = S.meta?.qualityPresets, ids = ['personal', 'shared', 'commercial'];
+  if (!Array.isArray(presets) || presets.length !== ids.length) return [];
+  return ids.every(id => presets.some(p => p?.id === id && ['label', 'subtitle', 'description'].every(k => typeof p[k] === 'string' && p[k].trim())))
+    ? ids.map(id => presets.find(p => p.id === id)) : [];
+}
+let syncQuality = null;
+function qualityPicker() {
+  const presets = qualityPresets(), project = S.project, opener = $qualityBtn;
+  if (!project || !S.state || syncQuality || !presets.some(p => p.id === (S.state.quality || 'personal'))) return;
+  const shut = () => sheet(d)();
+  const rows = presets.map(p => {
+    const selected = h('span', { class: 'qselected', hidden: true }, '✓ Selected');
+    const button = h('button', { class: 'mrow qcard', type: 'button', 'aria-pressed': 'false', onclick: () => {
+      if (S.project !== project || !S.state || !qualityPresets().some(item => item.id === p.id)) return shut();
+      if (p.id === (S.state.quality || 'personal') || setOption('quality', p.id)) shut();
+    } }, h('span', { class: 'mtext' }, h('span', { class: 'qname' }, p.label, selected), h('span', { class: 'qsubtitle' }, p.subtitle), h('span', { class: 'qabout' }, p.description)));
+    return { id: p.id, button, selected };
+  });
+  const list = h('div', { class: 'mlist qlist', role: 'group', 'aria-label': 'Build quality presets' }, rows.map(r => r.button));
+  const d = h('dialog', { class: 'picker quality', 'aria-label': 'Build quality', 'aria-describedby': 'quality-guidance quality-notes',
+    onclick: e => { if (e.target === d) shut(); },
+    oncancel: e => { e.preventDefault(); shut(); },
+    onclose: () => { syncQuality = null; d.remove(); if (S.project === project && opener.isConnected) opener.focus(); },
+    onkeydown: e => {
+      const buttons = rows.map(r => r.button), at = buttons.indexOf(document.activeElement);
+      if (at < 0) return;
+      const next = { ArrowDown: (at + 1) % buttons.length, ArrowUp: (at + buttons.length - 1) % buttons.length, Home: 0, End: buttons.length - 1 }[e.key];
+      if (next === undefined) return;
+      e.preventDefault(); buttons[next].focus();
+    } },
+    h('div', { class: 'mhead' }, h('h2', {}, 'Build quality'), h('button', { class: 'btn small', type: 'button', onclick: shut }, 'Done')),
+    h('p', { class: 'qintro muted', id: 'quality-guidance' }, 'These guide planning and checks; permissions stay unchanged.'), list,
+    h('div', { class: 'mfoot qnotes muted', id: 'quality-notes' }, h('p', {}, 'Applies to the next AI request in this chat.'), h('p', {}, 'Commercial is not a guarantee your product is ready to sell.')));
+  syncQuality = () => {
+    const current = S.state?.quality || 'personal';
+    if (S.project !== project || !S.state || !qualityPresets().some(p => p.id === current)) return shut();
+    for (const row of rows) {
+      const selected = row.id === current;
+      row.button.classList.toggle('current', selected);
+      row.button.setAttribute('aria-pressed', String(selected));
+      row.selected.hidden = !selected;
+    }
+  };
+  syncQuality();
+  document.body.append(d);
+  d.showModal();
+  rows.find(r => r.id === (S.state.quality || 'personal')).button.focus();
 }
 
 // Turns a saved rule such as Bash:npm test or Read:* into its tool and what it covers.
@@ -1396,7 +1458,14 @@ function tokenPanel() {
 
 function syncComposer() {
   const st = S.state;
-  if (!st || !$input?.isConnected) return;
+  syncQuality?.();
+  if (!$input?.isConnected) return;
+  const quality = st && qualityPresets().find(p => p.id === (st.quality || 'personal'));
+  $qualityBtn.disabled = !quality;
+  $qualityLabel.textContent = quality?.label || (st ? 'Unavailable' : 'Loading…');
+  $qualityBtn.title = $qualityBtn.ariaLabel = quality ? `Build quality: ${quality.label} · ${quality.subtitle}. Planning and checks only; permissions unchanged.`
+    : st ? 'Build quality is unavailable. Reconnect after the server finishes loading or updating.' : 'Build quality is loading';
+  if (!st) return;
   $mode.value = st.mode;
   $mode.className = st.mode;
   const mode = MODES.find(m => m.id === st.mode);

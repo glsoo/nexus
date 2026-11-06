@@ -25,6 +25,7 @@ import * as repo from './git.js';
 import * as memory from './memory.js';
 import * as github from './github.js';
 import * as sandbox from './sandbox.js';
+import { QUALITY_PRESETS } from './quality.js';
 import { apiKey, childEnv, isInside, KEY_NAMES, keysPath, modelError, modelFetch, NEXUS_HOME, presentSocket, readJson, readSettings, saveKey, settingsPath, shellCommand, writeAtomic } from './util.js';
 
 const PORT = Number(process.env.NEXUS_PORT) || 7711;
@@ -217,6 +218,7 @@ route('GET', '/api/projects/:name/meta', ({ p }) => {
     commands: commands(cwd).map(({ name, description }) => ({ name, description })),
     skills: skills(cwd, true).map(({ name, description, argumentHint, dir, off }) => ({ name, description, argumentHint, off, scope: skillScope(cwd, dir) })),
     agents: agentDefs(cwd).map(({ prompt, file, ...a }) => ({ ...a, prompt })),
+    qualityPresets: QUALITY_PRESETS.map(({ id, label, subtitle, description }) => ({ id, label, subtitle, description })),
   };
 });
 route('POST', '/api/projects/:name/agent-defs', async ({ req, p }) => {

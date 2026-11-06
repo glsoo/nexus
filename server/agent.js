@@ -15,6 +15,7 @@ import * as secrets from './secrets.js';
 import * as mcp from './mcp.js';
 import * as projects from './projects.js';
 import { promptParts, readPrompts, savePrompts, withInjection } from './prompts.js';
+import { qualityPreset } from './quality.js';
 import { HIGH_RISK, parseRisk, RISK_PROMPT, riskInput, riskRules } from './risk.js';
 import { decide, execTool, findAIComments, hasTool, killGroup, ruleKey, shells, TOOL_DEFS, toolDenied } from './tools.js';
 import { apiKey, childEnv, clip, isInside, modelError, NEXUS_HOME, outOfCredit, realish, newId, postWithRetry, readJson, readSettings, sleep, slug, sseEvents, writeAtomic } from './util.js';
@@ -101,7 +102,7 @@ export function olderEntries(name, before) {
 }
 
 const persist = s => projects.save(s.name, s.state);
-const status = s => hub.emit('project', s.name, { t: 'status', allow: s.state.allow, running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), budget: s.state.budget || 0, compactAt: compactAt(s), dirs: s.state.dirs || [] });
+const status = s => hub.emit('project', s.name, { t: 'status', allow: s.state.allow, running: s.running, usage: s.state.usage, todos: s.state.todos, mode: s.state.mode, model: s.state.model, effort: s.state.effort, quality: s.state.quality, agent: s.state.agent || '', autopilot: Boolean(s.state.autopilot), budget: s.state.budget || 0, compactAt: compactAt(s), dirs: s.state.dirs || [] });
 const send = (s, ev) => hub.emit('project', s.name, ev);
 
 function addEntry(s, entry) {
@@ -202,6 +203,7 @@ function systemPrompt(s, extra = '', sub = false, dir = cwdOf(s)) {
   const notes = readSettings().memory === false ? '' : projectMemory(cwd);
   const { base, custom } = promptParts(cwd, s.state);
   const role = sub ? null : activeAgent(s);
+  const quality = qualityPreset(s.state.quality);
   const planning = s.state.mode === 'plan'
     ? '\n\nPLAN MODE IS ACTIVE. Do not change anything. Research with read-only tools, then present your plan with ExitPlanMode.'
     : s.state.mode === 'readonly' ? '\n\nREAD-ONLY MODE IS ACTIVE. You can read and search files and answer questions. Every other tool is refused, so do not try to change anything or run commands; say what you would do instead.' : '';
@@ -216,7 +218,9 @@ Platform: ${process.platform}. Date: ${new Date().toISOString().slice(0, 10)}. P
 
 # Available subagent types
 ${agentList}
-${skillList ? `\n# Available skills (load with the Skill tool)\n${skillList}\n` : ''}${memory ? `\n# Project and user instructions\n${memory}\n` : ''}${notes}${custom}${role ? `\n# Your role: ${role.name}\nThe user switched this chat to the "${role.name}" agent. Work as it describes.\n\n${role.prompt.trim()}\n` : ''}${planning}${autopilot}${extra}`;
+${skillList ? `\n# Available skills (load with the Skill tool)\n${skillList}\n` : ''}${memory ? `\n# Project and user instructions\n${memory}\n` : ''}${notes}${custom}${role ? `\n# Your role: ${role.name}\nThe user switched this chat to the "${role.name}" agent. Work as it describes.\n\n${role.prompt.trim()}\n` : ''}
+# Build quality: ${quality.label} — ${quality.subtitle}
+${quality.prompt}${planning}${autopilot}${extra}`;
 }
 
 async function toolList(filter) {
@@ -906,13 +910,14 @@ const MODES = ['default', 'acceptEdits', 'plan', 'readonly', 'bypass'];
 export function setOption(s, key, value) {
   if (key === 'mode' && !MODES.includes(value)) throw new Error(`Unknown mode ${value}.`);
   else if (key === 'effort' && !['low', 'medium', 'high', 'xhigh', 'max'].includes(value)) throw new Error(`Unknown effort ${value}.`);
+  else if (key === 'quality' && (typeof value !== 'string' || qualityPreset(value).id !== value)) throw new Error('Choose a valid build quality preset.');
   else if (key === 'model' && !/^[\w.:/-]+$/.test(value)) throw new Error('Invalid model id.');
   else if (key === 'agent' && value && !agentDefs(cwdOf(s)).some(d => d.name === value && !d.builtin)) throw new Error(`There is no agent type called ${value}.`);
   else if (key === 'autopilot' && typeof value !== 'boolean') throw new Error('Autopilot is true or false.');
   else if (key === 'budget' && !(Number.isFinite(value) && value >= 0)) throw new Error('A budget is a dollar amount.');
   // The page can only take rules away: new ones come from answering "always" on a real prompt.
   else if (key === 'allow' && !(Array.isArray(value) && value.every(rule => s.state.allow.includes(rule)))) throw new Error('Rules can only be removed here.');
-  else if (!['mode', 'effort', 'model', 'agent', 'autopilot', 'budget', 'allow'].includes(key)) throw new Error(`Unknown option ${key}.`);
+  else if (!['mode', 'effort', 'quality', 'model', 'agent', 'autopilot', 'budget', 'allow'].includes(key)) throw new Error(`Unknown option ${key}.`);
   // The system prompt changes at once, but models lean on recent history, so the switch is also said in the conversation.
   if (key === 'agent' && (value || '') !== (s.state.agent || '')) {
     s.state.agentSwitch = value || '';
@@ -1196,7 +1201,7 @@ export function renameProject(from, to) {
 // (like rewinding, but in a new chat, leaving this one as it was) and hands that message back as the draft to edit and send.
 export function newChat(from, entryId) {
   const src = getSession(from).state;
-  const keep = { model: src.model, effort: src.effort, mode: src.mode, agent: src.agent, dirs: src.dirs, allow: [...src.allow] };
+  const keep = { model: src.model, effort: src.effort, mode: src.mode, quality: src.quality, agent: src.agent, dirs: src.dirs, allow: [...src.allow] };
   if (!entryId) return { name: projects.createChat(from, keep), draft: '' };
   const at = src.log.findIndex(e => e.id === entryId && e.type === 'user');
   if (at < 0 || !Number.isInteger(src.log[at].itemsLen)) throw projects.httpError(400, 'Fork from one of your own messages that has been sent.');

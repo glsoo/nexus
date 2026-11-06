@@ -35,7 +35,7 @@ test('default composer keeps every control inline exactly once with optional dic
     const bars = find(composer, el => hasClass(el, 'cbar'));
     assert.equal(bars.length, 1);
     const bar = bars[0];
-    const controls = ['$mode', '$autoBtn', '$agentBtn', '$model', '$promptBtn', '$meter', '$stopBtn', '$sendBtn'];
+    const controls = ['$mode', '$autoBtn', '$agentBtn', '$model', '$qualityBtn', '$promptBtn', '$meter', '$stopBtn', '$sendBtn'];
     let previous = -1;
     for (const control of controls) {
       assert.ok(context[control], `${control} must exist`);

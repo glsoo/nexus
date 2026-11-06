@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { qualityPreset } from './quality.js';
 import { childEnv, HOME, isInside, PROJECTS, readJson, validName, writeAtomic } from './util.js';
 
 // One project = one directory: ~/projects/<name>, which is also the agent's cwd. Its main chat is .nexus/conversation.json;
@@ -11,7 +12,7 @@ import { childEnv, HOME, isInside, PROJECTS, readJson, validName, writeAtomic } 
 // A folder opened from elsewhere is a link there (a junction on Windows), so every project still has a name in ~/projects.
 export const DEFAULT_MODEL = process.env.NEXUS_MODEL || 'gpt-6.1-sol';
 const blank = () => ({
-  model: DEFAULT_MODEL, effort: 'medium', mode: 'default', gen: 0,
+  model: DEFAULT_MODEL, effort: 'medium', mode: 'default', quality: 'personal', gen: 0,
   items: [], log: [], todos: [], allow: [],
   usage: { input: 0, output: 0, cached: 0, reasoning: 0, requests: 0, lastInput: 0 },
 });
@@ -33,7 +34,7 @@ export function setTitle(key, text) {
 }
 export function createChat(name, state = {}) {
   const key = `${baseOf(name)}~${createHash('sha256').update(`${Date.now()}${Math.random()}`).digest('hex').slice(0, 8)}`;
-  writeAtomic(stateFile(key), JSON.stringify({ ...blank(), ...state }));
+  writeAtomic(stateFile(key), JSON.stringify({ ...blank(), ...state, quality: qualityPreset(state.quality).id }));
   return key;
 }
 function chats(name, dir) {
@@ -223,6 +224,7 @@ export function load(name) {
     if (err.code !== 'ENOENT') fs.renameSync(stateFile(name), `${stateFile(name)}.broken-${Date.now()}`);
   }
   const state = { ...blank(), ...saved };
+  state.quality = qualityPreset(state.quality).id;
   // Anything mid-flight when the server last stopped can never finish.
   for (const e of state.log) if (['running', 'awaiting'].includes(e.status)) e.status = 'interrupted';
   // Chats saved before images became files move theirs out on the way in.

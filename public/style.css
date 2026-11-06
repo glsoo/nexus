@@ -180,6 +180,8 @@ details.fold > summary::-webkit-details-marker { display: none; }
 .cbar select.plan { color: var(--info); }
 .mbtn { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 240px; min-height: 30px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px 3px 8px; font-size: 12.5px; }
 .mbtn .mlabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qbtn .qcaption { color: var(--muted); white-space: nowrap; }
+.qbtn:disabled { color: var(--muted); cursor: default; }
 .mbtn svg { width: 14px; height: 14px; flex: none; color: var(--muted); }
 .cbar .meter { font: 12px var(--mono); color: var(--muted); margin-left: auto; white-space: nowrap; background: none; border: 0; padding: 0 4px; min-height: 44px; }
 .cbar .meter:hover { color: var(--fg); }
@@ -565,6 +567,23 @@ details.fold[open] > summary::after { transform: rotate(45deg); }
 .mrule .mfacts { flex: 1; min-width: 0; }
 .mhint { font-size: 12px; }
 
+/* Build quality stays separate from permission modes and model selection. */
+.composer .cbar > .qbtn.mbtn { flex: none; max-width: 100%; min-height: 44px; }
+.picker.quality { height: fit-content; max-height: calc(var(--app-h, 100dvh) - 32px - var(--sat)); }
+.quality .mhead { flex: none; gap: 12px; }
+.quality .mhead .btn { min-height: 44px; }
+.qintro { flex: none; margin: 0; padding: 0 16px 14px; font-size: 13px; }
+.qlist { display: grid; grid-auto-rows: max-content; align-content: start; flex: 1 1 auto; gap: 8px; padding: 12px; }
+.qcard { align-items: flex-start; padding: 12px; border: 1px solid var(--line-strong); border-radius: 10px; cursor: pointer; overflow-wrap: anywhere; }
+.qcard.current { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
+.qcard .mtext { gap: 5px; }
+.qname { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+.qselected { margin-left: auto; font-size: 11px; font-weight: 500; }
+.qsubtitle { color: var(--muted); font-size: 12px; }
+.qabout { font-size: 13px; line-height: 1.5; }
+.qnotes { flex: none; display: grid; gap: 6px; font-size: 12px; }
+.qnotes p { margin: 0; }
+
 @media (max-width: 760px) {
   .view .composer { padding-top: 26px; }
   .ttl { flex: 1; text-align: center; }
@@ -573,6 +592,7 @@ details.fold[open] > summary::after { transform: rotate(45deg); }
   .composer .cbox textarea { font-size: 16px; }
   .composer .cbar > .mbtn:not(.abtn) { flex: 1 1 0; min-width: 0; justify-content: space-between; }
   .composer .cbar > .abtn { flex: none; }
+  .composer .cbar > .qbtn.mbtn { order: 7; flex: none; }
   .composer .cbar > .abtn:not(.on) { aspect-ratio: 1; justify-content: center; padding: 0; }
   .composer .cbar > .abtn:not(.on) .mlabel, .composer .cbar > .abtn > svg:last-child, .composer .cbar > [aria-label="Permission mode"] svg { display: none; }
   .composer .cbar > .meter { position: absolute; top: 0; right: max(24px, calc(var(--sar) + 8px)); min-height: 26px; margin: 0; }
