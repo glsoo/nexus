@@ -24,7 +24,7 @@ const CHAT_ID = /^[a-z0-9]{1,16}$/;
 export const validKey = key => validName(baseOf(key)) && (chatOf(key) === null || CHAT_ID.test(chatOf(key)));
 export const projectDir = key => path.join(PROJECTS, baseOf(key));
 const chatsDir = key => path.join(projectDir(key), '.nexus', 'chats');
-const stateFile = key => (chatOf(key) ? path.join(chatsDir(key), `${chatOf(key)}.json`) : path.join(projectDir(key), '.nexus', 'conversation.json'));
+export const stateFile = key => (chatOf(key) ? path.join(chatsDir(key), `${chatOf(key)}.json`) : path.join(projectDir(key), '.nexus', 'conversation.json'));
 // A chat's title sits beside it, so the sidebar can list chats without reading whole conversations.
 export const title = key => readText(path.join(chatsDir(key), `${chatOf(key)}.title`)).trim();
 export function setTitle(key, text) {

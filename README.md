@@ -219,6 +219,8 @@ flowchart LR
 | `/init` · `#note` | Write a `NEXUS.md` for the project, or save a note to it |
 | `!cmd` · `@path` | Run a shell command yourself, or mention a file |
 
+**Long chats:** `/compact [focus]` saves the original chat state in `.nexus/history` before replacing its model context. If the full summary request exceeds the provider's context limit, Nexus recovers with smaller chronological batches instead of resending the same oversized history. Empty or incomplete summaries, errors, failed saves and Stop leave the original context intact. Batch recovery can require several model calls: chat budgets and autopilot limits apply, with a maximum of 64 summary invocations per compaction (transport retries may make more HTTP requests). Unsupported content or an image that cannot fit fails explicitly rather than being silently dropped.
+
 Run a skill without arguments, or with `help`, to see its usage and examples. Bundled skills work in every project; user and project skills can override them.
 
 Custom commands live in `.nexus/commands/*.md` or `~/.nexus/commands/*.md`: the file is the prompt, `$ARGUMENTS` is replaced by what you type after the command, and a `description:` line in the frontmatter shows in the `/` menu. Claude Code's `.claude/commands/` and VS Code's prompt files (`.github/prompts/*.prompt.md`, where `${input:…}` takes the arguments) work too. Agent types live in `.nexus/agents/` or `~/.nexus/agents/`.
